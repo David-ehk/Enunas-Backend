@@ -18,11 +18,11 @@ public class ListingResponseDto {
     private String variantSku;
     private String variantColor;
     private String variantSize;
+    /** Live stock pulled from the variant (the single source of truth). */
+    private int variantStockQuantity;
     private BigDecimal price;
     private BigDecimal discountPrice;
-    private BigDecimal shippingCost;
     private String currency;
-    private int stock;
     private boolean active;
     private String region;
     private LocalDateTime dropDate;
@@ -40,11 +40,10 @@ public class ListingResponseDto {
                 .variantSku(productListing.getVariant().getSku())
                 .variantColor(productListing.getVariant().getColor())
                 .variantSize(productListing.getVariant().getSize())
+                .variantStockQuantity(productListing.getVariant().getStockQuantity())
                 .price(productListing.getPrice())
                 .discountPrice(productListing.getDiscountPrice())
-                .shippingCost(productListing.getShippingCost())
                 .currency(productListing.getCurrency())
-                .stock(productListing.getStock())
                 .active(productListing.isActive())
                 .region(productListing.getRegion())
                 .dropDate(productListing.getDropDate())

@@ -13,10 +13,14 @@ public class BrandPartnerResponseDto {
 
     private Long id;
     private String brandName;
+    private String slug;
     private String description;
     private String logoUrl;
     private String websiteUrl;
     private String instagramHandle;
+    private String tiktokHandle;
+    private String country;
+    private String contactEmail;
     private BrandStatus status;
     private boolean approved;
     private Long userId;
@@ -28,10 +32,14 @@ public class BrandPartnerResponseDto {
         return BrandPartnerResponseDto.builder()
                 .id(brand.getId())
                 .brandName(brand.getBrandName())
+                .slug(brand.getSlug())
                 .description(brand.getDescription())
                 .logoUrl(brand.getLogoUrl())
                 .websiteUrl(brand.getWebsiteUrl())
                 .instagramHandle(brand.getInstagramHandle())
+                .tiktokHandle(brand.getTiktokHandle())
+                .country(brand.getCountry())
+                .contactEmail(brand.getContactEmail())
                 .status(brand.getStatus())
                 .approved(brand.isApproved())
                 .userId(brand.getUser() != null ? brand.getUser().getId() : null)

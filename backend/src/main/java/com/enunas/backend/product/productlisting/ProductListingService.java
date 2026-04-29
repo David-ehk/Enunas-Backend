@@ -38,9 +38,7 @@ public class ProductListingService {
                 .variant(variant)
                 .price(dto.getPrice())
                 .discountPrice(dto.getDiscountPrice())
-                .shippingCost(dto.getShippingCost())
                 .currency(dto.getCurrency() != null ? dto.getCurrency() : "EUR")
-                .stock(dto.getStock())
                 .region(dto.getRegion())
                 .dropDate(dto.getDropDate())
                 .availableFrom(dto.getAvailableFrom())
@@ -83,8 +81,6 @@ public class ProductListingService {
 
         if (dto.getPrice() != null) productListing.setPrice(dto.getPrice());
         if (dto.getDiscountPrice() != null) productListing.setDiscountPrice(dto.getDiscountPrice());
-        if (dto.getShippingCost() != null) productListing.setShippingCost(dto.getShippingCost());
-        if (dto.getStock() != null) productListing.setStock(dto.getStock());
         if (dto.getActive() != null) productListing.setActive(dto.getActive());
         if (dto.getRegion() != null) productListing.setRegion(dto.getRegion());
         if (dto.getDropDate() != null) productListing.setDropDate(dto.getDropDate());

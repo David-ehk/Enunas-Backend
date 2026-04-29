@@ -15,12 +15,6 @@ public class UpdateListingDto {
     @DecimalMin(value = "0.0")
     private BigDecimal discountPrice;
 
-    @DecimalMin(value = "0.0")
-    private BigDecimal shippingCost;
-
-    @Min(0)
-    private Integer stock;
-
     private Boolean active;
 
     private String region;

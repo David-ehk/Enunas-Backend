@@ -49,6 +49,12 @@ public class BrandPartnerService {
             throw new IllegalArgumentException("Brand name already taken: " + dto.getBrandName());
         }
 
+        String slug = slugify(dto.getBrandName());
+        if (slug.isEmpty() || brandPartnerRepository.existsBySlug(slug)) {
+            log.warn("Brand application failed: slug collision or empty for brand: {}", dto.getBrandName());
+            throw new IllegalArgumentException("Brand name produces an invalid or already-taken URL slug. Please choose a different brand name.");
+        }
+
         User user = User.builder()
                 .email(dto.getEmail())
                 .password(passwordEncoder.encode(dto.getPassword()))
@@ -63,10 +69,14 @@ public class BrandPartnerService {
         BrandPartner brand = BrandPartner.builder()
                 .user(user)
                 .brandName(dto.getBrandName())
+                .slug(slug)
                 .description(dto.getDescription())
                 .logoUrl(dto.getLogoUrl())
                 .websiteUrl(dto.getWebsiteUrl())
                 .instagramHandle(dto.getInstagramHandle())
+                .tiktokHandle(dto.getTiktokHandle())
+                .country(dto.getCountry())
+                .contactEmail(dto.getContactEmail() != null ? dto.getContactEmail() : dto.getEmail())
                 .status(BrandStatus.PENDING_REVIEW)
                 .approved(false)
                 .build();
@@ -145,6 +155,9 @@ public class BrandPartnerService {
         if (dto.getLogoUrl() != null) brand.setLogoUrl(dto.getLogoUrl());
         if (dto.getWebsiteUrl() != null) brand.setWebsiteUrl(dto.getWebsiteUrl());
         if (dto.getInstagramHandle() != null) brand.setInstagramHandle(dto.getInstagramHandle());
+        if (dto.getTiktokHandle() != null) brand.setTiktokHandle(dto.getTiktokHandle());
+        if (dto.getCountry() != null) brand.setCountry(dto.getCountry());
+        if (dto.getContactEmail() != null) brand.setContactEmail(dto.getContactEmail());
 
         return BrandPartnerResponseDto.from(brandPartnerRepository.save(brand));
     }
@@ -157,44 +170,6 @@ public class BrandPartnerService {
         );
     }
 
-    /**
-     * Admin approval — flips both BrandPartner (status, approved) and User (adminApproved)
-     * in one transaction. Defensive: ensures role is BRAND_PARTNER even if it somehow drifted.
-     */
-    @Transactional
-    @PreAuthorize("hasRole('ADMIN')")
-    public BrandPartnerResponseDto approveBrand(Long brandId) {
-        BrandPartner brand = brandPartnerRepository.findById(brandId)
-                .orElseThrow(() -> new BrandNotFoundException("Brand not found with id: " + brandId));
-        User user = brand.getUser();
-
-        brand.setStatus(BrandStatus.ACTIVE);
-        brand.setApproved(true);
-
-        user.setAdminApproved(true);
-        if (user.getRole() != Role.BRAND_PARTNER) {
-            user.setRole(Role.BRAND_PARTNER);
-        }
-
-        userRepository.save(user);
-        BrandPartner saved = brandPartnerRepository.save(brand);
-
-        emailService.sendAccountApprovedEmail(user.getEmail());
-        log.info("Brand approved by admin: {} ({})", brand.getBrandName(), user.getEmail());
-
-        return BrandPartnerResponseDto.from(saved);
-    }
-
-    @Transactional
-    @PreAuthorize("hasRole('ADMIN')")
-    public BrandPartnerResponseDto suspendBrand(Long id) {
-        BrandPartner brand = brandPartnerRepository.findById(id)
-                .orElseThrow(() -> new BrandNotFoundException("Brand not found with id: " + id));
-        brand.setStatus(BrandStatus.SUSPENDED);
-        brand.setApproved(false);
-        return BrandPartnerResponseDto.from(brandPartnerRepository.save(brand));
-    }
-
     public BrandPartner findByUser(User user) {
         return brandPartnerRepository.findByUser(user)
                 .orElseThrow(() -> new BrandNotFoundException(
@@ -203,6 +178,17 @@ public class BrandPartnerService {
 
     private String generateVerificationCode() {
         return String.valueOf(new Random().nextInt(900000) + 100000);
+    }
+
+    /**
+     * Convert a brand name to a URL-safe slug: lowercase, non-alphanumeric runs collapsed to "-",
+     * leading/trailing dashes stripped. Example: "My Brand & Co!" → "my-brand-co".
+     */
+    private String slugify(String brandName) {
+        return brandName.trim()
+                .toLowerCase()
+                .replaceAll("[^a-z0-9]+", "-")
+                .replaceAll("^-+|-+$", "");
     }
 
     private void notifyAdminForApproval(User user) {

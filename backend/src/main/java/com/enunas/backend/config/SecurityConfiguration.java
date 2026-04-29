@@ -71,7 +71,7 @@ public class SecurityConfiguration {
                         .requestMatchers("/listings/**").authenticated()
 
                         // Customer-only routes
-                        .requestMatchers("/customer/**", "/profile/**", "/orders/**", "/checkout/**").hasRole("CUSTOMER")
+                        .requestMatchers("/customer/**", "/profile/**", "/orders/**", "/checkout/**", "/wardrobe/**").hasRole("CUSTOMER")
 
                         // Everything else requires authentication
                         .anyRequest().authenticated()

@@ -30,6 +30,10 @@ public class BrandPartner {
     @Column(nullable = false, unique = true)
     private String brandName;
 
+    /** URL-safe identifier derived from brandName, used for routing (e.g. /brand/{slug}). */
+    @Column(nullable = false, unique = true)
+    private String slug;
+
     @Column(columnDefinition = "TEXT")
     private String description;
 
@@ -39,6 +43,14 @@ public class BrandPartner {
 
     private String instagramHandle;
 
+    private String tiktokHandle;
+
+    /** Onboarding metadata — typically an ISO 3166-1 alpha-2 country code. */
+    private String country;
+
+    /** Public business contact email; distinct from the User login email. */
+    private String contactEmail;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     @Builder.Default
@@ -47,7 +59,8 @@ public class BrandPartner {
     @Builder.Default
     private boolean approved = false;
 
-    @OneToMany(mappedBy = "brand", fetch = FetchType.LAZY)
+    @OneToMany(mappedBy = "brand", fetch = FetchType.LAZY,
+               cascade = CascadeType.ALL, orphanRemoval = true)
     @Builder.Default
     @Getter(AccessLevel.NONE)
     @Setter(AccessLevel.NONE)

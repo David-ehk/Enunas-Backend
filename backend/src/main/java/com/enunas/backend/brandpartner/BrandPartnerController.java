@@ -9,6 +9,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
@@ -43,6 +44,7 @@ public class BrandPartnerController {
 
     /** Get own brand profile. */
     @GetMapping("/me")
+    @PreAuthorize("hasRole('Brand_Partner')")
     public ResponseEntity<BrandPartnerResponseDto> getMyProfile(
             @AuthenticationPrincipal User user) {
         return ResponseEntity.ok(brandPartnerService.getMyProfile(user));
@@ -50,6 +52,7 @@ public class BrandPartnerController {
 
     /** Update own brand profile fields (description, logo, website, instagram). */
     @PatchMapping("/me")
+    @PreAuthorize("hasRole('Brand_Partner')")
     public ResponseEntity<BrandPartnerResponseDto> updateMyProfile(
             @RequestBody @Valid UpdateBrandPartnerDto dto,
             @AuthenticationPrincipal User user) {
@@ -58,6 +61,7 @@ public class BrandPartnerController {
 
     /** Look up any brand by ID — accessible to any authenticated user. */
     @GetMapping("/{id}")
+    @PreAuthorize("isAuthenticated()")
     public ResponseEntity<BrandPartnerResponseDto> getBrandById(@PathVariable Long id) {
         return ResponseEntity.ok(brandPartnerService.getBrandById(id));
     }

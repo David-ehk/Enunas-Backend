@@ -8,6 +8,10 @@ import lombok.*;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
+/**
+ * Sales-configuration layer for a variant: price, currency, activation, timing.
+ * Stock lives exclusively on {@link ProductVariant}; this entity must never carry stock.
+ */
 @Entity
 @Table(name = "listings")
 @Getter
@@ -30,23 +34,14 @@ public class ProductListing {
     private ProductVariant variant;
 
     @Column(nullable = false, precision = 10, scale = 2)
-    private BigDecimal price; // brutto
+    private BigDecimal price;
 
     @Column(precision = 10, scale = 2)
     private BigDecimal discountPrice;
 
-    private BigDecimal shippingCost; // MVP vlt noch nicht Wichtig
-
-    // Auch noch kein Komplexes VAT Modell alles in Deutschland vor erst
-
     @Column(nullable = false, length = 3)
     @Builder.Default
     private String currency = "EUR";
-
-    // Sale-available units for this listing (region/drop); decremented on order placement
-    // ProductVariant.stockQuantity is the total physical inventory
-    @Builder.Default
-    private int stock = 0;
 
     @Builder.Default
     private boolean active = true;
@@ -54,8 +49,6 @@ public class ProductListing {
     private String region;
 
     private LocalDateTime dropDate;
-
-    //Brandpartner Drop
     private LocalDateTime availableFrom;
     private LocalDateTime availableUntil;
 
@@ -86,4 +79,20 @@ public class ProductListing {
     public int hashCode() {
         return getClass().hashCode();
     }
+    public BigDecimal getCurrentPrice() {
+        if (discountPrice != null && discountPrice.compareTo(BigDecimal.ZERO) > 0) {
+            return discountPrice;
+        }
+        return price;
+    }
+
+    // Convenience: Ist das Listing aktuell aktiv?
+    public boolean isCurrentlyActive() {
+        if (!active) return false;
+        LocalDateTime now = LocalDateTime.now();
+        if (availableFrom != null && now.isBefore(availableFrom)) return false;
+        if (availableUntil != null && now.isAfter(availableUntil)) return false;
+        return true;
+    }
+
 }

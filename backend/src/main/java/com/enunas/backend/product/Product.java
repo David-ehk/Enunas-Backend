@@ -103,6 +103,18 @@ public class Product {
     @Setter(AccessLevel.NONE)
     private List<ProductVideo> videos = new ArrayList<>();
 
+    // ===== Moderation metadata (set by AdminService on approve/reject) =====
+
+    /** Admin User who last moderated this product. Real FK for audit + referential integrity. */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "moderated_by")
+    private User moderatedBy;
+
+    private LocalDateTime moderatedAt;
+
+    @Column(columnDefinition = "TEXT")
+    private String rejectionReason;
+
     @Column(updatable = false)
     private LocalDateTime createdAt;
 

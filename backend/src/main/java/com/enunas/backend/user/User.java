@@ -1,5 +1,6 @@
 package com.enunas.backend.user;
 
+import com.enunas.backend.brandpartner.BrandPartner;
 import jakarta.persistence.*;
 import lombok.*;
 import org.springframework.security.core.GrantedAuthority;
@@ -44,6 +45,7 @@ public class User implements UserDetails {
     private String verificationCode;
 
     private LocalDateTime verificationCodeExpiresAt;
+
 
     @Column(updatable = false)
     private LocalDateTime createdAt;

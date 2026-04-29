@@ -19,15 +19,9 @@ public class CreateListingDto {
     @DecimalMin(value = "0.0")
     private BigDecimal discountPrice;
 
-    @DecimalMin(value = "0.0")
-    private BigDecimal shippingCost;
-
     @NotBlank
     @Size(min = 3, max = 3)
     private String currency = "EUR";
-
-    @Min(0)
-    private int stock;
 
     private String region;
 

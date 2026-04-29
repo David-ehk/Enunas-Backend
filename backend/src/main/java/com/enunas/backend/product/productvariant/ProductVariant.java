@@ -1,11 +1,9 @@
 package com.enunas.backend.product.productvariant;
 
-import com.enunas.backend.product.Product;
-import jakarta.persistence.*;
-import lombok.*;
 
-import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import com.enunas.backend.product.Product;
+import jakarta.persistence.*;  // NUR JAKARTA (Spring Boot 3+)
+import lombok.*;
 
 @Entity
 @Table(name = "product_variants")
@@ -20,41 +18,35 @@ public class ProductVariant {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(nullable = false, unique = true)
+    @Column(unique = true, nullable = false)
     private String sku;
 
-    @Column(nullable = false)
     private String color;
-
-    @Column(nullable = false)
     private String size;
 
-    // Total physical inventory across all warehouses; source of truth for procurement
-    // Listing.stock is the sale-available allocation per region/drop
-    @Builder.Default
-    private int stockQuantity = 0;
+    @Column(nullable = false)
+    private Integer stockQuantity = 0;
 
-    @Column(precision = 8, scale = 2)
-    private BigDecimal weightGrams;
+    private Integer weightGrams;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "product_id", nullable = false)
     private Product product;
 
-    @Column(updatable = false)
-    private LocalDateTime createdAt;
-
-    private LocalDateTime updatedAt;
-
-    @PrePersist
-    protected void onCreate() {
-        createdAt = LocalDateTime.now();
-        updatedAt = LocalDateTime.now();
+    // Helper für Stock-Operationen
+    public boolean hasStock(int requestedQuantity) {
+        return stockQuantity >= requestedQuantity;
     }
 
-    @PreUpdate
-    protected void onUpdate() {
-        updatedAt = LocalDateTime.now();
+    public void decrementStock(int quantity) {
+        if (!hasStock(quantity)) {
+            throw new IllegalStateException("Insufficient stock for variant " + id);
+        }
+        this.stockQuantity -= quantity;
+    }
+
+    public void restoreStock(int quantity) {
+        this.stockQuantity += quantity;
     }
 
     @Override

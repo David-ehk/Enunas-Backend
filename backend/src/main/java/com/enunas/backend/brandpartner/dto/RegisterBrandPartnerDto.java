@@ -27,4 +27,14 @@ public class RegisterBrandPartnerDto {
     private String websiteUrl;
 
     private String instagramHandle;
+
+    private String tiktokHandle;
+
+    /** ISO 3166-1 alpha-2 country code (e.g. "DE", "US"). Optional at apply time. */
+    @Size(min = 2, max = 2)
+    private String country;
+
+    /** Public business contact email. Optional; defaults to login email if omitted. */
+    @Email
+    private String contactEmail;
 }

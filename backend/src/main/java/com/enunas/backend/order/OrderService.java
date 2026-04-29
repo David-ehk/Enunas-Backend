@@ -1,5 +1,8 @@
 package com.enunas.backend.order;
 
+import com.enunas.backend.brandpartner.BrandPartner;
+import com.enunas.backend.brandpartner.brandshippingprofile.BrandShippingProfile;
+import com.enunas.backend.brandpartner.brandshippingprofile.BrandShippingProfileRepository;
 import com.enunas.backend.exception.OrderNotFoundException;
 import com.enunas.backend.order.dto.CancelOrderDto;
 import com.enunas.backend.order.dto.CreateOrderDto;
@@ -12,6 +15,8 @@ import com.enunas.backend.payment.Payment;
 import com.enunas.backend.payment.PaymentRepository;
 import com.enunas.backend.product.productlisting.ProductListing;
 import com.enunas.backend.product.productlisting.ProductListingRepository;
+import com.enunas.backend.product.productvariant.ProductVariant;
+import com.enunas.backend.product.productvariant.ProductVariantRepository;
 import com.enunas.backend.user.EmailService;
 import com.enunas.backend.user.User;
 import lombok.RequiredArgsConstructor;
@@ -26,7 +31,9 @@ import java.math.BigDecimal;
 import java.security.SecureRandom;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 @Slf4j
 @Service
@@ -39,6 +46,8 @@ public class OrderService {
     private final OrderRepository orderRepository;
     private final OrderItemRepository orderItemRepository;
     private final ProductListingRepository productListingRepository;
+    private final ProductVariantRepository productVariantRepository;
+    private final BrandShippingProfileRepository brandShippingProfileRepository;
     private final PaymentRepository paymentRepository;
     private final ReturnOrderRepository returnOrderRepository;
     private final EmailService emailService;
@@ -48,48 +57,60 @@ public class OrderService {
     @PreAuthorize("hasRole('CUSTOMER')")
     @Transactional
     public OrderResponseDto createOrder(CreateOrderDto dto, User buyer) {
+        // 1. Resolve listings (price source) and validate availability/window.
         List<ProductListing> listings = resolveAndValidateListings(dto.getItems());
 
-        for (OrderItemRequestDto itemDto : dto.getItems()) {
-            int updated = productListingRepository.decrementStock(itemDto.getListingId(), itemDto.getQuantity());
+        // 2. Atomically decrement variant stock (single source of truth).
+        for (int i = 0; i < dto.getItems().size(); i++) {
+            OrderItemRequestDto itemDto = dto.getItems().get(i);
+            ProductVariant variant = listings.get(i).getVariant();
+            int updated = productVariantRepository.decrementStock(variant.getId(), itemDto.getQuantity());
             if (updated == 0) {
-                ProductListing pl = productListingRepository.findById(itemDto.getListingId()).orElseThrow();
                 throw new IllegalStateException(
-                        "Insufficient stock for: " + pl.getProduct().getName() +
-                        " (" + pl.getVariant().getColor() + " / " + pl.getVariant().getSize() + ")" +
-                        " — requested: " + itemDto.getQuantity() + ", available: " + pl.getStock());
+                        "Insufficient stock for: " + listings.get(i).getProduct().getName() +
+                        " (" + variant.getColor() + " / " + variant.getSize() + ")" +
+                        " — requested: " + itemDto.getQuantity() +
+                        ", available: " + variant.getStockQuantity());
             }
         }
 
+        // 3. Build order items with price snapshot from listing.
         List<OrderItem> orderItems = new ArrayList<>();
         BigDecimal subtotal = BigDecimal.ZERO;
-        BigDecimal shippingTotal = BigDecimal.ZERO;
+        Set<Long> distinctBrandIds = new HashSet<>();
 
         for (int i = 0; i < dto.getItems().size(); i++) {
             OrderItemRequestDto itemDto = dto.getItems().get(i);
             ProductListing pl = listings.get(i);
+            ProductVariant variant = pl.getVariant();
 
             BigDecimal effectivePrice = pl.getDiscountPrice() != null ? pl.getDiscountPrice() : pl.getPrice();
-            BigDecimal shippingCost = pl.getShippingCost() != null ? pl.getShippingCost() : BigDecimal.ZERO;
             BigDecimal lineTotal = effectivePrice.multiply(BigDecimal.valueOf(itemDto.getQuantity()));
-
             subtotal = subtotal.add(lineTotal);
-            shippingTotal = shippingTotal.add(shippingCost);
+
+            BrandPartner brand = pl.getProduct().getBrand();
+            if (brand != null) distinctBrandIds.add(brand.getId());
 
             orderItems.add(OrderItem.builder()
-                    .productListing(pl)
-                    .productName(pl.getProduct().getName())
-                    .variantSku(pl.getVariant().getSku())
-                    .variantColor(pl.getVariant().getColor())
-                    .variantSize(pl.getVariant().getSize())
+                    .variant(variant)
+                    .productSnapshotName(pl.getProduct().getName())
+                    .variantSnapshotSku(variant.getSku())
+                    .variantSnapshotColor(variant.getColor())
+                    .variantSnapshotSize(variant.getSize())
                     .priceAtPurchase(pl.getPrice())
                     .discountPriceAtPurchase(pl.getDiscountPrice())
-                    .shippingCostAtPurchase(shippingCost)
                     .quantity(itemDto.getQuantity())
                     .lineTotal(lineTotal)
                     .build());
         }
 
+        // 4. Compute shipping per brand (one charge per brand, not per item).
+        BigDecimal shippingTotal = BigDecimal.ZERO;
+        for (Long brandId : distinctBrandIds) {
+            shippingTotal = shippingTotal.add(shippingCostForBrand(brandId));
+        }
+
+        // 5. Build & persist order.
         ShippingAddress address = ShippingAddress.builder()
                 .fullName(dto.getShippingAddress().getFullName())
                 .street(dto.getShippingAddress().getStreet())
@@ -123,10 +144,12 @@ public class OrderService {
                 .currency(saved.getCurrency())
                 .build());
 
-        log.info("Order created: {} for buyer: {}", saved.getOrderNumber(), buyer.getEmail());
+        log.info("Order created: {} for buyer: {} (brands: {})",
+                saved.getOrderNumber(), buyer.getEmail(), distinctBrandIds.size());
         return OrderResponseDto.from(saved);
     }
 
+    @Transactional(readOnly = true)
     @PreAuthorize("hasRole('CUSTOMER')")
     public Page<OrderResponseDto> getMyOrders(User buyer, Pageable pageable) {
         return orderRepository.findByBuyerOrderByCreatedAtDesc(buyer, pageable)
@@ -187,6 +210,7 @@ public class OrderService {
     }
 
     // ===== BrandPartner =====
+
     @PreAuthorize("hasRole('BRAND_PARTNER')")
     public Page<OrderResponseDto> getMyBrandOrders(User brandPartner, Pageable pageable) {
         return orderRepository.findByBrandPartnerCreatorId(brandPartner.getId(), pageable)
@@ -271,17 +295,13 @@ public class OrderService {
 
         validateForwardTransition(current, newStatus);
 
-        // If admin cancels an order that was already PAID (goods never shipped), restore stock
+        // If admin cancels an order whose goods never shipped, restore variant stock.
         if (newStatus == OrderStatus.CANCELLED &&
                 (current == OrderStatus.PAID ||
                  current == OrderStatus.SHIPPING_PROBLEM ||
                  current == OrderStatus.AWAITING_ADMIN ||
                  current == OrderStatus.MANUAL_REVIEW)) {
-            for (OrderItem item : order.getItems()) {
-                if (item.getProductListing() != null) {
-                    productListingRepository.restoreStock(item.getProductListing().getId(), item.getQuantity());
-                }
-            }
+            restoreVariantStock(order);
         }
 
         order.setStatus(newStatus);
@@ -299,11 +319,7 @@ public class OrderService {
                     "Only PENDING orders can be cancelled. Current status: " + order.getStatus());
         }
 
-        for (OrderItem item : order.getItems()) {
-            if (item.getProductListing() != null) {
-                productListingRepository.restoreStock(item.getProductListing().getId(), item.getQuantity());
-            }
-        }
+        restoreVariantStock(order);
 
         order.setCancellationReason(dto.getReason());
         order.setCancellationNote(dto.getNote());
@@ -360,11 +376,8 @@ public class OrderService {
         ReturnOrder returnOrder = findReturnOrder(order);
 
         for (ReturnItem item : returnOrder.getItems()) {
-            if (item.getOrderItem().getProductListing() != null) {
-                productListingRepository.restoreStock(
-                        item.getOrderItem().getProductListing().getId(),
-                        item.getQuantityReturned());
-            }
+            ProductVariant variant = item.getOrderItem().getVariant();
+            productVariantRepository.restoreStock(variant.getId(), item.getQuantityReturned());
         }
 
         returnOrder.setStatus(ReturnStatus.RECEIVED);
@@ -372,7 +385,7 @@ public class OrderService {
         returnOrderRepository.save(returnOrder);
 
         order.setStatus(OrderStatus.RETURN_RECEIVED);
-        log.info("Return received for order {} — stock restored", order.getOrderNumber());
+        log.info("Return received for order {} — variant stock restored", order.getOrderNumber());
         return OrderResponseDto.from(orderRepository.save(order));
     }
 
@@ -418,15 +431,25 @@ public class OrderService {
             if (pl.getAvailableUntil() != null && now.isAfter(pl.getAvailableUntil())) {
                 throw new IllegalStateException("Listing " + pl.getId() + " is no longer available");
             }
-            if (pl.getStock() < item.getQuantity()) {
-                throw new IllegalStateException(
-                        "Insufficient stock for listing " + pl.getId() +
-                        " — requested: " + item.getQuantity() + ", available: " + pl.getStock());
-            }
 
             listings.add(pl);
         }
         return listings;
+    }
+
+    private void restoreVariantStock(Order order) {
+        for (OrderItem item : order.getItems()) {
+            productVariantRepository.restoreStock(item.getVariant().getId(), item.getQuantity());
+        }
+    }
+
+    private BigDecimal shippingCostForBrand(Long brandId) {
+        return brandShippingProfileRepository.findAll().stream()
+                .filter(p -> p.getBrandPartner() != null && brandId.equals(p.getBrandPartner().getId()))
+                .findFirst()
+                .map(BrandShippingProfile::getShippingCost)
+                .filter(c -> c != null)
+                .orElse(BigDecimal.ZERO);
     }
 
     private void validateForwardTransition(OrderStatus from, OrderStatus to) {
@@ -453,11 +476,11 @@ public class OrderService {
         }
     }
 
+    /** Brand owns the order if any line item's variant.product.creator is this user. */
     private void assertBrandOwnership(Order order, User brandPartner) {
         boolean isOwner = order.getItems().stream()
-                .anyMatch(item -> item.getProductListing() != null &&
-                        item.getProductListing().getProduct().getCreator().getId()
-                                .equals(brandPartner.getId()));
+                .anyMatch(item -> item.getVariant().getProduct().getCreator().getId()
+                        .equals(brandPartner.getId()));
         if (!isOwner) {
             throw new SecurityException("This order does not contain any of your products");
         }
@@ -472,6 +495,12 @@ public class OrderService {
     private Order findById(Long id) {
         return orderRepository.findById(id)
                 .orElseThrow(() -> new OrderNotFoundException("Order not found with id: " + id));
+    }
+
+    @Transactional(readOnly = true)
+    public OrderResponseDto getOrderById(Long orderId) {
+        Order order = findById(orderId);
+        return OrderResponseDto.from(order);
     }
 
     private String generateOrderNumber() {

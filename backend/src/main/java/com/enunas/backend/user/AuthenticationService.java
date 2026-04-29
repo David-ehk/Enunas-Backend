@@ -1,5 +1,6 @@
 package com.enunas.backend.user;
 
+import com.enunas.backend.customer.CustomerService;
 import com.enunas.backend.user.dto.LoginUserDto;
 import com.enunas.backend.user.dto.RegisterUserDto;
 import lombok.RequiredArgsConstructor;
@@ -8,6 +9,7 @@ import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 @Slf4j
 @Service
@@ -18,11 +20,14 @@ public class AuthenticationService {
     private final BCryptPasswordEncoder passwordEncoder;
     private final AuthenticationManager authenticationManager;
     private final EmailService emailService;
+    private final CustomerService customerService;
 
     /**
-     * Customer signup. Always creates a CUSTOMER, immediately active. Brand applications
-     * use a separate flow ({@code POST /brandpartner/apply}) and never touch this method.
+     * Customer signup. Always creates a CUSTOMER, immediately active, with an empty
+     * Customer profile created in the same transaction. Brand applications use a
+     * separate flow ({@code POST /brandpartner/apply}) and never touch this method.
      */
+    @Transactional
     public User signup(RegisterUserDto input) {
         if (userRepository.existsByEmail(input.getEmail())) {
             log.warn("Signup failed: email already registered: {}", input.getEmail());
@@ -37,6 +42,8 @@ public class AuthenticationService {
                 .adminApproved(true)
                 .build();
         userRepository.save(user);
+
+        customerService.createForUser(user);
 
         emailService.sendWelcomeEmail(user.getEmail(), user.getEmail());
         log.info("Customer registered and active: {}", user.getEmail());

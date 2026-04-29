@@ -1,12 +1,12 @@
 package com.enunas.backend.product.productlisting;
 
 import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
+import java.util.Optional;
 
 @Repository
 public interface ProductListingRepository extends JpaRepository<ProductListing, Long> {
@@ -15,17 +15,19 @@ public interface ProductListingRepository extends JpaRepository<ProductListing, 
 
     List<ProductListing> findByVariantId(Long variantId);
 
+
+    Optional<ProductListing> findByVariantIdAndActiveTrue(Long variantId);
+
+    //  not nessary right now stating only in Germany List<ProductListing> findByRegionAndActive(String region, Boolean active);
+
     List<ProductListing> findByProductIdAndActive(Long productId, boolean active);
 
     List<ProductListing> findByRegionAndActive(String region, boolean active);
 
-    // Atomic decrement — only succeeds if stock >= quantity. Returns 1 on success, 0 on insufficient stock.
-    @Modifying
-    @Query("UPDATE ProductListing l SET l.stock = l.stock - :quantity WHERE l.id = :id AND l.stock >= :quantity AND l.active = true")
-    int decrementStock(@Param("id") Long id, @Param("quantity") int quantity);
+    @Query("SELECT l FROM ProductListing l WHERE l.variant.id = :variantId AND l.active = true AND l.availableFrom <= CURRENT_TIMESTAMP AND (l.availableUntil IS NULL OR l.availableUntil >= CURRENT_TIMESTAMP)")
+    Optional<ProductListing> findCurrentlyActiveByVariantId(@Param("variantId") Long variantId);
 
-    // Atomic restore — used on order cancellation
-    @Modifying
-    @Query("UPDATE ProductListing l SET l.stock = l.stock + :quantity WHERE l.id = :id")
-    void restoreStock(@Param("id") Long id, @Param("quantity") int quantity);
+    // Für regionale Listings (wenn region null = alle Regionen)
+    @Query("SELECT l FROM ProductListing l WHERE l.variant.id = :variantId AND l.active = true AND (l.region IS NULL OR l.region = :region) AND l.availableFrom <= CURRENT_TIMESTAMP AND (l.availableUntil IS NULL OR l.availableUntil >= CURRENT_TIMESTAMP)")
+    Optional<ProductListing> findCurrentlyActiveByVariantIdAndRegion(@Param("variantId") Long variantId, @Param("region") String region);
 }

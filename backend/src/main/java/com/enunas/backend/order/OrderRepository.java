@@ -23,8 +23,8 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
 
     @Query("SELECT DISTINCT o FROM Order o " +
             "JOIN o.items i " +
-            "JOIN i.productListing pl " +
-            "JOIN pl.product p " +
+            "JOIN i.variant v " +
+            "JOIN v.product p " +
             "WHERE p.creator.id = :creatorId")
     Page<Order> findByBrandPartnerCreatorId(@Param("creatorId") Long creatorId, Pageable pageable);
 }
