@@ -47,6 +47,9 @@ All secrets are externalized. Copy `.env` and fill in values before running loca
 | `MAIL_PORT` | `587` | SMTP port |
 | `MAIL_USERNAME` | — | Email sender address |
 | `MAIL_PASSWORD` | — | Email app password |
+| `MOLLIE_API_KEY` | — | Mollie API key (test: `test_xxx`, live: `live_xxx`) |
+| `MOLLIE_WEBHOOK_URL` | — | Full public URL Mollie posts to, e.g. `https://api.enunas.com/webhooks/mollie` |
+| `FRONTEND_BASE_URL` | `http://localhost:3000` | Frontend origin for post-payment redirect |
 
 ## Architecture
 

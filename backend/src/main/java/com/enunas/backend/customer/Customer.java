@@ -1,6 +1,5 @@
 package com.enunas.backend.customer;
 
-import com.enunas.backend.order.Order;
 import com.enunas.backend.user.User;
 import jakarta.persistence.*;
 import lombok.*;
@@ -72,8 +71,8 @@ public class Customer {
     @Column(nullable = false, precision = 19, scale = 2)
     private BigDecimal totalSpent = BigDecimal.ZERO;
 
-    @OneToMany(mappedBy = "user", fetch = FetchType.LAZY)
-    private List<Order> orders;
+    // Orders are queried via OrderRepository.findByBuyer(customer.getUser())
+    // — no direct FK from Order to Customer, so no @OneToMany mapping here.
 
     @Column(updatable = false)
     private LocalDateTime createdAt;

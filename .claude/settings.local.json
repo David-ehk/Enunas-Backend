@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(javap -p com/mollie/mollie/models/operations/async/GetPaymentResponse.class)",
+      "Bash(javap -p com/mollie/mollie/models/components/PaymentResponse.class)",
+      "Read(//c/Users/david/.m2/repository/com/mollie/mollie/1.5.4/**)",
+      "Bash(jar -xf mollie-1.5.4.jar com/mollie/mollie/models/components/RefundRequest.class)",
+      "Bash(javap -p com/mollie/mollie/models/components/RefundRequest.class)",
+      "Bash(rm -rf com/)",
+      "Bash(jar -xf mollie-1.5.4.jar com/mollie/mollie/models/operations/CreateRefundResponse.class)",
+      "Bash(javap -p com/mollie/mollie/models/operations/CreateRefundResponse.class)",
+      "Bash(jar -tf mollie-1.5.4.jar)",
+      "Bash(grep \"^com/mollie/mollie/[A-Za-z]*\\\\\\\\.class\")",
+      "Bash(jar -xf mollie-1.5.4.jar com/mollie/mollie/Refunds.class)",
+      "Bash(javap -p com/mollie/mollie/Refunds.class)",
+      "Bash(jar tf *)",
+      "Bash(cd /tmp)",
+      "Bash(jar xf *)",
+      "Bash(javap -p com/mollie/mollie/models/operations/CreateRefundRequest.class)",
+      "Bash(./mvnw compile *)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\david\\\\OneDrive\\\\Desktop\\\\EnunasBackend\\\\backend\\\\src\\\\main\\\\java\\\\com\\\\enunas\\\\backend\" -Recurse -Directory)",
+      "Bash(Select-Object FullName)",
+      "Bash(Format-List)"
+    ]
+  }
+}

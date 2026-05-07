@@ -54,10 +54,18 @@ public class BrandPartner {
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     @Builder.Default
+    @Setter(AccessLevel.NONE)
     private BrandStatus status = BrandStatus.PENDING_REVIEW;
 
+    // Kept in sync with status — use setStatus() rather than setting this directly
     @Builder.Default
+    @Setter(AccessLevel.NONE)
     private boolean approved = false;
+
+    public void setStatus(BrandStatus status) {
+        this.status = status;
+        this.approved = (status == BrandStatus.ACTIVE);
+    }
 
     @OneToMany(mappedBy = "brand", fetch = FetchType.LAZY,
                cascade = CascadeType.ALL, orphanRemoval = true)

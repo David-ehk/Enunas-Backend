@@ -8,6 +8,8 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 
 @Repository
@@ -27,4 +29,6 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
             "JOIN v.product p " +
             "WHERE p.creator.id = :creatorId")
     Page<Order> findByBrandPartnerCreatorId(@Param("creatorId") Long creatorId, Pageable pageable);
+
+    List<Order> findByStatusAndCreatedAtBefore(OrderStatus status, LocalDateTime cutoff);
 }

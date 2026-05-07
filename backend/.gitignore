@@ -38,6 +38,7 @@ build/
 .env
 .env.*
 !.env.example
+.mcp.json
 
 ### Application Configs ###
 application-local.yaml

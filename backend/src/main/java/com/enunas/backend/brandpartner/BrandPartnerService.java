@@ -1,5 +1,7 @@
 package com.enunas.backend.brandpartner;
 
+import com.enunas.backend.brandpartner.brandeconomics.BrandEconomics;
+import com.enunas.backend.brandpartner.brandeconomics.BrandEconomicsRepository;
 import com.enunas.backend.brandpartner.dto.BrandPartnerResponseDto;
 import com.enunas.backend.brandpartner.dto.RegisterBrandPartnerDto;
 import com.enunas.backend.brandpartner.dto.UpdateBrandPartnerDto;
@@ -12,13 +14,15 @@ import com.enunas.backend.user.dto.VerifyUserDto;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+
+import java.math.BigDecimal;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
-import java.util.Random;
+import java.security.SecureRandom;
 
 @Slf4j
 @Service
@@ -26,9 +30,13 @@ import java.util.Random;
 public class BrandPartnerService {
 
     private final BrandPartnerRepository brandPartnerRepository;
+    private final BrandEconomicsRepository brandEconomicsRepository;
     private final UserRepository userRepository;
     private final BCryptPasswordEncoder passwordEncoder;
     private final EmailService emailService;
+
+    @Value("${enunas.platform.commission-rate:0.18}")
+    private BigDecimal platformCommissionRate;
 
     @Value("${admin.email}")
     private String adminEmail;
@@ -82,6 +90,11 @@ public class BrandPartnerService {
                 .build();
         BrandPartner saved = brandPartnerRepository.save(brand);
 
+        brandEconomicsRepository.save(BrandEconomics.builder()
+                .brandPartner(saved)
+                .defaultCommissionRate(platformCommissionRate)
+                .build());
+
         emailService.sendVerificationEmail(user.getEmail(), user.getVerificationCode());
         log.info("Brand application submitted: {} ({})", dto.getBrandName(), user.getEmail());
 
@@ -100,7 +113,8 @@ public class BrandPartnerService {
         if (user.isEnabled()) {
             throw new IllegalStateException("Email already verified");
         }
-        if (user.getVerificationCodeExpiresAt() == null
+        if (user.getVerificationCode() == null
+                || user.getVerificationCodeExpiresAt() == null
                 || user.getVerificationCodeExpiresAt().isBefore(LocalDateTime.now())) {
             throw new IllegalStateException("Verification code expired");
         }
@@ -177,7 +191,7 @@ public class BrandPartnerService {
     }
 
     private String generateVerificationCode() {
-        return String.valueOf(new Random().nextInt(900000) + 100000);
+        return String.valueOf(new SecureRandom().nextInt(900000) + 100000);
     }
 
     /**

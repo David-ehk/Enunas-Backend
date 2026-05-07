@@ -39,6 +39,9 @@ public class ProductVariant {
     }
 
     public void decrementStock(int quantity) {
+        if (quantity <= 0) {
+            throw new IllegalArgumentException("Quantity must be positive");
+        }
         if (!hasStock(quantity)) {
             throw new IllegalStateException("Insufficient stock for variant " + id);
         }

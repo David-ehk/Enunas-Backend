@@ -5,6 +5,7 @@ import jakarta.persistence.*;
 import lombok.*;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 
 /**
  * Line item in an Order. Owns its own price/variant snapshot — the variant FK is the only
@@ -62,10 +63,27 @@ public class OrderItem {
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal lineTotal;  // priceAtPurchase * quantity (set before save)
 
+    // --- Commission snapshot (set at order creation time) ---
+    @Column(precision = 5, scale = 4)
+    private BigDecimal commissionRate;
+
+    @Column(precision = 10, scale = 2)
+    private BigDecimal platformFeeAmount;
+
+    @Column(precision = 10, scale = 2)
+    private BigDecimal brandPayoutAmount;
+
     // Convenience for ownership (no DB column - transient)
     public Long getBrandId() {
-        // Path: OrderItem → Variant → Product → Brand/Creator
-        return variant.getProduct().getBrand().getId();
+        var brand = variant.getProduct().getBrand();
+        return brand != null ? brand.getId() : null;
+    }
+
+    public void applyCommissionSnapshot(BigDecimal rate) {
+        if (rate == null || this.lineTotal == null) return;
+        this.commissionRate    = rate;
+        this.platformFeeAmount = this.lineTotal.multiply(rate).setScale(2, RoundingMode.HALF_UP);
+        this.brandPayoutAmount = this.lineTotal.subtract(this.platformFeeAmount);
     }
 
     // Helper to calculate line total

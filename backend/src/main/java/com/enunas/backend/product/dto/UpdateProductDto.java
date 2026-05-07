@@ -3,7 +3,6 @@ package com.enunas.backend.product.dto;
 import com.enunas.backend.product.Gender;
 import com.enunas.backend.product.ProductCatalogueCategory;
 import com.enunas.backend.product.ProductCategory;
-import com.enunas.backend.product.ProductStatus;
 import jakarta.validation.constraints.*;
 import lombok.Data;
 
@@ -36,6 +35,4 @@ public class UpdateProductDto {
 
     @Min(0)
     private Integer returnPeriodDays;
-
-    private ProductStatus status;
 }

@@ -1,6 +1,7 @@
 package com.enunas.backend.admin;
 
 import com.enunas.backend.admin.dto.AdminProductResponseDto;
+import com.enunas.backend.admin.dto.MollieConnectDto;
 import com.enunas.backend.admin.dto.RejectionDto;
 import com.enunas.backend.brandpartner.dto.BrandPartnerResponseDto;
 import com.enunas.backend.customer.CustomerService;
@@ -62,6 +63,13 @@ public class AdminController {
         return ResponseEntity.ok(adminService.suspendBrand(brandId));
     }
 
+    @PatchMapping("/brands/{brandId}/mollie-connect")
+    public ResponseEntity<BrandPartnerResponseDto> connectBrandToMollie(
+            @PathVariable Long brandId,
+            @Valid @RequestBody MollieConnectDto dto) {
+        return ResponseEntity.ok(adminService.connectBrandToMollie(brandId, dto.getMollieOrganizationId()));
+    }
+
     // ===== Product moderation =====
 
     @GetMapping("/products")
@@ -96,6 +104,13 @@ public class AdminController {
             @Valid @RequestBody(required = false) RejectionDto dto,
             @AuthenticationPrincipal User admin) {
         return ResponseEntity.ok(adminService.rejectProduct(productId, dto, admin));
+    }
+
+    @PostMapping("/products/{productId}/hide")
+    public ResponseEntity<AdminProductResponseDto> hideProduct(
+            @PathVariable Long productId,
+            @AuthenticationPrincipal User admin) {
+        return ResponseEntity.ok(adminService.hideProduct(productId, admin));
     }
 
     // ===== Customer management (delegates to CustomerService) =====

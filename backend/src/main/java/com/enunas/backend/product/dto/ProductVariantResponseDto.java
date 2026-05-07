@@ -4,9 +4,6 @@ import com.enunas.backend.product.productvariant.ProductVariant;
 import lombok.Builder;
 import lombok.Getter;
 
-import java.math.BigDecimal;
-import java.time.LocalDateTime;
-
 @Getter
 @Builder
 public class ProductVariantResponseDto {
@@ -16,9 +13,7 @@ public class ProductVariantResponseDto {
     private String color;
     private String size;
     private int stockQuantity;
-    private BigDecimal weightGrams;
-    private LocalDateTime createdAt;
-    private LocalDateTime updatedAt;
+    private Integer weightGrams;
 
     public static ProductVariantResponseDto from(ProductVariant variant) {
         return ProductVariantResponseDto.builder()
@@ -28,8 +23,6 @@ public class ProductVariantResponseDto {
                 .size(variant.getSize())
                 .stockQuantity(variant.getStockQuantity())
                 .weightGrams(variant.getWeightGrams())
-                .createdAt(variant.getCreatedAt())
-                .updatedAt(variant.getUpdatedAt())
                 .build();
     }
 }

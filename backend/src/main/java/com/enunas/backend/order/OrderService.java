@@ -1,6 +1,8 @@
 package com.enunas.backend.order;
 
 import com.enunas.backend.brandpartner.BrandPartner;
+import com.enunas.backend.brandpartner.brandeconomics.BrandEconomics;
+import com.enunas.backend.brandpartner.brandeconomics.BrandEconomicsRepository;
 import com.enunas.backend.brandpartner.brandshippingprofile.BrandShippingProfile;
 import com.enunas.backend.brandpartner.brandshippingprofile.BrandShippingProfileRepository;
 import com.enunas.backend.exception.OrderNotFoundException;
@@ -11,16 +13,21 @@ import com.enunas.backend.order.dto.OrderResponseDto;
 import com.enunas.backend.order.dto.ReturnRequestDto;
 import com.enunas.backend.order.dto.ShipmentConfirmationDto;
 import com.enunas.backend.order.dto.ShippingProblemDto;
+import com.enunas.backend.exception.PaymentException;
+import com.enunas.backend.payment.MolliePaymentService;
 import com.enunas.backend.payment.Payment;
 import com.enunas.backend.payment.PaymentRepository;
+import com.enunas.backend.payment.PaymentStatus;
 import com.enunas.backend.product.productlisting.ProductListing;
 import com.enunas.backend.product.productlisting.ProductListingRepository;
 import com.enunas.backend.product.productvariant.ProductVariant;
 import com.enunas.backend.product.productvariant.ProductVariantRepository;
+import com.enunas.backend.ledger.LedgerService;
 import com.enunas.backend.user.EmailService;
 import com.enunas.backend.user.User;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -28,11 +35,14 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.security.SecureRandom;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 @Slf4j
@@ -49,8 +59,17 @@ public class OrderService {
     private final ProductVariantRepository productVariantRepository;
     private final BrandShippingProfileRepository brandShippingProfileRepository;
     private final PaymentRepository paymentRepository;
+    private final BrandEconomicsRepository brandEconomicsRepository;
     private final ReturnOrderRepository returnOrderRepository;
     private final EmailService emailService;
+    private final MolliePaymentService molliePaymentService;
+    private final LedgerService ledgerService;
+
+    @Value("${app.frontend.base-url}")
+    private String frontendBaseUrl;
+
+    @Value("${enunas.platform.commission-rate:0.18}")
+    private BigDecimal globalCommissionRate;
 
     // ===== Customer =====
 
@@ -60,12 +79,11 @@ public class OrderService {
         // 1. Resolve listings (price source) and validate availability/window.
         List<ProductListing> listings = resolveAndValidateListings(dto.getItems());
 
-        // 2. Atomically decrement variant stock (single source of truth).
+        // 2. Validate stock availability — decrement happens at PAID, not here.
         for (int i = 0; i < dto.getItems().size(); i++) {
             OrderItemRequestDto itemDto = dto.getItems().get(i);
             ProductVariant variant = listings.get(i).getVariant();
-            int updated = productVariantRepository.decrementStock(variant.getId(), itemDto.getQuantity());
-            if (updated == 0) {
+            if (!variant.hasStock(itemDto.getQuantity())) {
                 throw new IllegalStateException(
                         "Insufficient stock for: " + listings.get(i).getProduct().getName() +
                         " (" + variant.getColor() + " / " + variant.getSize() + ")" +
@@ -78,6 +96,7 @@ public class OrderService {
         List<OrderItem> orderItems = new ArrayList<>();
         BigDecimal subtotal = BigDecimal.ZERO;
         Set<Long> distinctBrandIds = new HashSet<>();
+        Map<Long, BigDecimal> brandSubtotals = new HashMap<>(); // brandId → product revenue only
 
         for (int i = 0; i < dto.getItems().size(); i++) {
             OrderItemRequestDto itemDto = dto.getItems().get(i);
@@ -89,9 +108,12 @@ public class OrderService {
             subtotal = subtotal.add(lineTotal);
 
             BrandPartner brand = pl.getProduct().getBrand();
-            if (brand != null) distinctBrandIds.add(brand.getId());
+            if (brand != null) {
+                distinctBrandIds.add(brand.getId());
+                brandSubtotals.merge(brand.getId(), lineTotal, BigDecimal::add);
+            }
 
-            orderItems.add(OrderItem.builder()
+            OrderItem item = OrderItem.builder()
                     .variant(variant)
                     .productSnapshotName(pl.getProduct().getName())
                     .variantSnapshotSku(variant.getSku())
@@ -101,10 +123,14 @@ public class OrderService {
                     .discountPriceAtPurchase(pl.getDiscountPrice())
                     .quantity(itemDto.getQuantity())
                     .lineTotal(lineTotal)
-                    .build());
+                    .build();
+            if (brand != null) {
+                item.applyCommissionSnapshot(getBrandCommissionRate(brand.getId()));
+            }
+            orderItems.add(item);
         }
 
-        // 4. Compute shipping per brand (one charge per brand, not per item).
+        // !! 4. Compute shipping per brand (one charge per brand, not per item). Has to change to Order not Brand
         BigDecimal shippingTotal = BigDecimal.ZERO;
         for (Long brandId : distinctBrandIds) {
             shippingTotal = shippingTotal.add(shippingCostForBrand(brandId));
@@ -138,15 +164,50 @@ public class OrderService {
         orderItems.forEach(saved::addItem);
         orderItemRepository.saveAll(orderItems);
 
+        // 6. Build per-brand Mollie routing (85% of product subtotal to connected brands).
+        List<MolliePaymentService.BrandRouting> routings = new ArrayList<>();
+        for (Map.Entry<Long, BigDecimal> entry : brandSubtotals.entrySet()) {
+            BigDecimal rate = getBrandCommissionRate(entry.getKey());
+            BigDecimal brandShare = entry.getValue()
+                    .multiply(BigDecimal.ONE.subtract(rate))
+                    .setScale(2, RoundingMode.HALF_UP);
+            brandEconomicsRepository.findByBrandPartnerId(entry.getKey()).ifPresent(eco -> {
+                if (eco.getMollieOrganizationId() != null) {
+                    routings.add(new MolliePaymentService.BrandRouting(
+                            eco.getMollieOrganizationId(), brandShare));
+                }
+            });
+        }
+
+        String redirectUrl = frontendBaseUrl + "/orders/" + saved.getOrderNumber() + "/confirmation";
+        MolliePaymentService.MolliePaymentResult mollieResult;
+        try {
+            mollieResult = molliePaymentService.createPayment(
+                    saved.getTotal(),
+                    saved.getCurrency(),
+                    "Enunas order " + saved.getOrderNumber(),
+                    redirectUrl,
+                    routings);
+        } catch (Exception e) {
+            log.error("Mollie payment creation failed for order {}: {}", saved.getOrderNumber(), e.getMessage());
+            throw new PaymentException("Could not initiate payment. Please try again.");
+        }
+
+        // IMPORTANT: Mollie payment already created above. If this save fails and the
+        // transaction rolls back, the Mollie payment is orphaned. Manual reconciliation
+        // via Mollie dashboard is required using molliePaymentId logged below.
+        log.info("Mollie payment created: molliePaymentId={} for order={}",
+                mollieResult.molliePaymentId(), saved.getOrderNumber());
         paymentRepository.save(Payment.builder()
                 .order(saved)
                 .amount(saved.getTotal())
                 .currency(saved.getCurrency())
+                .transactionId(mollieResult.molliePaymentId())
                 .build());
 
         log.info("Order created: {} for buyer: {} (brands: {})",
                 saved.getOrderNumber(), buyer.getEmail(), distinctBrandIds.size());
-        return OrderResponseDto.from(saved);
+        return OrderResponseDto.from(saved, mollieResult.checkoutUrl());
     }
 
     @Transactional(readOnly = true)
@@ -172,6 +233,11 @@ public class OrderService {
         if (order.getStatus() != OrderStatus.DELIVERED) {
             throw new IllegalStateException(
                     "Return can only be requested for DELIVERED orders. Current status: " + order.getStatus());
+        }
+
+        if (returnOrderRepository.existsByOrder(order)) {
+            throw new IllegalStateException(
+                    "A return has already been requested for order " + order.getOrderNumber());
         }
 
         ReturnOrder returnOrder = ReturnOrder.builder()
@@ -266,6 +332,67 @@ public class OrderService {
         return OrderResponseDto.from(orderRepository.save(order));
     }
 
+    // ===== Payment webhook (no role check — called server-to-server after amount verified) =====
+
+    @Transactional
+    public void confirmPaymentByWebhook(Long orderId) {
+        Order order = findById(orderId);
+        OrderStatus current = order.getStatus();
+
+        if (current == OrderStatus.PAID) return; // idempotent
+
+        if (current != OrderStatus.PENDING) {
+            log.warn("Webhook: order {} in {} state, expected PENDING — ignoring", orderId, current);
+            return;
+        }
+
+        // Mark payment captured regardless of stock outcome — money was taken by Mollie.
+        paymentRepository.findByOrderId(orderId).ifPresent(p -> {
+            p.setStatus(PaymentStatus.PAID);
+            p.setPaidAt(LocalDateTime.now());
+            paymentRepository.save(p);
+        });
+
+        // Try to decrement stock for every line item. Track successful decrements so we
+        // can restore them if a later item runs out (race between order creation and this call).
+        List<OrderItem> decremented = new ArrayList<>();
+        OrderItem failedItem = null;
+
+        for (OrderItem item : order.getItems()) {
+            int updated = productVariantRepository.decrementStock(
+                    item.getVariant().getId(), item.getQuantity());
+            if (updated == 0) {
+                failedItem = item;
+                break;
+            }
+            decremented.add(item);
+        }
+
+        if (failedItem != null) {
+            // Roll back stock for items we already decremented.
+            for (OrderItem done : decremented) {
+                productVariantRepository.restoreStock(done.getVariant().getId(), done.getQuantity());
+            }
+            // Cancel and flag for manual refund — do NOT throw, so the webhook returns 200
+            // and Mollie stops retrying (this is a permanent stock-out, not a transient error).
+            String note = "REFUND_REQUIRED: payment captured but variant "
+                    + failedItem.getVariant().getId() + " sold out at confirmation time.";
+            order.setStatus(OrderStatus.CANCELLED);
+            order.setCancellationNote(note);
+            orderRepository.save(order);
+            log.error("REFUND_REQUIRED: order {} — Mollie payment captured but variant {} out of stock."
+                    + " Manual refund needed.", order.getOrderNumber(), failedItem.getVariant().getId());
+            return;
+        }
+
+        order.setStatus(OrderStatus.PAID);
+        orderRepository.save(order);
+
+        ledgerService.recordOrderPayment(order);
+
+        log.info("Webhook: order {} PENDING → PAID", order.getOrderNumber());
+    }
+
     // ===== Admin: forward flow =====
 
     @PreAuthorize("hasRole('ADMIN')")
@@ -293,20 +420,57 @@ public class OrderService {
         Order order = findById(orderId);
         OrderStatus current = order.getStatus();
 
+        // Idempotent: already in target state — return without side effects (CB-3).
+        if (current == newStatus) {
+            return OrderResponseDto.from(order);
+        }
+
         validateForwardTransition(current, newStatus);
 
-        // If admin cancels an order whose goods never shipped, restore variant stock.
-        if (newStatus == OrderStatus.CANCELLED &&
+        // Decrement stock when payment is confirmed — stock is not held during PENDING.
+        if (newStatus == OrderStatus.PAID && current == OrderStatus.PENDING) {
+            for (OrderItem item : order.getItems()) {
+                int updated = productVariantRepository.decrementStock(
+                        item.getVariant().getId(), item.getQuantity());
+                if (updated == 0) {
+                    throw new IllegalStateException(
+                            "Insufficient stock for variant " + item.getVariant().getId() +
+                            " at payment confirmation — item may have sold out since order was placed.");
+                }
+            }
+            // Sync payment record (CB-1).
+            paymentRepository.findByOrderId(orderId).ifPresent(p -> {
+                p.setStatus(PaymentStatus.PAID);
+                p.setPaidAt(LocalDateTime.now());
+                paymentRepository.save(p);
+            });
+        }
+
+        // Restore stock when cancelling any post-payment order (CB-6 fix).
+        boolean postPaymentCancel = newStatus == OrderStatus.CANCELLED &&
                 (current == OrderStatus.PAID ||
                  current == OrderStatus.SHIPPING_PROBLEM ||
                  current == OrderStatus.AWAITING_ADMIN ||
-                 current == OrderStatus.MANUAL_REVIEW)) {
+                 current == OrderStatus.MANUAL_REVIEW);
+        if (postPaymentCancel) {
             restoreVariantStock(order);
         }
 
         order.setStatus(newStatus);
         log.info("Order {} status: {} → {}", order.getOrderNumber(), current, newStatus);
-        return OrderResponseDto.from(orderRepository.save(order));
+        Order saved = orderRepository.save(order);
+
+        // Record ledger entries for admin-forced payment confirmation.
+        if (newStatus == OrderStatus.PAID && current == OrderStatus.PENDING) {
+            ledgerService.recordOrderPayment(saved);
+        }
+
+        // Reverse brand ledger entries when a post-payment order is cancelled.
+        if (postPaymentCancel) {
+            ledgerService.recordRefund(saved, saved.getTotal());
+        }
+
+        return OrderResponseDto.from(saved);
     }
 
     @PreAuthorize("hasRole('ADMIN')")
@@ -319,7 +483,7 @@ public class OrderService {
                     "Only PENDING orders can be cancelled. Current status: " + order.getStatus());
         }
 
-        restoreVariantStock(order);
+        // No stock restore needed — PENDING orders never decremented stock.
 
         order.setCancellationReason(dto.getReason());
         order.setCancellationNote(dto.getNote());
@@ -399,12 +563,42 @@ public class OrderService {
                     "Can only process refund after return is received. Current: " + order.getStatus());
         }
 
+        if (refundAmount == null || refundAmount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("Refund amount must be positive");
+        }
+        if (refundAmount.compareTo(order.getTotal()) > 0) {
+            throw new IllegalArgumentException(
+                    "Refund amount " + refundAmount + " exceeds order total " + order.getTotal());
+        }
+
+        // 1. Execute Mollie refund first — if this fails, nothing in the DB changes.
+        Payment payment = paymentRepository.findByOrderId(orderId)
+                .orElseThrow(() -> new IllegalStateException("No payment record for order " + orderId));
+        try {
+            molliePaymentService.refundPayment(
+                    payment.getTransactionId(),
+                    refundAmount,
+                    "Refund for order " + order.getOrderNumber());
+        } catch (Exception e) {
+            log.error("Mollie refund failed for order {}: {}", order.getOrderNumber(), e.getMessage());
+            throw new PaymentException("Could not process Mollie refund: " + e.getMessage(), e);
+        }
+
+        // 2. Mark payment record as refunded.
+        payment.setStatus(PaymentStatus.REFUNDED);
+        paymentRepository.save(payment);
+
+        // 3. Update return order.
         ReturnOrder returnOrder = findReturnOrder(order);
         returnOrder.setStatus(ReturnStatus.REFUNDED);
         returnOrder.setRefundedAt(LocalDateTime.now());
         returnOrder.setRefundAmount(refundAmount);
         returnOrderRepository.save(returnOrder);
 
+        // 4. Reverse brand ledger entries and adjust balances.
+        ledgerService.recordRefund(order, refundAmount);
+
+        // 5. Update order status.
         order.setStatus(OrderStatus.REFUNDED);
         log.info("Refund of {} processed for order {}", refundAmount, order.getOrderNumber());
         return OrderResponseDto.from(orderRepository.save(order));
@@ -452,10 +646,17 @@ public class OrderService {
                 .orElse(BigDecimal.ZERO);
     }
 
+    private BigDecimal getBrandCommissionRate(Long brandId) {
+        return brandEconomicsRepository.findByBrandPartnerId(brandId)
+                .map(BrandEconomics::getDefaultCommissionRate)
+                .filter(r -> r != null && r.compareTo(BigDecimal.ZERO) > 0)
+                .orElse(globalCommissionRate);
+    }
+
     private void validateForwardTransition(OrderStatus from, OrderStatus to) {
         boolean valid = switch (from) {
             case PENDING         -> to == OrderStatus.PAID;
-            case PAID            -> to == OrderStatus.SHIPPED;
+            case PAID            -> to == OrderStatus.SHIPPED || to == OrderStatus.CANCELLED;
             case SHIPPED         -> to == OrderStatus.DELIVERED;
             case SHIPPING_PROBLEM, AWAITING_ADMIN, MANUAL_REVIEW ->
                     to == OrderStatus.AWAITING_ADMIN ||

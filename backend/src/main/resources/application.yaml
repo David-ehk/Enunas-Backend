@@ -39,3 +39,20 @@ security:
 
 admin:
   email: ${ADMIN_EMAIL:admin@enunas.com}
+
+enunas:
+  platform:
+    commission-rate: 0.18
+  payout:
+    hold-days: 7
+    release-cron: "0 0 2 * * ?"
+
+mollie:
+  api:
+    key: ${MOLLIE_API_KEY}
+  webhook:
+    url: ${MOLLIE_WEBHOOK_URL}
+
+app:
+  frontend:
+    base-url: ${FRONTEND_BASE_URL:http://localhost:3000}

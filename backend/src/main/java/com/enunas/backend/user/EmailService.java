@@ -57,13 +57,18 @@ public class EmailService {
     }
 
     public void sendPlainTextEmail(String to, String subject, String content) {
-        SimpleMailMessage message = new SimpleMailMessage();
-        message.setFrom(fromEmail);
-        message.setTo(to);
-        message.setSubject(subject);
-        message.setText(content);
-        mailSender.send(message);
-        log.info("✅ Plain text email sent to: {}", to);
+        try {
+            SimpleMailMessage message = new SimpleMailMessage();
+            message.setFrom(fromEmail);
+            message.setTo(to);
+            message.setSubject(subject);
+            message.setText(content);
+            mailSender.send(message);
+            log.info("✅ Plain text email sent to: {}", to);
+        } catch (Exception e) {
+            log.error("❌ Failed to send plain text email to {}: {}", to, e.getMessage());
+            throw new RuntimeException("Failed to send email", e);
+        }
     }
 
     private String buildVerificationHtml(String verificationCode) {

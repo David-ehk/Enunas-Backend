@@ -31,4 +31,19 @@ public class BrandEconomics {
 
     @Builder.Default
     private BigDecimal lifetimeRevenue = BigDecimal.ZERO;
+
+    // Earned but within hold window — not yet eligible for payout.
+    @Builder.Default
+    private BigDecimal pendingBalance = BigDecimal.ZERO;
+
+    // Cumulative amount transferred out to the brand.
+    @Builder.Default
+    private BigDecimal paidOutTotal = BigDecimal.ZERO;
+
+    // Refund amount that exceeded pendingBalance + payoutBalance (brand owes platform).
+    @Builder.Default
+    private BigDecimal outstandingDebt = BigDecimal.ZERO;
+
+    // Mollie Connect: org_xxxxx from the brand's Mollie account. Null = not yet connected.
+    private String mollieOrganizationId;
 }

@@ -46,7 +46,7 @@ public class ProductService {
                 .collectionName(dto.getCollectionName())
                 .releaseDate(dto.getReleaseDate())
                 .returnPeriodDays(dto.getReturnPeriodDays())
-                .status(ProductStatus.PENDING_REVIEW)
+                .status(ProductStatus.ACTIVE)
                 .creator(creator)
                 .build();
 
@@ -125,7 +125,6 @@ public class ProductService {
         if (dto.getCollectionName() != null) product.setCollectionName(dto.getCollectionName());
         if (dto.getReleaseDate() != null) product.setReleaseDate(dto.getReleaseDate());
         if (dto.getReturnPeriodDays() != null) product.setReturnPeriodDays(dto.getReturnPeriodDays());
-        if (dto.getStatus() != null) product.setStatus(dto.getStatus());
 
         return ProductResponseDto.from(productRepository.save(product));
     }

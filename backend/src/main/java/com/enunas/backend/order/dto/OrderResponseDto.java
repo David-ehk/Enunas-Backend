@@ -11,7 +11,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 @Getter
-@Builder
+@Builder(toBuilder = true)
 public class OrderResponseDto {
 
     private Long id;
@@ -26,6 +26,7 @@ public class OrderResponseDto {
     private BigDecimal total;
     private String currency;
     private String notes;
+    private String checkoutUrl;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
@@ -48,5 +49,9 @@ public class OrderResponseDto {
                 .createdAt(order.getCreatedAt())
                 .updatedAt(order.getUpdatedAt())
                 .build();
+    }
+
+    public static OrderResponseDto from(Order order, String checkoutUrl) {
+        return from(order).toBuilder().checkoutUrl(checkoutUrl).build();
     }
 }

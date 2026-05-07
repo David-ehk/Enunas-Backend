@@ -5,6 +5,8 @@ import com.enunas.backend.admin.dto.RejectionDto;
 import com.enunas.backend.brandpartner.BrandPartner;
 import com.enunas.backend.brandpartner.BrandPartnerRepository;
 import com.enunas.backend.brandpartner.BrandStatus;
+import com.enunas.backend.brandpartner.brandeconomics.BrandEconomics;
+import com.enunas.backend.brandpartner.brandeconomics.BrandEconomicsRepository;
 import com.enunas.backend.brandpartner.dto.BrandPartnerResponseDto;
 import com.enunas.backend.exception.BrandNotFoundException;
 import com.enunas.backend.exception.ProductNotFoundException;
@@ -38,6 +40,7 @@ import java.time.LocalDateTime;
 public class AdminService {
 
     private final BrandPartnerRepository brandPartnerRepository;
+    private final BrandEconomicsRepository brandEconomicsRepository;
     private final ProductRepository productRepository;
     private final UserRepository userRepository;
     private final EmailService emailService;
@@ -54,7 +57,6 @@ public class AdminService {
         User user = brand.getUser();
 
         brand.setStatus(BrandStatus.ACTIVE);
-        brand.setApproved(true);
 
         user.setAdminApproved(true);
         if (user.getRole() != Role.BRAND_PARTNER) {
@@ -75,7 +77,6 @@ public class AdminService {
     public BrandPartnerResponseDto rejectBrand(Long brandId) {
         BrandPartner brand = findBrand(brandId);
         brand.setStatus(BrandStatus.REJECTED);
-        brand.setApproved(false);
         BrandPartner saved = brandPartnerRepository.save(brand);
 
         log.info("Brand rejected by admin: {} ({})", brand.getBrandName(), brand.getUser().getEmail());
@@ -86,7 +87,6 @@ public class AdminService {
     public BrandPartnerResponseDto suspendBrand(Long brandId) {
         BrandPartner brand = findBrand(brandId);
         brand.setStatus(BrandStatus.SUSPENDED);
-        brand.setApproved(false);
         BrandPartner saved = brandPartnerRepository.save(brand);
 
         log.info("Brand suspended by admin: {} ({})", brand.getBrandName(), brand.getUser().getEmail());
@@ -122,7 +122,6 @@ public class AdminService {
         if (dto.getCollectionName() != null) product.setCollectionName(dto.getCollectionName());
         if (dto.getReleaseDate() != null) product.setReleaseDate(dto.getReleaseDate());
         if (dto.getReturnPeriodDays() != null) product.setReturnPeriodDays(dto.getReturnPeriodDays());
-        if (dto.getStatus() != null) product.setStatus(dto.getStatus());
 
         return AdminProductResponseDto.from(productRepository.save(product));
     }
@@ -134,7 +133,7 @@ public class AdminService {
         log.info("Product deleted by admin: id={}", productId);
     }
 
-    /** Approve a product — status=ACTIVE, clears any prior rejectionReason, stamps moderation metadata. */
+    /** Reinstate a product — sets status=ACTIVE, clears any prior rejection reason. */
     @Transactional
     public AdminProductResponseDto approveProduct(Long productId, User admin) {
         Product product = findProduct(productId);
@@ -159,6 +158,31 @@ public class AdminService {
         log.info("Product rejected by admin {}: id={}, reason={}",
                 admin.getEmail(), productId, product.getRejectionReason());
         return AdminProductResponseDto.from(productRepository.save(product));
+    }
+
+    /** Hide a product — status=SUSPENDED, invisible to customers but not permanently rejected. */
+    @Transactional
+    public AdminProductResponseDto hideProduct(Long productId, User admin) {
+        Product product = findProduct(productId);
+        product.setStatus(ProductStatus.SUSPENDED);
+        product.setModeratedBy(admin);
+        product.setModeratedAt(LocalDateTime.now());
+
+        log.info("Product hidden by admin {}: id={}", admin.getEmail(), productId);
+        return AdminProductResponseDto.from(productRepository.save(product));
+    }
+
+    // ===== Mollie Connect =====
+
+    @Transactional
+    public BrandPartnerResponseDto connectBrandToMollie(Long brandId, String mollieOrganizationId) {
+        BrandPartner brand = findBrand(brandId);
+        BrandEconomics eco = brandEconomicsRepository.findByBrandPartnerId(brandId)
+                .orElseGet(() -> BrandEconomics.builder().brandPartner(brand).build());
+        eco.setMollieOrganizationId(mollieOrganizationId);
+        brandEconomicsRepository.save(eco);
+        log.info("Admin linked brand {} to Mollie org {}", brand.getBrandName(), mollieOrganizationId);
+        return BrandPartnerResponseDto.from(brand);
     }
 
     // ===== Internal helpers =====
