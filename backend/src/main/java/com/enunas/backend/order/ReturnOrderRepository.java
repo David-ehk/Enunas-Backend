@@ -10,6 +10,8 @@ public interface ReturnOrderRepository extends JpaRepository<ReturnOrder, Long> 
 
     Optional<ReturnOrder> findByOrder(Order order);
 
+    Optional<ReturnOrder> findByOrder_Id(Long orderId);
+
     boolean existsByOrder(Order order);
 
     Optional<ReturnOrder> findByReturnNumber(String returnNumber);

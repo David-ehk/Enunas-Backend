@@ -3,6 +3,7 @@ package com.enunas.backend.brandpartner.brandeconomics;
 import com.enunas.backend.brandpartner.BrandPartner;
 import jakarta.persistence.*;
 import lombok.*;
+import jakarta.persistence.Version;
 
 import java.math.BigDecimal;
 
@@ -18,6 +19,9 @@ public class BrandEconomics {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    @Version
+    private Long version;
 
     @OneToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "brand_id", nullable = false, unique = true)
@@ -43,7 +47,4 @@ public class BrandEconomics {
     // Refund amount that exceeded pendingBalance + payoutBalance (brand owes platform).
     @Builder.Default
     private BigDecimal outstandingDebt = BigDecimal.ZERO;
-
-    // Mollie Connect: org_xxxxx from the brand's Mollie account. Null = not yet connected.
-    private String mollieOrganizationId;
 }

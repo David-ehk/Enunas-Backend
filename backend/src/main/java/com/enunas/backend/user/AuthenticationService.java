@@ -58,16 +58,17 @@ public class AuthenticationService {
         User user = userRepository.findByEmail(input.getEmail())
                 .orElseThrow(() -> new IllegalArgumentException("User not found"));
 
-        // Brand-partner gating: blocked until email-verified AND admin-approved.
-        if (user.getRole() == Role.BRAND_PARTNER) {
-            if (!user.isEnabled()) {
-                log.warn("Login failed: email not verified for {}", input.getEmail());
+        // Gate all roles on enabled + adminApproved — not just BRAND_PARTNER.
+        if (!user.isEnabled()) {
+            log.warn("Login failed: account disabled for {}", input.getEmail());
+            if (user.getRole() == Role.BRAND_PARTNER) {
                 throw new IllegalStateException("Please verify your email first. Check your inbox for the verification code.");
             }
-            if (!user.isAdminApproved()) {
-                log.warn("Login failed: admin approval pending for {}", input.getEmail());
-                throw new IllegalStateException("Your account is pending admin approval. You will receive an email once approved.");
-            }
+            throw new IllegalStateException("Your account has been disabled. Please contact support.");
+        }
+        if (!user.isAdminApproved()) {
+            log.warn("Login failed: admin approval pending for {}", input.getEmail());
+            throw new IllegalStateException("Your account is pending admin approval. You will receive an email once approved.");
         }
 
         log.info("User logged in: {} with role: {}", user.getEmail(), user.getRole());

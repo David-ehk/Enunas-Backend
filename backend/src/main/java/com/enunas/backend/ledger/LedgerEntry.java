@@ -8,10 +8,11 @@ import java.time.LocalDateTime;
 
 @Entity
 @Table(name = "ledger_entries", indexes = {
-    @Index(name = "idx_ledger_order_id",    columnList = "order_id"),
-    @Index(name = "idx_ledger_brand_id",    columnList = "brand_partner_id"),
-    @Index(name = "idx_ledger_eligible_at", columnList = "payout_eligible_at"),
-    @Index(name = "idx_ledger_status",      columnList = "status")
+    @Index(name = "idx_ledger_order_id",      columnList = "order_id"),
+    @Index(name = "idx_ledger_brand_id",      columnList = "brand_partner_id"),
+    @Index(name = "idx_ledger_eligible_at",   columnList = "payout_eligible_at"),
+    @Index(name = "idx_ledger_status",        columnList = "status"),
+    @Index(name = "idx_ledger_external_ref",  columnList = "external_reference_id")
 })
 @Getter
 @Builder
@@ -23,7 +24,8 @@ public class LedgerEntry {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "order_id", nullable = false)
+    // Nullable: PAYOUT_TRANSFER entries are brand-level, not tied to a specific order.
+    @Column(name = "order_id")
     private Long orderId;
 
     // Nullable: REFUND_REVERSAL entries are per-brand aggregates, not per-item.
@@ -68,6 +70,10 @@ public class LedgerEntry {
     // For REFUND_REVERSAL entries: references the original ORDER_PAYMENT entry being reversed.
     @Column(name = "reversal_of_entry_id")
     private Long reversalOfEntryId;
+
+    // Mollie refund ID (re_xxx) for REFUND_REVERSAL; bank transfer reference for PAYOUT_TRANSFER.
+    @Column(name = "external_reference_id")
+    private String externalReferenceId;
 
     @Column(updatable = false, nullable = false)
     private LocalDateTime createdAt;

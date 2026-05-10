@@ -1,8 +1,15 @@
 package com.enunas.backend.admin;
 
 import com.enunas.backend.admin.dto.AdminProductResponseDto;
-import com.enunas.backend.admin.dto.MollieConnectDto;
+import com.enunas.backend.admin.dto.SetPayoutProfileDto;
 import com.enunas.backend.admin.dto.RejectionDto;
+import com.enunas.backend.ledger.ReconciliationService;
+import com.enunas.backend.payout.PayoutStatus;
+import com.enunas.backend.payout.dto.MarkAsPaidDto;
+import com.enunas.backend.payout.dto.PayoutDashboardDto;
+import com.enunas.backend.payout.dto.PayoutResponseDto;
+
+import java.util.List;
 import com.enunas.backend.brandpartner.dto.BrandPartnerResponseDto;
 import com.enunas.backend.customer.CustomerService;
 import com.enunas.backend.customer.dto.CustomerResponseDto;
@@ -63,11 +70,72 @@ public class AdminController {
         return ResponseEntity.ok(adminService.suspendBrand(brandId));
     }
 
-    @PatchMapping("/brands/{brandId}/mollie-connect")
-    public ResponseEntity<BrandPartnerResponseDto> connectBrandToMollie(
+    @PatchMapping("/brands/{brandId}/payout-profile")
+    public ResponseEntity<BrandPartnerResponseDto> setBrandPayoutProfile(
             @PathVariable Long brandId,
-            @Valid @RequestBody MollieConnectDto dto) {
-        return ResponseEntity.ok(adminService.connectBrandToMollie(brandId, dto.getMollieOrganizationId()));
+            @Valid @RequestBody SetPayoutProfileDto dto) {
+        return ResponseEntity.ok(adminService.setBrandPayoutProfile(brandId, dto.getIban(), dto.getBankAccountHolder()));
+    }
+
+    // ===== Payouts =====
+
+    @PostMapping("/payouts/generate")
+    public ResponseEntity<List<PayoutResponseDto>> generatePayouts() {
+        return ResponseEntity.ok(adminService.generatePayouts());
+    }
+
+    @GetMapping("/payouts/dashboard")
+    public ResponseEntity<PayoutDashboardDto> getPayoutDashboard() {
+        return ResponseEntity.ok(adminService.getPayoutDashboard());
+    }
+
+    @GetMapping("/payouts")
+    public ResponseEntity<Page<PayoutResponseDto>> listPayouts(
+            @RequestParam(required = false) PayoutStatus status,
+            @PageableDefault(size = 50, sort = "createdAt") Pageable pageable) {
+        return ResponseEntity.ok(adminService.listPayouts(status, pageable));
+    }
+
+    @GetMapping("/payouts/{payoutId}")
+    public ResponseEntity<PayoutResponseDto> getPayoutById(@PathVariable Long payoutId) {
+        return ResponseEntity.ok(adminService.getPayoutById(payoutId));
+    }
+
+    @PostMapping("/payouts/{payoutId}/approve")
+    public ResponseEntity<PayoutResponseDto> approvePayout(
+            @PathVariable Long payoutId,
+            @AuthenticationPrincipal User admin) {
+        return ResponseEntity.ok(adminService.approvePayout(payoutId, admin));
+    }
+
+    @PostMapping("/payouts/{payoutId}/paid")
+    public ResponseEntity<PayoutResponseDto> markPayoutAsPaid(
+            @PathVariable Long payoutId,
+            @Valid @RequestBody MarkAsPaidDto dto,
+            @AuthenticationPrincipal User admin) {
+        return ResponseEntity.ok(adminService.markPayoutAsPaid(payoutId, dto, admin));
+    }
+
+    @PostMapping("/payouts/{payoutId}/cancel")
+    public ResponseEntity<PayoutResponseDto> cancelPayout(@PathVariable Long payoutId) {
+        return ResponseEntity.ok(adminService.cancelPayout(payoutId));
+    }
+
+    // ===== Reconciliation =====
+
+    @GetMapping("/reconciliation")
+    public ResponseEntity<List<ReconciliationService.DriftReport>> checkReconciliation() {
+        return ResponseEntity.ok(adminService.checkReconciliation());
+    }
+
+    @GetMapping("/reconciliation/{brandId}")
+    public ResponseEntity<ReconciliationService.DriftReport> checkBrandReconciliation(@PathVariable Long brandId) {
+        return ResponseEntity.ok(adminService.checkBrandReconciliation(brandId));
+    }
+
+    @PostMapping("/reconciliation/{brandId}/rebuild")
+    public ResponseEntity<ReconciliationService.DriftReport> rebuildBrandEconomics(@PathVariable Long brandId) {
+        return ResponseEntity.ok(adminService.rebuildBrandEconomics(brandId));
     }
 
     // ===== Product moderation =====

@@ -5,8 +5,16 @@ import com.enunas.backend.admin.dto.RejectionDto;
 import com.enunas.backend.brandpartner.BrandPartner;
 import com.enunas.backend.brandpartner.BrandPartnerRepository;
 import com.enunas.backend.brandpartner.BrandStatus;
-import com.enunas.backend.brandpartner.brandeconomics.BrandEconomics;
-import com.enunas.backend.brandpartner.brandeconomics.BrandEconomicsRepository;
+import com.enunas.backend.brandpartner.brandpayoutprofile.BrandPayoutProfile;
+import com.enunas.backend.brandpartner.brandpayoutprofile.BrandPayoutProfileRepository;
+import com.enunas.backend.ledger.ReconciliationService;
+import com.enunas.backend.payout.PayoutService;
+import com.enunas.backend.payout.PayoutStatus;
+import com.enunas.backend.payout.dto.MarkAsPaidDto;
+import com.enunas.backend.payout.dto.PayoutDashboardDto;
+import com.enunas.backend.payout.dto.PayoutResponseDto;
+
+import java.util.List;
 import com.enunas.backend.brandpartner.dto.BrandPartnerResponseDto;
 import com.enunas.backend.exception.BrandNotFoundException;
 import com.enunas.backend.exception.ProductNotFoundException;
@@ -40,7 +48,9 @@ import java.time.LocalDateTime;
 public class AdminService {
 
     private final BrandPartnerRepository brandPartnerRepository;
-    private final BrandEconomicsRepository brandEconomicsRepository;
+    private final BrandPayoutProfileRepository brandPayoutProfileRepository;
+    private final ReconciliationService reconciliationService;
+    private final PayoutService payoutService;
     private final ProductRepository productRepository;
     private final UserRepository userRepository;
     private final EmailService emailService;
@@ -172,17 +182,74 @@ public class AdminService {
         return AdminProductResponseDto.from(productRepository.save(product));
     }
 
-    // ===== Mollie Connect =====
+    // ===== Payout Profile =====
 
     @Transactional
-    public BrandPartnerResponseDto connectBrandToMollie(Long brandId, String mollieOrganizationId) {
+    public BrandPartnerResponseDto setBrandPayoutProfile(Long brandId, String iban, String bankAccountHolder) {
         BrandPartner brand = findBrand(brandId);
-        BrandEconomics eco = brandEconomicsRepository.findByBrandPartnerId(brandId)
-                .orElseGet(() -> BrandEconomics.builder().brandPartner(brand).build());
-        eco.setMollieOrganizationId(mollieOrganizationId);
-        brandEconomicsRepository.save(eco);
-        log.info("Admin linked brand {} to Mollie org {}", brand.getBrandName(), mollieOrganizationId);
+        brandPayoutProfileRepository.findByBrandPartner_Id(brandId).ifPresentOrElse(
+                profile -> {
+                    profile.setIban(iban);
+                    profile.setBankAccountHolder(bankAccountHolder);
+                    brandPayoutProfileRepository.save(profile);
+                },
+                () -> brandPayoutProfileRepository.save(
+                        BrandPayoutProfile.builder()
+                                .brandPartner(brand)
+                                .iban(iban)
+                                .bankAccountHolder(bankAccountHolder)
+                                .build())
+        );
+        log.info("Admin set payout profile for brand {}: iban={}", brand.getBrandName(), iban);
         return BrandPartnerResponseDto.from(brand);
+    }
+
+    // ===== Payouts =====
+
+    public List<PayoutResponseDto> generatePayouts() {
+        return payoutService.generatePayouts();
+    }
+
+    public org.springframework.data.domain.Page<PayoutResponseDto> listPayouts(
+            PayoutStatus status, org.springframework.data.domain.Pageable pageable) {
+        return status != null
+                ? payoutService.listPayoutsByStatus(status, pageable)
+                : payoutService.listPayouts(pageable);
+    }
+
+    public PayoutResponseDto getPayoutById(Long payoutId) {
+        return payoutService.getById(payoutId);
+    }
+
+    public PayoutResponseDto approvePayout(Long payoutId, User admin) {
+        return payoutService.approvePayout(payoutId, admin.getEmail());
+    }
+
+    public PayoutResponseDto markPayoutAsPaid(Long payoutId, MarkAsPaidDto dto, User admin) {
+        return payoutService.markAsPaid(payoutId, dto, admin.getEmail());
+    }
+
+    public PayoutResponseDto cancelPayout(Long payoutId) {
+        return payoutService.cancelPayout(payoutId);
+    }
+
+    public PayoutDashboardDto getPayoutDashboard() {
+        return payoutService.getDashboard();
+    }
+
+    // ===== Reconciliation =====
+
+    public List<ReconciliationService.DriftReport> checkReconciliation() {
+        return reconciliationService.checkAllBrands();
+    }
+
+    public ReconciliationService.DriftReport checkBrandReconciliation(Long brandId) {
+        return reconciliationService.checkBrand(brandId);
+    }
+
+    public ReconciliationService.DriftReport rebuildBrandEconomics(Long brandId) {
+        log.warn("Admin triggered ledger rebuild for brand={}", brandId);
+        return reconciliationService.rebuildFromLedger(brandId);
     }
 
     // ===== Internal helpers =====

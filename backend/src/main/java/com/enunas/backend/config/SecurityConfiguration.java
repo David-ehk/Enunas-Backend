@@ -41,8 +41,9 @@ public class SecurityConfiguration {
 
                         // Public — no token required
                         .requestMatchers("/auth/**", "/public/**", "/error").permitAll()
-                        // Mollie payment webhook (called server-to-server with no JWT)
+                        // Payment webhooks — called server-to-server with no JWT
                         .requestMatchers(HttpMethod.POST, "/webhooks/mollie").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/webhooks/mock/payment", "/webhooks/mock/refund").permitAll()
                         // Public brand-partner application + email verification
                         .requestMatchers(HttpMethod.POST,
                                 "/brandpartner/apply",

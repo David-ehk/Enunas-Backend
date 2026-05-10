@@ -14,10 +14,13 @@ import com.enunas.backend.order.dto.ReturnRequestDto;
 import com.enunas.backend.order.dto.ShipmentConfirmationDto;
 import com.enunas.backend.order.dto.ShippingProblemDto;
 import com.enunas.backend.exception.PaymentException;
-import com.enunas.backend.payment.MolliePaymentService;
+import com.enunas.backend.payment.CreatePaymentCommand;
 import com.enunas.backend.payment.Payment;
+import com.enunas.backend.payment.PaymentProvider;
 import com.enunas.backend.payment.PaymentRepository;
+import com.enunas.backend.payment.PaymentResult;
 import com.enunas.backend.payment.PaymentStatus;
+import com.enunas.backend.payment.RefundCommand;
 import com.enunas.backend.product.productlisting.ProductListing;
 import com.enunas.backend.product.productlisting.ProductListingRepository;
 import com.enunas.backend.product.productvariant.ProductVariant;
@@ -62,8 +65,9 @@ public class OrderService {
     private final BrandEconomicsRepository brandEconomicsRepository;
     private final ReturnOrderRepository returnOrderRepository;
     private final EmailService emailService;
-    private final MolliePaymentService molliePaymentService;
+    private final PaymentProvider paymentProvider;
     private final LedgerService ledgerService;
+    private final RefundPersistenceHelper refundPersistenceHelper;
 
     @Value("${app.frontend.base-url}")
     private String frontendBaseUrl;
@@ -164,50 +168,34 @@ public class OrderService {
         orderItems.forEach(saved::addItem);
         orderItemRepository.saveAll(orderItems);
 
-        // 6. Build per-brand Mollie routing (85% of product subtotal to connected brands).
-        List<MolliePaymentService.BrandRouting> routings = new ArrayList<>();
-        for (Map.Entry<Long, BigDecimal> entry : brandSubtotals.entrySet()) {
-            BigDecimal rate = getBrandCommissionRate(entry.getKey());
-            BigDecimal brandShare = entry.getValue()
-                    .multiply(BigDecimal.ONE.subtract(rate))
-                    .setScale(2, RoundingMode.HALF_UP);
-            brandEconomicsRepository.findByBrandPartnerId(entry.getKey()).ifPresent(eco -> {
-                if (eco.getMollieOrganizationId() != null) {
-                    routings.add(new MolliePaymentService.BrandRouting(
-                            eco.getMollieOrganizationId(), brandShare));
-                }
-            });
-        }
-
         String redirectUrl = frontendBaseUrl + "/orders/" + saved.getOrderNumber() + "/confirmation";
-        MolliePaymentService.MolliePaymentResult mollieResult;
+        PaymentResult paymentResult;
         try {
-            mollieResult = molliePaymentService.createPayment(
+            paymentResult = paymentProvider.createPayment(new CreatePaymentCommand(
                     saved.getTotal(),
                     saved.getCurrency(),
                     "Enunas order " + saved.getOrderNumber(),
-                    redirectUrl,
-                    routings);
+                    redirectUrl));
         } catch (Exception e) {
-            log.error("Mollie payment creation failed for order {}: {}", saved.getOrderNumber(), e.getMessage());
-            throw new PaymentException("Could not initiate payment. Please try again.");
+            log.error("Payment creation failed for order {}: {}", saved.getOrderNumber(), e.getMessage());
+            throw new PaymentException("Could not initiate payment. Please try again.", e);
         }
 
-        // IMPORTANT: Mollie payment already created above. If this save fails and the
-        // transaction rolls back, the Mollie payment is orphaned. Manual reconciliation
-        // via Mollie dashboard is required using molliePaymentId logged below.
-        log.info("Mollie payment created: molliePaymentId={} for order={}",
-                mollieResult.molliePaymentId(), saved.getOrderNumber());
+        // IMPORTANT: payment already created above. If this DB save fails and the
+        // transaction rolls back, the provider-side payment is orphaned. Manual reconciliation
+        // is required using the paymentId logged below.
+        log.info("Payment created: paymentId={} for order={}",
+                paymentResult.paymentId(), saved.getOrderNumber());
         paymentRepository.save(Payment.builder()
                 .order(saved)
                 .amount(saved.getTotal())
                 .currency(saved.getCurrency())
-                .transactionId(mollieResult.molliePaymentId())
+                .transactionId(paymentResult.paymentId())
                 .build());
 
         log.info("Order created: {} for buyer: {} (brands: {})",
                 saved.getOrderNumber(), buyer.getEmail(), distinctBrandIds.size());
-        return OrderResponseDto.from(saved, mollieResult.checkoutUrl());
+        return OrderResponseDto.from(saved, paymentResult.checkoutUrl());
     }
 
     @Transactional(readOnly = true)
@@ -467,7 +455,7 @@ public class OrderService {
 
         // Reverse brand ledger entries when a post-payment order is cancelled.
         if (postPaymentCancel) {
-            ledgerService.recordRefund(saved, saved.getTotal());
+            ledgerService.recordRefund(saved, saved.getTotal(), "ADMIN_CANCEL_" + saved.getId());
         }
 
         return OrderResponseDto.from(saved);
@@ -554,15 +542,13 @@ public class OrderService {
     }
 
     @PreAuthorize("hasRole('ADMIN')")
-    @Transactional
     public OrderResponseDto processRefund(Long orderId, BigDecimal refundAmount) {
+        // Validate state before touching Mollie or the DB.
         Order order = findById(orderId);
-
         if (order.getStatus() != OrderStatus.RETURN_RECEIVED) {
             throw new IllegalStateException(
                     "Can only process refund after return is received. Current: " + order.getStatus());
         }
-
         if (refundAmount == null || refundAmount.compareTo(BigDecimal.ZERO) <= 0) {
             throw new IllegalArgumentException("Refund amount must be positive");
         }
@@ -571,37 +557,30 @@ public class OrderService {
                     "Refund amount " + refundAmount + " exceeds order total " + order.getTotal());
         }
 
-        // 1. Execute Mollie refund first — if this fails, nothing in the DB changes.
         Payment payment = paymentRepository.findByOrderId(orderId)
                 .orElseThrow(() -> new IllegalStateException("No payment record for order " + orderId));
+
+        // Guard: ensure ReturnOrder exists before touching Mollie — an orphaned Mollie
+        // refund cannot be rolled back, so we fail fast here instead of inside persist().
+        returnOrderRepository.findByOrder_Id(orderId)
+                .orElseThrow(() -> new IllegalStateException("No return found for order: " + order.getOrderNumber()));
+
+        // 1. Call the payment provider OUTSIDE any transaction — avoids holding a DB connection
+        //    during an HTTP call and separates the external side-effect from the atomic DB commit.
+        String refundId;
         try {
-            molliePaymentService.refundPayment(
+            refundId = paymentProvider.refundPayment(new RefundCommand(
                     payment.getTransactionId(),
                     refundAmount,
-                    "Refund for order " + order.getOrderNumber());
+                    "Refund for order " + order.getOrderNumber())).refundId();
         } catch (Exception e) {
-            log.error("Mollie refund failed for order {}: {}", order.getOrderNumber(), e.getMessage());
-            throw new PaymentException("Could not process Mollie refund: " + e.getMessage(), e);
+            log.error("Refund failed for order {}: {}", order.getOrderNumber(), e.getMessage());
+            throw new PaymentException("Could not process refund: " + e.getMessage(), e);
         }
 
-        // 2. Mark payment record as refunded.
-        payment.setStatus(PaymentStatus.REFUNDED);
-        paymentRepository.save(payment);
-
-        // 3. Update return order.
-        ReturnOrder returnOrder = findReturnOrder(order);
-        returnOrder.setStatus(ReturnStatus.REFUNDED);
-        returnOrder.setRefundedAt(LocalDateTime.now());
-        returnOrder.setRefundAmount(refundAmount);
-        returnOrderRepository.save(returnOrder);
-
-        // 4. Reverse brand ledger entries and adjust balances.
-        ledgerService.recordRefund(order, refundAmount);
-
-        // 5. Update order status.
-        order.setStatus(OrderStatus.REFUNDED);
-        log.info("Refund of {} processed for order {}", refundAmount, order.getOrderNumber());
-        return OrderResponseDto.from(orderRepository.save(order));
+        // 2. Persist all DB changes atomically in a single @Transactional block.
+        //    The refund ID is the idempotency key — duplicate calls are safe.
+        return refundPersistenceHelper.persist(orderId, refundAmount, refundId);
     }
 
     // ===== Private helpers =====
@@ -647,7 +626,7 @@ public class OrderService {
     }
 
     private BigDecimal getBrandCommissionRate(Long brandId) {
-        return brandEconomicsRepository.findByBrandPartnerId(brandId)
+        return brandEconomicsRepository.findByBrandPartner_Id(brandId)
                 .map(BrandEconomics::getDefaultCommissionRate)
                 .filter(r -> r != null && r.compareTo(BigDecimal.ZERO) > 0)
                 .orElse(globalCommissionRate);
