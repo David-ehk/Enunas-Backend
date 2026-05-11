@@ -29,6 +29,7 @@ public class ProductImage {
     private String altText;
 
     @Builder.Default
+    @Column(name = "is_primary")
     private boolean primary = false;
 
     @Builder.Default
