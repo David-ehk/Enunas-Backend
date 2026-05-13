@@ -39,6 +39,7 @@ security:
 
 admin:
   email: ${ADMIN_EMAIL:admin@enunas.com}
+  password: ${ADMIN_PASSWORD}
 
 enunas:
   platform:
