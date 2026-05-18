@@ -44,7 +44,7 @@ public class BrandPartnerController {
 
     /** Get own brand profile. */
     @GetMapping("/me")
-    @PreAuthorize("hasRole('Brand_Partner')")
+    @PreAuthorize("hasRole('BRAND_PARTNER')")
     public ResponseEntity<BrandPartnerResponseDto> getMyProfile(
             @AuthenticationPrincipal User user) {
         return ResponseEntity.ok(brandPartnerService.getMyProfile(user));
@@ -52,7 +52,7 @@ public class BrandPartnerController {
 
     /** Update own brand profile fields (description, logo, website, instagram). */
     @PatchMapping("/me")
-    @PreAuthorize("hasRole('Brand_Partner')")
+    @PreAuthorize("hasRole('BRAND_PARTNER')")
     public ResponseEntity<BrandPartnerResponseDto> updateMyProfile(
             @RequestBody @Valid UpdateBrandPartnerDto dto,
             @AuthenticationPrincipal User user) {
