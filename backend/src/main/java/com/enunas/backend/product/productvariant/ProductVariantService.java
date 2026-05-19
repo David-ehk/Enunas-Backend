@@ -22,15 +22,22 @@ public class ProductVariantService {
     private static final SecureRandom RANDOM = new SecureRandom();
 
     private final ProductVariantRepository variantRepository;
+    private final ProductColorRepository productColorRepository;
     private final ProductRepository productRepository;
 
     @Transactional
     public ProductVariantResponseDto addVariant(Long productId, ProductVariantDto dto, User creator) {
         Product product = findProductAndVerifyOwnership(productId, creator);
 
+        ProductColor productColor = findOrCreateColor(product, dto.getColor());
+
+        if (variantRepository.existsByProductColorIdAndSize(productColor.getId(), dto.getSize())) {
+            throw new IllegalArgumentException(
+                "Variant already exists for color '" + dto.getColor() + "' and size '" + dto.getSize() + "'");
+        }
+
         ProductVariant variant = ProductVariant.builder()
-                .sku(generateUniqueSku())
-                .color(dto.getColor())
+                .productColor(productColor)
                 .size(dto.getSize())
                 .stockQuantity(dto.getStockQuantity())
                 .weightGrams(dto.getWeightGrams())
@@ -49,13 +56,32 @@ public class ProductVariantService {
 
     @Transactional
     public ProductVariantResponseDto updateVariant(Long productId, Long variantId, UpdateProductVariantDto dto, User creator) {
-        findProductAndVerifyOwnership(productId, creator);
+        Product product = findProductAndVerifyOwnership(productId, creator);
         ProductVariant variant = findVariant(variantId);
 
-        if (dto.getColor() != null) variant.setColor(dto.getColor());
-        if (dto.getSize() != null) variant.setSize(dto.getSize());
+        String targetColor = dto.getColor() != null ? dto.getColor() : variant.getColor();
+        String targetSize  = dto.getSize()  != null ? dto.getSize()  : variant.getSize();
+
+        boolean colorChanged = dto.getColor() != null && !dto.getColor().equals(variant.getColor());
+        boolean sizeChanged  = dto.getSize()  != null && !dto.getSize().equals(variant.getSize());
+
+        if (colorChanged || sizeChanged) {
+            ProductColor targetColor_ = colorChanged
+                    ? findOrCreateColor(product, dto.getColor())
+                    : variant.getProductColor();
+
+            if (variantRepository.existsByProductColorIdAndSizeExcluding(
+                    targetColor_.getId(), targetSize, variantId)) {
+                throw new IllegalArgumentException(
+                    "Variant already exists for color '" + targetColor + "' and size '" + targetSize + "'");
+            }
+
+            if (colorChanged) variant.setProductColor(targetColor_);
+        }
+
+        if (dto.getSize()          != null) variant.setSize(dto.getSize());
         if (dto.getStockQuantity() != null) variant.setStockQuantity(dto.getStockQuantity());
-        if (dto.getWeightGrams() != null) variant.setWeightGrams(dto.getWeightGrams());
+        if (dto.getWeightGrams()   != null) variant.setWeightGrams(dto.getWeightGrams());
 
         return ProductVariantResponseDto.from(variantRepository.save(variant));
     }
@@ -64,6 +90,19 @@ public class ProductVariantService {
     public void deleteVariant(Long productId, Long variantId, User creator) {
         findProductAndVerifyOwnership(productId, creator);
         variantRepository.delete(findVariant(variantId));
+    }
+
+    // ===== Internal =====
+
+    private ProductColor findOrCreateColor(Product product, String color) {
+        return productColorRepository
+                .findByProductIdAndColor(product.getId(), color)
+                .orElseGet(() -> productColorRepository.save(
+                    ProductColor.builder()
+                        .sku(generateUniqueSku())
+                        .color(color)
+                        .product(product)
+                        .build()));
     }
 
     private Product findProductAndVerifyOwnership(Long productId, User creator) {
@@ -84,7 +123,7 @@ public class ProductVariantService {
         String sku;
         do {
             sku = randomSku();
-        } while (variantRepository.existsBySku(sku));
+        } while (productColorRepository.existsBySku(sku));
         return sku;
     }
 

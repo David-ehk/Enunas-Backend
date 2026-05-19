@@ -22,7 +22,11 @@
       "Bash(Select-Object FullName)",
       "Bash(Format-List)",
       "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\david\\\\OneDrive\\\\Desktop\\\\EnunasBackend\" -Directory)",
-      "Bash(Select-Object -First 20)"
+      "Bash(Select-Object -First 20)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\david\\\\OneDrive\\\\Desktop\\\\EnunasBackend\" -Recurse -Force)",
+      "Bash(./mvnw.cmd clean *)",
+      "Bash(./mvnw.cmd compile *)",
+      "Bash(./mvnw.cmd test *)"
     ]
   }
 }

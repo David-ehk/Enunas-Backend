@@ -6,9 +6,11 @@ import com.enunas.backend.product.*;
 import lombok.Builder;
 import lombok.Getter;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.function.Function;
 
 @Getter
 @Builder
@@ -21,7 +23,9 @@ public class ProductResponseDto {
     private String description;
     private String inspirationStory;
     private ProductCategory category;
-    private ProductCatalogueCategory catalogueCategory;
+    private List<ProductCatalogueCategory> catalogueCategory;
+    private ProductType productType;
+    private OutfitSlot outfitSlot;
     private Gender gender;
     private String material;
     private String originCountry;
@@ -32,13 +36,25 @@ public class ProductResponseDto {
     private ProductStatus status;
     private Long creatorId;
     private String creatorEmail;
+    private Boolean completeTheLookEnabled;
+    private List<CompleteTheLookCardDto> completeTheLookProducts;
     private List<ProductVariantResponseDto> variants;
     private List<ProductImageResponseDto> images;
     private List<ProductVideoResponseDto> videos;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
+    /** Maps product to DTO without CTL prices (price = null). */
     public static ProductResponseDto from(Product product) {
+        return from(product, id -> null);
+    }
+
+    /**
+     * Maps product to DTO with CTL card prices supplied by {@code ctlPriceProvider}.
+     * The provider receives the related product's id and returns its lowest active price,
+     * or null when no active listing exists.
+     */
+    public static ProductResponseDto from(Product product, Function<Long, BigDecimal> ctlPriceProvider) {
         return ProductResponseDto.builder()
                 .id(product.getId())
                 .name(product.getName())
@@ -48,6 +64,8 @@ public class ProductResponseDto {
                 .inspirationStory(product.getInspirationStory())
                 .category(product.getCategory())
                 .catalogueCategory(product.getCatalogueCategory())
+                .productType(product.getProductType())
+                .outfitSlot(product.getOutfitSlot())
                 .gender(product.getGender())
                 .material(product.getMaterial())
                 .originCountry(product.getOriginCountry())
@@ -58,6 +76,10 @@ public class ProductResponseDto {
                 .status(product.getStatus())
                 .creatorId(product.getCreator().getId())
                 .creatorEmail(product.getCreator().getEmail())
+                .completeTheLookEnabled(product.getCompleteTheLookEnabled())
+                .completeTheLookProducts(product.getCompleteTheLookProducts().stream()
+                        .map(p -> CompleteTheLookCardDto.from(p, ctlPriceProvider.apply(p.getId())))
+                        .toList())
                 .variants(product.getVariants().stream()
                         .map(ProductVariantResponseDto::from)
                         .toList())

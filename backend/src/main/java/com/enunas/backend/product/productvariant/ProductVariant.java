@@ -1,12 +1,23 @@
 package com.enunas.backend.product.productvariant;
 
-
 import com.enunas.backend.product.Product;
-import jakarta.persistence.*;  // NUR JAKARTA (Spring Boot 3+)
+import jakarta.persistence.*;
 import lombok.*;
 
+/**
+ * A size-level variant of a product. SKU and color are owned by {@link ProductColor};
+ * this entity owns stock and weight for a specific size within that colorway.
+ *
+ * Unique per (product_color, size) — enforced by DB constraint and service-layer validation.
+ */
 @Entity
-@Table(name = "product_variants")
+@Table(
+    name = "product_variants",
+    uniqueConstraints = @UniqueConstraint(
+        name = "uq_product_variants_color_size",
+        columnNames = {"product_color_id", "size"}
+    )
+)
 @Getter
 @Setter
 @Builder
@@ -18,10 +29,10 @@ public class ProductVariant {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(unique = true, nullable = false)
-    private String sku;
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "product_color_id", nullable = false)
+    private ProductColor productColor;
 
-    private String color;
     private String size;
 
     @Column(nullable = false)
@@ -33,18 +44,25 @@ public class ProductVariant {
     @JoinColumn(name = "product_id", nullable = false)
     private Product product;
 
-    // Helper für Stock-Operationen
+    // ===== Convenience delegation — SKU and color live on ProductColor =====
+
+    public String getSku() {
+        return productColor != null ? productColor.getSku() : null;
+    }
+
+    public String getColor() {
+        return productColor != null ? productColor.getColor() : null;
+    }
+
+    // ===== Stock helpers =====
+
     public boolean hasStock(int requestedQuantity) {
         return stockQuantity >= requestedQuantity;
     }
 
     public void decrementStock(int quantity) {
-        if (quantity <= 0) {
-            throw new IllegalArgumentException("Quantity must be positive");
-        }
-        if (!hasStock(quantity)) {
-            throw new IllegalStateException("Insufficient stock for variant " + id);
-        }
+        if (quantity <= 0) throw new IllegalArgumentException("Quantity must be positive");
+        if (!hasStock(quantity)) throw new IllegalStateException("Insufficient stock for variant " + id);
         this.stockQuantity -= quantity;
     }
 

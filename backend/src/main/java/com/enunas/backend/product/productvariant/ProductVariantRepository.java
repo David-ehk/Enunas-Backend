@@ -16,29 +16,33 @@ public interface ProductVariantRepository extends JpaRepository<ProductVariant, 
 
     List<ProductVariant> findByProductId(Long productId);
 
-    Optional<ProductVariant> findBySku(String sku);
-
-    boolean existsBySku(String sku);
-
     void deleteByProductId(Long productId);
 
-    /** Atomic decrement — only succeeds if stockQuantity >= quantity. Returns 1 on success, 0 on insufficient stock. */
+    boolean existsByProductColorIdAndSize(Long productColorId, String size);
+
+    /** Prevents duplicate (color, size) when checking against a different variant (for updates). */
+    @Query("SELECT COUNT(v) > 0 FROM ProductVariant v " +
+           "WHERE v.productColor.id = :colorId AND v.size = :size AND v.id <> :excludeId")
+    boolean existsByProductColorIdAndSizeExcluding(
+            @Param("colorId") Long colorId,
+            @Param("size")    String size,
+            @Param("excludeId") Long excludeId);
+
+    /** Atomic decrement — only succeeds if stockQuantity >= quantity. Returns 1 on success, 0 on failure. */
     @Modifying
     @Query("UPDATE ProductVariant v SET v.stockQuantity = v.stockQuantity - :quantity " +
            "WHERE v.id = :id AND v.stockQuantity >= :quantity")
     int decrementStock(@Param("id") Long id, @Param("quantity") int quantity);
 
-    /** Atomic restore — used on order cancellation, return-received, and stock adjustments. */
+    /** Atomic restore — used on cancellation, return-received, and stock adjustments. */
     @Modifying
     @Query("UPDATE ProductVariant v SET v.stockQuantity = v.stockQuantity + :quantity WHERE v.id = :id")
     void restoreStock(@Param("id") Long id, @Param("quantity") int quantity);
 
-    //Test hinzugefügt
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT v FROM ProductVariant v WHERE v.id = :id")
     Optional<ProductVariant> findByIdWithLock(@Param("id") Long id);
 
-    // Für Stock-Validierung beim Kauf
     @Query("SELECT v.stockQuantity FROM ProductVariant v WHERE v.id = :id")
     Optional<Integer> findStockQuantityById(@Param("id") Long id);
 }

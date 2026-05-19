@@ -20,6 +20,7 @@ import com.enunas.backend.exception.BrandNotFoundException;
 import com.enunas.backend.exception.ProductNotFoundException;
 import com.enunas.backend.product.Product;
 import com.enunas.backend.product.ProductRepository;
+import com.enunas.backend.product.ProductService;
 import com.enunas.backend.product.ProductStatus;
 import com.enunas.backend.product.dto.UpdateProductDto;
 import com.enunas.backend.user.EmailService;
@@ -52,6 +53,7 @@ public class AdminService {
     private final ReconciliationService reconciliationService;
     private final PayoutService payoutService;
     private final ProductRepository productRepository;
+    private final ProductService productService;
     private final UserRepository userRepository;
     private final EmailService emailService;
 
@@ -119,20 +121,7 @@ public class AdminService {
     @Transactional
     public AdminProductResponseDto updateProduct(Long productId, UpdateProductDto dto) {
         Product product = findProduct(productId);
-
-        if (dto.getName() != null) product.setName(dto.getName());
-        if (dto.getDescription() != null) product.setDescription(dto.getDescription());
-        if (dto.getInspirationStory() != null) product.setInspirationStory(dto.getInspirationStory());
-        if (dto.getCategory() != null) product.setCategory(dto.getCategory());
-        if (dto.getCatalogueCategory() != null) product.setCatalogueCategory(dto.getCatalogueCategory());
-        if (dto.getGender() != null) product.setGender(dto.getGender());
-        if (dto.getMaterial() != null) product.setMaterial(dto.getMaterial());
-        if (dto.getOriginCountry() != null) product.setOriginCountry(dto.getOriginCountry());
-        if (dto.getCareInstructions() != null) product.setCareInstructions(dto.getCareInstructions());
-        if (dto.getCollectionName() != null) product.setCollectionName(dto.getCollectionName());
-        if (dto.getReleaseDate() != null) product.setReleaseDate(dto.getReleaseDate());
-        if (dto.getReturnPeriodDays() != null) product.setReturnPeriodDays(dto.getReturnPeriodDays());
-
+        productService.applyProductUpdates(product, dto);
         return AdminProductResponseDto.from(productRepository.save(product));
     }
 

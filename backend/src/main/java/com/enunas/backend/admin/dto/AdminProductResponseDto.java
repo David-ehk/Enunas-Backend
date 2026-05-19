@@ -2,11 +2,8 @@ package com.enunas.backend.admin.dto;
 
 import com.enunas.backend.media.dto.ProductImageResponseDto;
 import com.enunas.backend.media.dto.ProductVideoResponseDto;
-import com.enunas.backend.product.Gender;
-import com.enunas.backend.product.Product;
-import com.enunas.backend.product.ProductCatalogueCategory;
-import com.enunas.backend.product.ProductCategory;
-import com.enunas.backend.product.ProductStatus;
+import com.enunas.backend.product.*;
+import com.enunas.backend.product.dto.CompleteTheLookCardDto;
 import com.enunas.backend.product.dto.ProductVariantResponseDto;
 import com.enunas.backend.user.User;
 import lombok.Builder;
@@ -31,7 +28,9 @@ public class AdminProductResponseDto {
     private String description;
     private String inspirationStory;
     private ProductCategory category;
-    private ProductCatalogueCategory catalogueCategory;
+    private List<ProductCatalogueCategory> catalogueCategory;
+    private ProductType productType;
+    private OutfitSlot outfitSlot;
     private Gender gender;
     private String material;
     private String originCountry;
@@ -42,6 +41,8 @@ public class AdminProductResponseDto {
     private ProductStatus status;
     private Long creatorId;
     private String creatorEmail;
+    private Boolean completeTheLookEnabled;
+    private List<CompleteTheLookCardDto> completeTheLookProducts;
     private List<ProductVariantResponseDto> variants;
     private List<ProductImageResponseDto> images;
     private List<ProductVideoResponseDto> videos;
@@ -65,6 +66,8 @@ public class AdminProductResponseDto {
                 .inspirationStory(product.getInspirationStory())
                 .category(product.getCategory())
                 .catalogueCategory(product.getCatalogueCategory())
+                .productType(product.getProductType())
+                .outfitSlot(product.getOutfitSlot())
                 .gender(product.getGender())
                 .material(product.getMaterial())
                 .originCountry(product.getOriginCountry())
@@ -75,6 +78,10 @@ public class AdminProductResponseDto {
                 .status(product.getStatus())
                 .creatorId(product.getCreator().getId())
                 .creatorEmail(product.getCreator().getEmail())
+                .completeTheLookEnabled(product.getCompleteTheLookEnabled())
+                .completeTheLookProducts(product.getCompleteTheLookProducts().stream()
+                        .map(CompleteTheLookCardDto::from)
+                        .toList())
                 .variants(product.getVariants().stream()
                         .map(ProductVariantResponseDto::from)
                         .toList())

@@ -27,6 +27,14 @@ public interface ProductListingRepository extends JpaRepository<ProductListing, 
     @Query("SELECT l FROM ProductListing l WHERE l.variant.id = :variantId AND l.active = true AND l.availableFrom <= CURRENT_TIMESTAMP AND (l.availableUntil IS NULL OR l.availableUntil >= CURRENT_TIMESTAMP)")
     Optional<ProductListing> findCurrentlyActiveByVariantId(@Param("variantId") Long variantId);
 
+    /** Lowest effective price across all currently active listings for a product. */
+    @Query("SELECT MIN(CASE WHEN l.discountPrice IS NOT NULL THEN l.discountPrice ELSE l.price END) " +
+           "FROM ProductListing l " +
+           "WHERE l.product.id = :productId AND l.active = true " +
+           "AND (l.availableFrom IS NULL OR l.availableFrom <= CURRENT_TIMESTAMP) " +
+           "AND (l.availableUntil IS NULL OR l.availableUntil >= CURRENT_TIMESTAMP)")
+    Optional<java.math.BigDecimal> findLowestActivePriceByProductId(@Param("productId") Long productId);
+
     // Für regionale Listings (wenn region null = alle Regionen)
     @Query("SELECT l FROM ProductListing l WHERE l.variant.id = :variantId AND l.active = true AND (l.region IS NULL OR l.region = :region) AND l.availableFrom <= CURRENT_TIMESTAMP AND (l.availableUntil IS NULL OR l.availableUntil >= CURRENT_TIMESTAMP)")
     Optional<ProductListing> findCurrentlyActiveByVariantIdAndRegion(@Param("variantId") Long variantId, @Param("region") String region);

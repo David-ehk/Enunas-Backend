@@ -12,9 +12,7 @@ import lombok.*;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
+import java.util.*;
 
 @Entity
 @Table(name = "products")
@@ -47,13 +45,27 @@ public class Product {
     @Builder.Default
     private ProductCategory category = ProductCategory.CLOTHING;
 
+    @ElementCollection
+    @CollectionTable(name = "product_catalogue_categories", joinColumns = @JoinColumn(name = "product_id"))
+    @Column(name = "category")
     @Enumerated(EnumType.STRING)
-    private ProductCatalogueCategory catalogueCategory;
+    @Builder.Default
+    private List<ProductCatalogueCategory> catalogueCategory = new ArrayList<>();
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     @Builder.Default
     private Gender gender = Gender.UNISEX;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "product_type", nullable = false)
+    @Builder.Default
+    private ProductType productType = ProductType.T_SHIRT;
+
+    /** Derived from productType — always recomputed on persist/update. Never set manually. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "outfit_slot", nullable = false)
+    private OutfitSlot outfitSlot;
 
     private String material;
 
@@ -62,7 +74,6 @@ public class Product {
     @Column(columnDefinition = "TEXT")
     private String careInstructions;
 
-    // Not unique — multiple products can share a collection name; use CollectionEntity later
     private String collectionName;
 
     private LocalDate releaseDate;
@@ -103,9 +114,21 @@ public class Product {
     @Setter(AccessLevel.NONE)
     private List<ProductVideo> videos = new ArrayList<>();
 
-    // ===== Moderation metadata (set by AdminService on approve/reject) =====
+    @ManyToMany
+    @JoinTable(
+        name = "product_complete_the_look",
+        joinColumns = @JoinColumn(name = "product_id"),
+        inverseJoinColumns = @JoinColumn(name = "related_product_id")
+    )
+    @Builder.Default
+    private Set<Product> completeTheLookProducts = new HashSet<>();
 
-    /** Admin User who last moderated this product. Real FK for audit + referential integrity. */
+    @Column(nullable = false)
+    @Builder.Default
+    private Boolean completeTheLookEnabled = false;
+
+    // ===== Moderation metadata =====
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "moderated_by")
     private User moderatedBy;
@@ -124,11 +147,24 @@ public class Product {
     protected void onCreate() {
         createdAt = LocalDateTime.now();
         updatedAt = LocalDateTime.now();
+        outfitSlot = computeOutfitSlot();
     }
 
     @PreUpdate
     protected void onUpdate() {
         updatedAt = LocalDateTime.now();
+        outfitSlot = computeOutfitSlot();
+    }
+
+    private OutfitSlot computeOutfitSlot() {
+        if (productType == null) return OutfitSlot.TOP;
+        return switch (productType) {
+            case T_SHIRT, LONGSLEEVE, HOODIE, ZIP_HOODIE, SWEATER -> OutfitSlot.TOP;
+            case JEANS, CARGO_PANTS, JOGGER, SHORTS, PANTS       -> OutfitSlot.BOTTOM;
+            case JACKET                                            -> OutfitSlot.OUTERWEAR;
+            case SNEAKERS, BOOTS                                   -> OutfitSlot.FOOTWEAR;
+            case CAP, BEANIE, BAG, BELT, JEWELRY                  -> OutfitSlot.ACCESSORY;
+        };
     }
 
     // ===== Collection access =====
@@ -162,8 +198,6 @@ public class Product {
         videos.add(video);
         video.setProduct(this);
     }
-
-    // ===== equals / hashCode =====
 
     @Override
     public boolean equals(Object o) {
