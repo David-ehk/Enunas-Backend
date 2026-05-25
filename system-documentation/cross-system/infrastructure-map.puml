@@ -1,0 +1,144 @@
+@startuml infrastructure-map
+!theme plain
+skinparam backgroundColor #FAFAFA
+title Enunas — Infrastructure Map
+
+' ─── DNS + CDN Layer ─────────────────────────────────────────────
+node "DNS / Domain Layer" as DNS #FFF3E0 {
+  component "enunas.com\n(Frontend Domain)" as FrontendDomain
+  component "api.enunas.com\n(Backend Domain)" as BackendDomain
+}
+
+' ─── Vercel (Frontend) ───────────────────────────────────────────
+cloud "Vercel\n(Frontend PaaS)" as VercelCloud #E8F5E9 {
+  component "Edge Network\n(Global CDN)" as VercelCDN
+  component "Next.js Runtime\n(Serverless Functions)" as VercelRuntime
+  component "Static Assets\n(CSS, JS, Images)" as VercelStatic
+
+  note as VercelConfig
+    Deployment: Git push → auto-build
+    Build command: npm run build
+    Output: .next/
+    Env vars: NEXT_PUBLIC_API_URL
+    Regions: Global Edge
+  end note
+}
+
+' ─── AWS (Backend + DB) ──────────────────────────────────────────
+cloud "AWS\n(Backend Infrastructure)" as AWSCloud #E8D5FF {
+
+  node "EC2 / ECS Instance\n(Application Server)" as AppServer {
+    node "Docker Container" as DockerContainer {
+      component "Spring Boot 4\n:8080\n(JRE 21 Alpine)" as SpringBoot
+      note as SpringConfig
+        Image: eclipse-temurin:21-jre-alpine
+        Build: maven:3-eclipse-temurin-21-alpine
+        User: appuser (non-root)
+        Port: 8080 (EXPOSE in Dockerfile)
+        Profile: default (production)
+                 mock-payments (dev)
+      end note
+    }
+  }
+
+  node "Database Layer" as DBLayer {
+    database "PostgreSQL\n(RDS or EC2)" as RDSPostgres {
+      note as DBConfig
+        Port: 5432
+        Schema: Enunas
+        Pool: HikariCP
+        Migrations: Flyway (startup)
+        DDL: Hibernate ddl-auto=update
+        User: postgres (or app-specific user)
+      end note
+    }
+  }
+
+  node "Storage Layer" as StorageLayer {
+    storage "AWS S3\nObject Storage" as S3Storage {
+      folder "product-images/" as S3Images
+      folder "product-videos/" as S3Videos
+      folder "brand-assets/" as S3BrandAssets
+      note as S3Config
+        Access: Backend uploads directly
+        URLs stored in DB (image_url, video_url)
+        CDN: Optional CloudFront in front of S3
+      end note
+    }
+  }
+
+  node "Network Layer" as NetworkLayer {
+    component "Load Balancer / Reverse Proxy\n(nginx or ALB)" as LB
+    component "SSL Termination\n(HTTPS → HTTP)" as SSL
+    note as NetworkConfig
+      HTTPS enforced at LB level
+      Backend listens on HTTP:8080 internally
+      LB forwards to Docker container
+      CORS configured in Spring Security
+    end note
+  }
+}
+
+' ─── External SaaS ───────────────────────────────────────────────
+cloud "External SaaS Providers" as ExternalCloud #FFE0E0 {
+
+  component "Mollie\nPayment Provider\napi.mollie.com" as MollieInfra {
+    note as MollieConfig
+      API: https://api.mollie.com/v2
+      Auth: Bearer MOLLIE_API_KEY
+      Modes: test_xxx / live_xxx
+      Webhook: POST MOLLIE_WEBHOOK_URL
+      PCI: Mollie handles card data
+    end note
+  }
+
+  component "Google / Custom\nSMTP Provider\nsmtp.gmail.com:587" as SMTPInfra {
+    note as SMTPConfig
+      Host: smtp.gmail.com (default)
+      Port: 587 (STARTTLS)
+      Auth: MAIL_USERNAME + MAIL_PASSWORD
+      Sender: MAIL_USERNAME
+    end note
+  }
+}
+
+' ─── Environment Variables Summary ───────────────────────────────
+note as EnvVars
+  Required Production Environment Variables:
+  ─────────────────────────────────────────────────────────────
+  DB_PASSWORD          PostgreSQL password
+  JWT_SECRET           HMAC-SHA256 key (≥32 bytes Base64)
+  MAIL_USERNAME        SMTP sender address
+  MAIL_PASSWORD        SMTP app password
+  MOLLIE_API_KEY       live_xxx (production)
+  MOLLIE_WEBHOOK_URL   https://api.enunas.com/webhooks/mollie
+  ADMIN_PASSWORD       Admin account seed password
+  FRONTEND_BASE_URL    https://enunas.com (redirect after payment)
+  ─────────────────────────────────────────────────────────────
+  Optional (have defaults):
+  DB_URL               jdbc:postgresql://localhost:5432/Enunas
+  DB_USERNAME          postgres
+  JWT_EXPIRATION       86400000 (24h in ms)
+  PLATFORM_COMMISSION  0.18 (18%)
+  PAYOUT_HOLD_DAYS     7
+  ADMIN_EMAIL          admin@enunas.com
+end note
+
+' ─── Connections ─────────────────────────────────────────────────
+FrontendDomain --> VercelCDN : DNS A record
+BackendDomain --> LB : DNS A record
+
+VercelCDN --> VercelRuntime : Route API routes
+VercelRuntime --> SpringBoot : HTTPS REST\n(Cross-Origin, JWT header)
+
+LB --> SSL : HTTPS:443
+SSL --> SpringBoot : HTTP:8080 (internal)
+
+SpringBoot --> RDSPostgres : JDBC:5432 (VPC internal)
+SpringBoot --> S3Storage : HTTPS (asset upload)
+SpringBoot --> MollieInfra : HTTPS (payment ops)
+SpringBoot --> SMTPInfra : SMTP/TLS:587
+
+MollieInfra --> LB : POST /webhooks/mollie\n(HTTPS — public URL required)
+
+@enduml

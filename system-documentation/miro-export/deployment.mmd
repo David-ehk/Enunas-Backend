@@ -1,0 +1,115 @@
+---
+title: Enunas — Platform Deployment Architecture
+---
+flowchart TD
+    subgraph DNS_LAYER["DNS / Domain Layer"]
+        direction LR
+        FRONTEND_DOMAIN["enunas.com\n(Frontend Domain)"]
+        BACKEND_DOMAIN["api.enunas.com\n(Backend Domain)"]
+    end
+
+    subgraph VERCEL["Vercel — Frontend PaaS"]
+        direction TB
+        EDGE["Edge Network\n(Global CDN)"]
+        RUNTIME["Next.js Runtime\n(Serverless Functions)"]
+        STATIC["Static Assets\n(CSS, JS, Images)"]
+
+        VERCEL_NOTES["Build: npm run build\nOutput: .next/\nEnv: NEXT_PUBLIC_API_URL\nDeploy: git push → auto-build\nRegions: Global Edge"]
+
+        EDGE --> RUNTIME
+        RUNTIME --> STATIC
+    end
+
+    subgraph AWS["AWS — Backend Infrastructure"]
+        direction TB
+
+        subgraph NETWORK["Network Layer"]
+            LB["Load Balancer\n(nginx or ALB)\nHTTPS:443"]
+            SSL["SSL Termination\nHTTPS → HTTP:8080"]
+            LB --> SSL
+        end
+
+        subgraph APP_SERVER["EC2 / ECS Instance"]
+            subgraph DOCKER["Docker Container"]
+                SPRING["Spring Boot 4.0.5\nPort: 8080\nJRE: eclipse-temurin:21-jre-alpine\nUser: appuser (non-root)\nProfile: default (prod)\n         mock-payments (dev)"]
+            end
+        end
+
+        subgraph DB_LAYER["Database Layer"]
+            PG["PostgreSQL\n(RDS or EC2)\nPort: 5432\nSchema: Enunas\nPool: HikariCP\nMigrations: Flyway\nDDL: hibernate ddl-auto=update"]
+        end
+
+        subgraph STORAGE["Storage Layer"]
+            S3["AWS S3\nObject Storage"]
+            S3_IMG["product-images/"]
+            S3_VID["product-videos/"]
+            S3_BRAND["brand-assets/"]
+            S3 --> S3_IMG
+            S3 --> S3_VID
+            S3 --> S3_BRAND
+        end
+
+        SSL --> SPRING
+        SPRING -->|"JDBC:5432\n(VPC internal)"| PG
+        SPRING -->|"HTTPS\nasset upload"| S3
+    end
+
+    subgraph EXTERNAL["External SaaS Providers"]
+        direction TB
+
+        subgraph MOLLIE_BLOCK["Mollie — Payment Provider"]
+            MOLLIE["api.mollie.com/v2\nAuth: Bearer MOLLIE_API_KEY\nModes: test_xxx / live_xxx\nPCI: Mollie handles card data"]
+        end
+
+        subgraph SMTP_BLOCK["Email — SMTP Provider"]
+            SMTP["smtp.gmail.com:587\nSTARTTLS\nAuth: MAIL_USERNAME + MAIL_PASSWORD"]
+        end
+    end
+
+    subgraph ENV_VARS["Required Production Environment Variables"]
+        direction TB
+        ENV["DB_PASSWORD — PostgreSQL password\nJWT_SECRET — HMAC-SHA256 key ≥32 bytes Base64\nMAIL_USERNAME — SMTP sender address\nMAIL_PASSWORD — SMTP app password\nMOLLIE_API_KEY — live_xxx (production)\nMOLLIE_WEBHOOK_URL — https://api.enunas.com/webhooks/mollie\nADMIN_PASSWORD — Admin seed password\nFRONTEND_BASE_URL — https://enunas.com"]
+    end
+
+    subgraph LOCAL_DEV["Local Development"]
+        direction TB
+        DEV_SPRING["Spring Boot\n(localhost:8080)\nProfile: mock-payments"]
+        DEV_NEXT["Next.js\n(localhost:3000)\nnpm run dev"]
+        DEV_PG["PostgreSQL\n(localhost:5432)"]
+        DEV_SPRING -->|"JDBC"| DEV_PG
+        DEV_NEXT -->|"HTTP (no SSL)"| DEV_SPRING
+    end
+
+    %% ── DNS Routing ─────────────────────────────────────────────
+    FRONTEND_DOMAIN -->|"DNS A record"| EDGE
+    BACKEND_DOMAIN -->|"DNS A record"| LB
+
+    %% ── Request Flow ────────────────────────────────────────────
+    EDGE -->|"API routes"| RUNTIME
+    RUNTIME -->|"HTTPS REST\nCross-Origin\nJWT header"| LB
+
+    %% ── External Integrations ───────────────────────────────────
+    SPRING -->|"HTTPS\npayment ops"| MOLLIE
+    SPRING -->|"SMTP/TLS:587"| SMTP
+    MOLLIE -->|"POST /webhooks/mollie\n(public URL required)"| LB
+
+    classDef dns fill:#FFF3E0,stroke:#E65100,color:#000
+    classDef vercel fill:#E8F5E9,stroke:#2E7D32,color:#000
+    classDef aws fill:#E8D5FF,stroke:#4527A0,color:#000
+    classDef network fill:#EEF3FF,stroke:#1A237E,color:#000
+    classDef app fill:#F3E5F5,stroke:#6A1B9A,color:#000
+    classDef db fill:#FFF8E1,stroke:#F57F17,color:#000
+    classDef storage fill:#E0F2F1,stroke:#00695C,color:#000
+    classDef external fill:#FFE0E0,stroke:#C62828,color:#000
+    classDef env fill:#FAFAFA,stroke:#616161,color:#000
+    classDef dev fill:#F5F5F5,stroke:#9E9E9E,color:#000
+
+    class FRONTEND_DOMAIN,BACKEND_DOMAIN dns
+    class EDGE,RUNTIME,STATIC,VERCEL_NOTES vercel
+    class LB,SSL network
+    class SPRING,DOCKER app
+    class PG db
+    class S3,S3_IMG,S3_VID,S3_BRAND storage
+    class MOLLIE,SMTP external
+    class ENV env
+    class DEV_SPRING,DEV_NEXT,DEV_PG dev

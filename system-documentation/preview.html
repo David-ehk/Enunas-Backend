@@ -1,0 +1,798 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Enunas — System Documentation Preview</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #0F0F1A;
+    color: #E8E8F0;
+    padding: 32px;
+  }
+  h1 {
+    font-size: 28px;
+    font-weight: 700;
+    color: #C5AAFF;
+    margin-bottom: 6px;
+    letter-spacing: -0.5px;
+  }
+  .subtitle {
+    font-size: 14px;
+    color: #888;
+    margin-bottom: 40px;
+  }
+  .badge {
+    display: inline-block;
+    background: #1E1E30;
+    border: 1px solid #333;
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 11px;
+    color: #888;
+    margin-left: 8px;
+    vertical-align: middle;
+  }
+  .section-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: #666;
+    margin-bottom: 16px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #222;
+  }
+  .diagram-card {
+    background: #16162A;
+    border: 1px solid #2A2A40;
+    border-radius: 12px;
+    padding: 28px 32px;
+    margin-bottom: 32px;
+    overflow: hidden;
+  }
+  .diagram-card h2 {
+    font-size: 18px;
+    font-weight: 600;
+    color: #E8E8F0;
+    margin-bottom: 4px;
+  }
+  .diagram-card p {
+    font-size: 13px;
+    color: #666;
+    margin-bottom: 24px;
+  }
+  .diagram-card .tag {
+    display: inline-block;
+    background: #2A1A4A;
+    color: #C5AAFF;
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: 600;
+    margin-right: 6px;
+    margin-bottom: 12px;
+  }
+  .mermaid-wrapper {
+    background: #FAFAFA;
+    border-radius: 8px;
+    padding: 24px;
+    overflow-x: auto;
+  }
+  .mermaid-wrapper .mermaid {
+    display: flex;
+    justify-content: center;
+  }
+  .toc {
+    background: #16162A;
+    border: 1px solid #2A2A40;
+    border-radius: 12px;
+    padding: 24px 28px;
+    margin-bottom: 40px;
+  }
+  .toc h3 { font-size: 14px; font-weight: 600; color: #C5AAFF; margin-bottom: 12px; }
+  .toc-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 8px;
+  }
+  .toc-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: #AAA;
+  }
+  .toc-item .dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .dot-mmd { background: #4CAF50; }
+  .dot-puml { background: #9C6FE4; }
+  .dot-md { background: #2196F3; }
+  .dot-csv { background: #FF9800; }
+  .divider {
+    border: none;
+    border-top: 1px solid #222;
+    margin: 48px 0 40px;
+  }
+  .puml-note {
+    background: #1A1A2E;
+    border: 1px solid #2A2A40;
+    border-left: 3px solid #9C6FE4;
+    border-radius: 8px;
+    padding: 16px 20px;
+    font-size: 13px;
+    color: #888;
+    margin-bottom: 16px;
+  }
+  .puml-note strong { color: #C5AAFF; }
+  .file-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 8px;
+    margin-top: 12px;
+  }
+  .file-item {
+    background: #1E1E30;
+    border: 1px solid #2A2A40;
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 12px;
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    color: #9C6FE4;
+  }
+  #loading-banner {
+    background: #1A2A1A;
+    border: 1px solid #2A4A2A;
+    border-radius: 8px;
+    padding: 12px 20px;
+    font-size: 13px;
+    color: #8BC34A;
+    margin-bottom: 24px;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+
+<h1>Enunas Platform — System Documentation <span class="badge">v1.0</span></h1>
+<p class="subtitle">Complete architecture diagrams synthesized from frontend + backend documentation · 33 files across 7 directories</p>
+
+<div id="loading-banner">Rendering diagrams...</div>
+
+<div class="toc">
+  <h3>Contents — 33 files generated</h3>
+  <div class="toc-grid">
+    <div class="toc-item"><span class="dot dot-puml"></span>architecture/deployment-overview.puml</div>
+    <div class="toc-item"><span class="dot dot-puml"></span>architecture/distributed-system-map.puml</div>
+    <div class="toc-item"><span class="dot dot-md"></span>architecture/platform-overview.md</div>
+    <div class="toc-item"><span class="dot dot-md"></span>architecture/service-boundaries.md</div>
+    <div class="toc-item"><span class="dot dot-puml"></span>architecture/system-components.puml</div>
+    <div class="toc-item"><span class="dot dot-puml"></span>cross-system/api-dependency-map.puml</div>
+    <div class="toc-item"><span class="dot dot-puml"></span>cross-system/frontend-backend-sequence.puml</div>
+    <div class="toc-item"><span class="dot dot-puml"></span>cross-system/infrastructure-map.puml</div>
+    <div class="toc-item"><span class="dot dot-puml"></span>cross-system/service-communication.puml</div>
+    <div class="toc-item"><span class="dot dot-md"></span>database/entity-boundaries.md</div>
+    <div class="toc-item"><span class="dot dot-puml"></span>database/ownership-relations.puml</div>
+    <div class="toc-item"><span class="dot dot-puml"></span>database/platform-domain-model.puml</div>
+    <div class="toc-item"><span class="dot dot-puml"></span>flows/admin-management-flow.puml</div>
+    <div class="toc-item"><span class="dot dot-puml"></span>flows/analytics-flow.puml</div>
+    <div class="toc-item"><span class="dot dot-puml"></span>flows/complete-checkout-flow.puml</div>
+    <div class="toc-item"><span class="dot dot-puml"></span>flows/complete-order-lifecycle.puml</div>
+    <div class="toc-item"><span class="dot dot-puml"></span>flows/full-authentication-flow.puml</div>
+    <div class="toc-item"><span class="dot dot-puml"></span>flows/notification-system-flow.puml</div>
+    <div class="toc-item"><span class="dot dot-puml"></span>flows/ownership-flow.puml</div>
+    <div class="toc-item"><span class="dot dot-puml"></span>flows/vendor-product-lifecycle.puml</div>
+    <div class="toc-item"><span class="dot dot-mmd"></span>miro-export/auth-platform.mmd</div>
+    <div class="toc-item"><span class="dot dot-mmd"></span>miro-export/complete-system.mmd</div>
+    <div class="toc-item"><span class="dot dot-mmd"></span>miro-export/deployment.mmd</div>
+    <div class="toc-item"><span class="dot dot-mmd"></span>miro-export/ownership.mmd</div>
+    <div class="toc-item"><span class="dot dot-mmd"></span>miro-export/payment-platform.mmd</div>
+    <div class="toc-item"><span class="dot dot-md"></span>roles/ownership-boundaries.md</div>
+    <div class="toc-item"><span class="dot dot-csv"></span>roles/permissions-matrix.csv</div>
+    <div class="toc-item"><span class="dot dot-md"></span>roles/platform-permissions.md</div>
+    <div class="toc-item"><span class="dot dot-md"></span>roles/role-capabilities.md</div>
+    <div class="toc-item"><span class="dot dot-md"></span>security/audit-system.md</div>
+    <div class="toc-item"><span class="dot dot-md"></span>security/ownership-enforcement.md</div>
+    <div class="toc-item"><span class="dot dot-md"></span>security/security-boundaries.md</div>
+    <div class="toc-item"><span class="dot dot-md"></span>security/tenant-isolation.md</div>
+  </div>
+</div>
+
+<hr class="divider">
+
+<div class="section-label">Miro Export — Mermaid Diagrams (5 diagrams)</div>
+
+<!-- ── 1. Complete System ──────────────────────────────────── -->
+<div class="diagram-card">
+  <span class="tag">miro-export</span><span class="tag">flowchart</span>
+  <h2>Complete Platform System Map</h2>
+  <p>Full platform: Browser → Next.js → API clients → Spring Security → Controllers → Services → DB domains → AWS → External</p>
+  <div class="mermaid-wrapper">
+    <div class="mermaid">
+flowchart TD
+    subgraph USER_BROWSER["User Browser"]
+        direction TB
+        AUTH_CTX["AuthContext\n(JWT + user state)"]
+        CART_CTX["CartContext\n(cart state)"]
+        LOCAL_STORE[("localStorage\n['enunas_token']\n['cart']")]
+        FETCHER["fetcher.ts\n(HTTP client — injects JWT)"]
+        AUTH_CTX --- LOCAL_STORE
+        CART_CTX --- LOCAL_STORE
+        AUTH_CTX --> FETCHER
+    end
+
+    subgraph NEXT_PAGES["Next.js Pages (Vercel)"]
+        direction TB
+        PUBLIC_PAGES["Public Pages\n/ · /bekleidung · /produkt/{slug}\n/login · /register"]
+        CUSTOMER_PAGES["Customer\n/dashboard/customer · /checkout · /orders"]
+        BRAND_PAGES["Brand (NOT YET IMPL)\n/dashboard/vendor"]
+        ADMIN_PAGES["Admin\n/dashboard/admin"]
+    end
+
+    subgraph API_CLIENTS["TypeScript API Clients"]
+        direction TB
+        AUTH_API["authApi.ts"]
+        PROD_API["productApi.ts"]
+        ORDER_API["orderApi.ts"]
+        ADMIN_API["adminApi.ts"]
+        CUST_API["customerApi.ts"]
+    end
+
+    subgraph SEC["Spring Security Filter Chain"]
+        direction LR
+        CORS_F["CORS Filter"]
+        JWT_F["JWT Filter\nextract userId+role"]
+        ROUTE_G["Route Authorization\nhasRole()"]
+        CORS_F --> JWT_F --> ROUTE_G
+    end
+
+    subgraph CTRL["REST Controllers"]
+        direction TB
+        AUTH_C["AuthController\n/auth/** PUBLIC"]
+        PROD_C["ProductController\n/products/**"]
+        ORD_C["OrderController\n/orders/** CUSTOMER"]
+        ADMIN_C["AdminController\n/admin/** ADMIN"]
+        HOOK_C["WebhookController\n/webhooks/mollie PUBLIC"]
+    end
+
+    subgraph SVC["Service Layer"]
+        direction TB
+        AUTH_S["AuthenticationService\n+ JwtService"]
+        PROD_S["ProductService"]
+        ORD_S["OrderService"]
+        LEDGER_S["LedgerService\n(financial recording)"]
+        ADMIN_S["AdminService"]
+        EMAIL_S["EmailService"]
+        MEDIA_S["MediaService"]
+    end
+
+    subgraph PAY["Payment Abstraction"]
+        PP["PaymentProvider\n(interface)"]
+        MOL_P["MolliePaymentService\n(production)"]
+        MOCK_P["MockPaymentService\n(dev profile)"]
+        PP --> MOL_P
+        PP --> MOCK_P
+    end
+
+    subgraph DB["PostgreSQL"]
+        ID_DB[("Identity\nusers")]
+        CUST_DB[("Customer\ncustomers · wardrobe_items")]
+        BRAND_DB[("Brand\nbrand_partners · economics\nshipping · payout_profiles")]
+        CAT_DB[("Catalog\nproducts · colors · variants\nimages · videos · listings")]
+        ORD_DB[("Orders\norders · order_items\npayments · returns")]
+        FIN_DB[("Financial\nledger_entries · payouts")]
+    end
+
+    subgraph INFRA["AWS Infrastructure"]
+        EC2["EC2 Docker\nSpring Boot :8080"]
+        S3["S3 Storage\nproduct-images/\nproduct-videos/\nbrand-assets/"]
+        ALB["Load Balancer + SSL\nHTTPS:443 → HTTP:8080"]
+    end
+
+    subgraph EXT["External Services"]
+        MOLLIE["Mollie\napi.mollie.com/v2\nPCI-compliant"]
+        SMTP["Gmail SMTP\nsmtp.gmail.com:587"]
+    end
+
+    PUBLIC_PAGES --> AUTH_API & PROD_API
+    CUSTOMER_PAGES --> ORDER_API & CUST_API
+    ADMIN_PAGES --> ADMIN_API
+    AUTH_API & PROD_API & ORDER_API & ADMIN_API & CUST_API --> FETCHER
+    FETCHER -->|"HTTPS REST + JWT"| ALB
+    ALB --> SEC --> CTRL
+    AUTH_C --> AUTH_S
+    PROD_C --> PROD_S
+    ORD_C --> ORD_S
+    ADMIN_C --> ADMIN_S
+    HOOK_C --> ORD_S
+    ADMIN_S --> PROD_S & ORD_S & LEDGER_S
+    ORD_S --> LEDGER_S & PP
+    MOL_P -->|"HTTPS"| MOLLIE
+    MOLLIE -->|"POST /webhooks/mollie"| ALB
+    EMAIL_S -->|"SMTP/TLS:587"| SMTP
+    MEDIA_S --> S3
+    AUTH_S --> ID_DB
+    PROD_S --> CAT_DB
+    ORD_S --> ORD_DB
+    LEDGER_S --> FIN_DB
+    ADMIN_S --> BRAND_DB
+
+    classDef browser fill:#E8F5E9,stroke:#2E7D32,color:#000
+    classDef pages fill:#E3F2FD,stroke:#1565C0,color:#000
+    classDef apic fill:#F3E5F5,stroke:#6A1B9A,color:#000
+    classDef sec fill:#EEF3FF,stroke:#1A237E,color:#000,font-weight:bold
+    classDef ctrl fill:#E8D5FF,stroke:#4527A0,color:#000
+    classDef svc fill:#FFF3E0,stroke:#E65100,color:#000
+    classDef pay fill:#FCE4EC,stroke:#880E4F,color:#000
+    classDef db fill:#FFF8E1,stroke:#F57F17,color:#000
+    classDef aws fill:#F0E8FF,stroke:#311B92,color:#000
+    classDef ext fill:#FFE0E0,stroke:#C62828,color:#000
+
+    class AUTH_CTX,CART_CTX,LOCAL_STORE,FETCHER browser
+    class PUBLIC_PAGES,CUSTOMER_PAGES,BRAND_PAGES,ADMIN_PAGES pages
+    class AUTH_API,PROD_API,ORDER_API,ADMIN_API,CUST_API apic
+    class CORS_F,JWT_F,ROUTE_G sec
+    class AUTH_C,PROD_C,ORD_C,ADMIN_C,HOOK_C ctrl
+    class AUTH_S,PROD_S,ORD_S,LEDGER_S,ADMIN_S,EMAIL_S,MEDIA_S svc
+    class PP,MOL_P,MOCK_P pay
+    class ID_DB,CUST_DB,BRAND_DB,CAT_DB,ORD_DB,FIN_DB db
+    class EC2,S3,ALB aws
+    class MOLLIE,SMTP ext
+    </div>
+  </div>
+</div>
+
+<!-- ── 2. Auth Platform ──────────────────────────────────── -->
+<div class="diagram-card">
+  <span class="tag">miro-export</span><span class="tag">flowchart</span>
+  <h2>Authentication Platform</h2>
+  <p>Full auth lifecycle: app mount hydration → login → registration → JWT validation → 401 auto-logout → route guards</p>
+  <div class="mermaid-wrapper">
+    <div class="mermaid">
+flowchart TD
+    subgraph BROWSER["Browser"]
+        LS[("localStorage\n['enunas_token']")]
+        AC["AuthContext"]
+        FT["fetcher.ts"]
+        AC --- LS
+        AC --> FT
+    end
+
+    subgraph FE["Vercel — Next.js"]
+        LP["LoginPage /login"]
+        RP["RegisterPage /register"]
+        DP["DashboardPage /dashboard/*"]
+        RG["Route Guard (client-side)"]
+        AAPI["authApi.ts"]
+    end
+
+    subgraph BE["AWS — Spring Boot"]
+        SF["Spring Security JWT Filter"]
+        AC_C["AuthController\nPOST /auth/login\nPOST /auth/register\nGET /users/me"]
+        AS["AuthenticationService"]
+        JS["JwtService\nHMAC-SHA256 / HS256\n24h TTL"]
+        UR["UserRepository"]
+        ES["EmailService"]
+        CS["CustomerService"]
+    end
+
+    subgraph DB2["PostgreSQL"]
+        UTBL[("users")]
+        CTBL[("customers")]
+    end
+
+    subgraph SMTP2["External SMTP"]
+        SMTP_S["smtp.gmail.com:587"]
+    end
+
+    LP -->|submit| AAPI
+    AAPI -->|"POST /auth/login"| FT
+    FT -->|"no auth header\npublic endpoint"| SF
+    SF --> AC_C --> AS
+    AS -->|"findByEmail()"| UR --> UTBL
+    AS -->|"BCrypt.matches()"| AS
+    AS -->|"generateToken()"| JS
+    JS -->|"JWT string"| AS
+    AS -->|"{ token, role }"| AC_C
+    AC_C -->|"200 { token }"| FT
+    FT -->|"store token"| LS
+    FT -->|"setUser()"| AC
+    AC -->|"role → redirect"| DP
+
+    RP -->|"POST /auth/register"| AAPI
+    AAPI --> FT --> SF --> AC_C --> AS
+    AS -->|"BCrypt hash\n6-digit code"| AS
+    AS -->|"save()"| UR
+    UR -->|"INSERT"| UTBL
+    AS -->|"createForUser()"| CS --> CTBL
+    AS -->|"sendVerification()"| ES --> SMTP_S
+
+    AC -->|"GET /users/me [Bearer]"| FT
+    FT -->|"Authorization: Bearer JWT"| SF
+    SF -->|"HMAC verify + exp check"| JS
+    SF -->|"401 if expired"| FT
+    FT -->|"onUnauthorized()"| AC
+    AC -->|"clearToken()\nsetUser(null)"| LS
+
+    DP -->|"useAuth() → role check"| RG
+    RG -->|"wrong role → /login"| LP
+
+    classDef browser fill:#E8F5E9,stroke:#2E7D32,color:#000
+    classDef fe fill:#E3F2FD,stroke:#1565C0,color:#000
+    classDef be fill:#EDE7F6,stroke:#4527A0,color:#000
+    classDef db fill:#FFF8E1,stroke:#F57F17,color:#000
+    classDef ext fill:#FCE4EC,stroke:#880E4F,color:#000
+
+    class LS,AC,FT browser
+    class LP,RP,DP,RG,AAPI fe
+    class SF,AC_C,AS,JS,UR,ES,CS be
+    class UTBL,CTBL db
+    class SMTP_S ext
+    </div>
+  </div>
+</div>
+
+<!-- ── 3. Ownership ──────────────────────────────────────── -->
+<div class="diagram-card">
+  <span class="tag">miro-export</span><span class="tag">flowchart</span>
+  <h2>Ownership &amp; Tenant Isolation Model</h2>
+  <p>Complete ownership chains, 6-layer enforcement, JPQL query filters, admin-only resources, violation responses</p>
+  <div class="mermaid-wrapper">
+    <div class="mermaid">
+flowchart TD
+    USER["User\n(id, email, role)\nRole IMMUTABLE"]
+
+    subgraph ENF["6-Layer Ownership Enforcement"]
+        direction LR
+        L1["① HTTPS+CORS"] --> L2["② JWT Filter\nidentity"] --> L3["③ Route Guard\nUX only"] --> L4["④ @PreAuthorize\nrole check"] --> L5["⑤ assertOwnership()\nentity.ownerId==userId"] --> L6["⑥ Input Validation"]
+    end
+
+    subgraph CUST_CHAIN["Customer Ownership Chain"]
+        CP["Customer Profile\nWrite: self · Read: self+Admin"]
+        WI["WardrobeItem\nWrite: self · Read: self/public"]
+        ORD["Order — buyerId IMMUTABLE\nRead: self+Admin"]
+        RET["ReturnOrder\nMust own parent Order"]
+        CP --- WI
+        CP --- ORD --- RET
+    end
+
+    subgraph BRAND_CHAIN["Brand Ownership Chain"]
+        BP["BrandPartner\nbrandName+slug IMMUTABLE\nStatus: PENDING→ACTIVE (Admin gates)"]
+        PR["Product\ncreatorId IMMUTABLE\nassertBrandOwnership()"]
+        PC["ProductColor\nInherited"]
+        PV["ProductVariant\nstock: atomic decrement"]
+        PL["ProductListing\nBrand manages price"]
+        BP --- PR
+        PR --- PC --- PV
+        PR --- PL
+    end
+
+    subgraph ADMIN_ONLY["Admin-Only Resources"]
+        BE["BrandEconomics\nRebuilt from LedgerEntry"]
+        SP["ShippingProfile\nAdmin-managed"]
+        PP["PayoutProfile\nIBAN — fraud prevention"]
+        LE["LedgerEntry\nAPPEND-ONLY\nno UPDATE/DELETE ever"]
+        PO["Payout\nAdmin-initiated"]
+    end
+
+    subgraph CROSS["Cross-Ownership"]
+        OI["OrderItem\nReadable by buyer + brand + Admin\nAll snapshot fields IMMUTABLE"]
+    end
+
+    subgraph VIOLATIONS["Ownership Violations"]
+        V1["Wrong role\n→ 403 Forbidden"]
+        V2["Not owner\n→ 403 Forbidden"]
+        V3["Query filter hides it\n→ 404 Not Found"]
+        V4["Expired token\n→ 401 Unauthorized"]
+    end
+
+    USER -->|"OneToOne"| CP
+    USER -->|"OneToOne"| BP
+    USER -->|"JWT claims"| ENF
+    BP --> BE & SP & PP & PO
+    LE -.->|"tenant key"| BP
+    LE -.->|"references"| ORD
+    BE -.->|"rebuilt from"| LE
+    ORD -->|"CASCADE"| OI
+    ENF -->|"violation"| VIOLATIONS
+
+    classDef identity fill:#FFD700,stroke:#B8860B,color:#000,font-weight:bold
+    classDef cust fill:#E8F5E9,stroke:#2E7D32,color:#000
+    classDef brand fill:#E8D5FF,stroke:#4527A0,color:#000
+    classDef admin fill:#FFCDD2,stroke:#C62828,color:#000
+    classDef cross fill:#FFF3E0,stroke:#E65100,color:#000
+    classDef enf fill:#EEF3FF,stroke:#1A237E,color:#000
+    classDef viol fill:#FCE4EC,stroke:#880E4F,color:#000
+
+    class USER identity
+    class CP,WI,ORD,RET cust
+    class BP,PR,PC,PV,PL brand
+    class BE,SP,PP,LE,PO admin
+    class OI cross
+    class L1,L2,L3,L4,L5,L6 enf
+    class V1,V2,V3,V4 viol
+    </div>
+  </div>
+</div>
+
+<!-- ── 4. Payment Platform ──────────────────────────────── -->
+<div class="diagram-card">
+  <span class="tag">miro-export</span><span class="tag">flowchart</span>
+  <h2>Payment Platform</h2>
+  <p>Full payment lifecycle: cart → order → Mollie → webhook → stock → ledger → 7-day hold → payout. Refund path included.</p>
+  <div class="mermaid-wrapper">
+    <div class="mermaid">
+flowchart TD
+    subgraph CUST_SIDE["Customer Flow"]
+        CART["CartContext\nlocalStorage"]
+        CHECKOUT["CheckoutPage"]
+        OAPI["orderApi.ts"]
+        MPAY["Mollie Hosted Page\n(PCI-compliant)"]
+        CONFIRM["Order Confirmation"]
+    end
+
+    subgraph ORD_SVC["Order Service"]
+        OCTRL["OrderController\nPOST /orders"]
+        OS["OrderService"]
+        STOCK_CHK["stock check\n(not atomic)"]
+        STOCK_DEC["stock decrement\n(atomic on webhook)"]
+        STOCK_RST["stock restore\n(cancel/return)"]
+    end
+
+    subgraph PAY_SVC["Payment Service"]
+        PP["PaymentProvider\n(interface)"]
+        MOLLIE_S["MolliePaymentService"]
+        MOCK_S["MockPaymentService\n(dev)"]
+        WCTRL["WebhookController\nPOST /webhooks/mollie\nPUBLIC"]
+        IDEM["Idempotency Guard\nexistsByOrderIdAndEntryType()"]
+        OLOCK["Optimistic Lock\n@Version"]
+    end
+
+    subgraph LEDGER["Ledger Service"]
+        LS["LedgerService"]
+        LE_OP["LedgerEntry\nORDER_PAYMENT"]
+        ECO_UP["BrandEconomics\npendingBalance += payout"]
+    end
+
+    subgraph REFUND["Refund (Admin)"]
+        ADMC["AdminController"]
+        RSVC["OrderService.processRefund()"]
+        LE_REV["LedgerEntry\nREFUND_REVERSAL"]
+        ECO_DN["BrandEconomics\npendingBalance -= payout"]
+    end
+
+    subgraph PAYOUT["Payout Flow"]
+        HOLD["PENDING_RELEASE\n(7-day hold)"]
+        AVAIL["AVAILABLE\n(scheduled job)"]
+        PGEN["generatePayouts()\nAdmin"]
+        PAPPROVE["approvePayout()"]
+        PPAID["markPaid()"]
+        LE_PO["LedgerEntry\nPAYOUT_TRANSFER"]
+        ECO_PO["payoutBalance = 0\npaidOutTotal += amount"]
+    end
+
+    subgraph MOLLIE_EXT["Mollie External"]
+        MC["POST /v2/payments\n(create link)"]
+        MW["POST webhook\n(async callback)"]
+        MR["POST /v2/payments/{id}/refunds"]
+    end
+
+    subgraph PG["PostgreSQL"]
+        ORDS[("orders\npayments")]
+        VARS[("product_variants\nstockQuantity")]
+        LDB[("ledger_entries")]
+        ECON[("brand_economics")]
+    end
+
+    CART --> CHECKOUT --> OAPI
+    OAPI -->|"POST /orders [JWT]"| OCTRL --> OS
+    OS --> STOCK_CHK --> VARS
+    OS --> ORDS
+    OS --> PP
+    PP --> MOLLIE_S --> MC --> MPAY
+    MC -->|"checkoutUrl"| OAPI
+    MPAY --> CONFIRM
+
+    MW -->|"POST /webhooks/mollie"| WCTRL
+    WCTRL --> IDEM --> OS
+    OS --> OLOCK
+    OS -->|"PAID"| ORDS
+    OS --> STOCK_DEC --> VARS
+    OS -->|"recordOrderPayment()"| LS
+    LS --> LE_OP --> LDB
+    LS --> ECO_UP --> ECON
+
+    ADMC --> RSVC
+    RSVC --> PP --> MOLLIE_S --> MR
+    RSVC --> STOCK_RST --> VARS
+    RSVC -->|"recordRefund()"| LS
+    LS --> LE_REV --> LDB
+    LS --> ECO_DN --> ECON
+
+    LDB -->|"7 days"| HOLD --> AVAIL
+    AVAIL --> PGEN --> PAPPROVE --> PPAID
+    PPAID --> LE_PO --> LDB
+    PPAID --> ECO_PO --> ECON
+
+    classDef cust fill:#E8F5E9,stroke:#2E7D32,color:#000
+    classDef ord fill:#EDE7F6,stroke:#4527A0,color:#000
+    classDef pay fill:#E8D5FF,stroke:#6A1B9A,color:#000
+    classDef ledger fill:#FFF3E0,stroke:#E65100,color:#000
+    classDef refund fill:#FCE4EC,stroke:#880E4F,color:#000
+    classDef mollie fill:#FFE0E0,stroke:#C62828,color:#000
+    classDef db fill:#FFF8E1,stroke:#F57F17,color:#000
+    classDef payout fill:#F0E8FF,stroke:#311B92,color:#000
+
+    class CART,CHECKOUT,OAPI,MPAY,CONFIRM cust
+    class OCTRL,OS,STOCK_CHK,STOCK_DEC,STOCK_RST ord
+    class PP,MOLLIE_S,MOCK_S,WCTRL,IDEM,OLOCK pay
+    class LS,LE_OP,ECO_UP ledger
+    class ADMC,RSVC,LE_REV,ECO_DN refund
+    class MC,MW,MR mollie
+    class ORDS,VARS,LDB,ECON db
+    class HOLD,AVAIL,PGEN,PAPPROVE,PPAID,LE_PO,ECO_PO payout
+    </div>
+  </div>
+</div>
+
+<!-- ── 5. Deployment ──────────────────────────────────────── -->
+<div class="diagram-card">
+  <span class="tag">miro-export</span><span class="tag">flowchart</span>
+  <h2>Deployment Architecture</h2>
+  <p>Full infrastructure topology: DNS → Vercel CDN → Next.js / AWS ALB → Docker → PostgreSQL / S3 → Mollie / SMTP</p>
+  <div class="mermaid-wrapper">
+    <div class="mermaid">
+flowchart TD
+    subgraph DNS["DNS / Domain"]
+        FD["enunas.com\n(Frontend)"]
+        BD["api.enunas.com\n(Backend)"]
+    end
+
+    subgraph VERCEL["Vercel — Frontend PaaS"]
+        CDN["Edge CDN\n(Global)"]
+        RT["Next.js Runtime\n(Serverless)"]
+        STATIC["Static Assets\nCSS · JS · Images"]
+        CDN --> RT --> STATIC
+    end
+
+    subgraph AWS["AWS — Backend"]
+        subgraph NET["Network"]
+            ALB["Load Balancer\nnginx or ALB\nHTTPS:443"]
+            SSL["SSL Termination\nHTTPS → HTTP:8080"]
+            ALB --> SSL
+        end
+
+        subgraph APP["EC2 / ECS"]
+            DOCKER["Docker Container\neclipse-temurin:21-jre-alpine\nUser: appuser (non-root)"]
+            SPRING["Spring Boot 4.0.5\nPort :8080"]
+            DOCKER --> SPRING
+        end
+
+        subgraph DATA["Data Layer"]
+            PG[("PostgreSQL\nPort 5432\nHikariCP · Flyway\nSchema: Enunas")]
+        end
+
+        subgraph STORE["Storage"]
+            S3["AWS S3"]
+            SI["product-images/"]
+            SV["product-videos/"]
+            SB["brand-assets/"]
+            S3 --> SI & SV & SB
+        end
+
+        SSL --> DOCKER
+        SPRING -->|"JDBC:5432\nVPC internal"| PG
+        SPRING -->|"HTTPS upload"| S3
+    end
+
+    subgraph EXT["External SaaS"]
+        MOL["Mollie\napi.mollie.com/v2\nAuth: Bearer MOLLIE_API_KEY\nPCI-compliant"]
+        SMTP["Gmail SMTP\nsmtp.gmail.com:587\nSTARTTLS"]
+    end
+
+    subgraph ENVVARS["Production Env Vars"]
+        EV["DB_PASSWORD · JWT_SECRET\nMAIL_USERNAME · MAIL_PASSWORD\nMOLLIE_API_KEY · MOLLIE_WEBHOOK_URL\nADMIN_PASSWORD · FRONTEND_BASE_URL"]
+    end
+
+    subgraph DEV["Local Dev"]
+        DN["Next.js\nlocalhost:3000"]
+        DS["Spring Boot\nlocalhost:8080\nmock-payments profile"]
+        DP[("PostgreSQL\nlocalhost:5432")]
+        DN -->|"HTTP"| DS --> DP
+    end
+
+    FD -->|"DNS A"| CDN
+    BD -->|"DNS A"| ALB
+    CDN --> RT
+    RT -->|"HTTPS REST + JWT"| ALB
+    SPRING -->|"HTTPS"| MOL
+    SPRING -->|"SMTP/TLS:587"| SMTP
+    MOL -->|"POST /webhooks/mollie"| ALB
+
+    classDef dns fill:#FFF3E0,stroke:#E65100,color:#000
+    classDef vercel fill:#E8F5E9,stroke:#2E7D32,color:#000
+    classDef net fill:#EEF3FF,stroke:#1A237E,color:#000
+    classDef app fill:#F3E5F5,stroke:#6A1B9A,color:#000
+    classDef db fill:#FFF8E1,stroke:#F57F17,color:#000
+    classDef store fill:#E0F2F1,stroke:#00695C,color:#000
+    classDef ext fill:#FFE0E0,stroke:#C62828,color:#000
+    classDef env fill:#FAFAFA,stroke:#616161,color:#555
+    classDef dev fill:#F5F5F5,stroke:#9E9E9E,color:#555
+
+    class FD,BD dns
+    class CDN,RT,STATIC vercel
+    class ALB,SSL net
+    class DOCKER,SPRING app
+    class PG db
+    class S3,SI,SV,SB store
+    class MOL,SMTP ext
+    class EV env
+    class DN,DS,DP dev
+    </div>
+  </div>
+</div>
+
+<hr class="divider">
+
+<div class="section-label">PlantUML Diagrams (20 files — open in PlantUML viewer)</div>
+
+<div class="puml-note">
+  <strong>PlantUML diagrams</strong> require a PlantUML renderer (VS Code extension, IntelliJ plugin, or <code>plantuml.com/plantuml</code>). All 20 files are ready to open below.
+</div>
+
+<div class="file-list">
+  <div class="file-item">flows/full-authentication-flow.puml</div>
+  <div class="file-item">flows/complete-checkout-flow.puml</div>
+  <div class="file-item">flows/complete-order-lifecycle.puml</div>
+  <div class="file-item">flows/vendor-product-lifecycle.puml</div>
+  <div class="file-item">flows/admin-management-flow.puml</div>
+  <div class="file-item">flows/notification-system-flow.puml</div>
+  <div class="file-item">flows/analytics-flow.puml</div>
+  <div class="file-item">flows/ownership-flow.puml</div>
+  <div class="file-item">cross-system/frontend-backend-sequence.puml</div>
+  <div class="file-item">cross-system/api-dependency-map.puml</div>
+  <div class="file-item">cross-system/service-communication.puml</div>
+  <div class="file-item">cross-system/infrastructure-map.puml</div>
+  <div class="file-item">database/platform-domain-model.puml</div>
+  <div class="file-item">database/ownership-relations.puml</div>
+  <div class="file-item">architecture/system-components.puml</div>
+  <div class="file-item">architecture/distributed-system-map.puml</div>
+  <div class="file-item">architecture/deployment-overview.puml</div>
+</div>
+
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: 'default',
+  flowchart: {
+    useMaxWidth: true,
+    htmlLabels: true,
+    curve: 'basis',
+    padding: 20
+  },
+  themeVariables: {
+    fontSize: '13px',
+    fontFamily: '-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif'
+  }
+});
+
+document.addEventListener('DOMContentLoaded', () => {
+  setTimeout(() => {
+    const banner = document.getElementById('loading-banner');
+    if (banner) {
+      banner.textContent = '5 Mermaid diagrams rendered · 20 PlantUML files ready to open';
+      banner.style.background = '#1A2A1A';
+      banner.style.borderColor = '#2A4A2A';
+      banner.style.color = '#8BC34A';
+    }
+  }, 2500);
+});
+</script>
+</body>
+</html>

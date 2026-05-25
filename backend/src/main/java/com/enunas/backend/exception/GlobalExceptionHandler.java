@@ -1,14 +1,19 @@
 package com.enunas.backend.exception;
 
+import com.fasterxml.jackson.databind.exc.InvalidFormatException;
+import io.jsonwebtoken.JwtException;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 import java.time.LocalDateTime;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -51,10 +56,45 @@ public class GlobalExceptionHandler {
         return buildResponse(HttpStatus.BAD_REQUEST, message);
     }
 
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<Map<String, Object>> handleUnreadable(HttpMessageNotReadableException ex) {
+        String message = "Malformed or invalid request body";
+        if (ex.getCause() instanceof InvalidFormatException ife) {
+            String field = ife.getPath().isEmpty()
+                    ? "unknown"
+                    : ife.getPath().get(ife.getPath().size() - 1).getFieldName();
+            Class<?> targetType = ife.getTargetType();
+            if (targetType != null && targetType.isEnum()) {
+                message = "Invalid value '" + ife.getValue() + "' for field '" + field
+                        + "'. Allowed values: " + Arrays.toString(targetType.getEnumConstants());
+            } else {
+                message = "Invalid value '" + ife.getValue() + "' for field '" + field + "'";
+            }
+        }
+        log.warn("HttpMessageNotReadableException: {}", message);
+        return buildResponse(HttpStatus.BAD_REQUEST, message);
+    }
+
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<Map<String, Object>> handleDataIntegrity(DataIntegrityViolationException ex) {
+        log.warn("DataIntegrityViolationException: {}", ex.getMostSpecificCause().getMessage());
+        return buildResponse(HttpStatus.CONFLICT, "Data integrity violation");
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, Object>> handleGeneric(Exception ex) {
-        log.error("Unhandled exception: ", ex);
+        log.error("Unhandled exception: type={}, message={}, cause={}",
+                ex.getClass().getSimpleName(),
+                ex.getMessage(),
+                ex.getCause() != null ? ex.getCause().getMessage() : "none",
+                ex);
         return buildResponse(HttpStatus.INTERNAL_SERVER_ERROR, "An unexpected error occurred");
+    }
+
+    @ExceptionHandler(JwtException.class)
+    public ResponseEntity<Map<String, Object>> handleJwt(JwtException ex) {
+        log.warn("JwtException: type={}, message={}", ex.getClass().getSimpleName(), ex.getMessage());
+        return buildResponse(HttpStatus.UNAUTHORIZED, "Token is invalid or expired — please log in again");
     }
 
     @ExceptionHandler(BadCredentialsException.class)

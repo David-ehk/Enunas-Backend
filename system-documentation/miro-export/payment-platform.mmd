@@ -1,0 +1,155 @@
+---
+title: Enunas — Payment Platform (Full Lifecycle)
+---
+flowchart TD
+    subgraph CUSTOMER_SIDE["Customer (Browser)"]
+        direction TB
+        CART["CartContext\nlocalStorage['cart']"]
+        CHECKOUT["CheckoutPage\n/checkout"]
+        ORDER_API["orderApi.ts\n.create()"]
+        MOLLIE_PAGE["Mollie Hosted\nCheckout Page"]
+        CONFIRM["Order Confirmation\n/orders/{id}"]
+    end
+
+    subgraph BACKEND_ORDER["Spring Boot — Order Service"]
+        direction TB
+        ORD_CTRL["OrderController\nPOST /orders\n(CUSTOMER)"]
+        ORD_SVC["OrderService"]
+        STOCK_CHECK["stockQuantity check\n(not atomic — race risk)"]
+        STOCK_DEC["stockQuantity decrement\n(atomic on webhook)"]
+        STOCK_RESTORE["stockQuantity restore\n(on cancel/return)"]
+    end
+
+    subgraph BACKEND_PAYMENT["Spring Boot — Payment Service"]
+        direction TB
+        PAY_INTERFACE["PaymentProvider\n(interface)"]
+        MOLLIE_SVC["MolliePaymentService\n(production)"]
+        MOCK_SVC["MockPaymentService\n(mock-payments profile)"]
+        WEBHOOK_CTRL["MollieWebhookController\nPOST /webhooks/mollie\n(PUBLIC — no JWT)"]
+        IDEMPOTENCY["Idempotency Guard\nexistsByOrderIdAndEntryType()"]
+        OPT_LOCK["Optimistic Locking\n@Version on Order + Payment"]
+    end
+
+    subgraph BACKEND_LEDGER["Spring Boot — Ledger Service"]
+        direction TB
+        LEDGER_SVC["LedgerService"]
+        LEDGER_ENTRY["LedgerEntry\n(INSERT-only)"]
+        ECO_UPDATE["BrandEconomics\npendingBalance += brandPayout"]
+    end
+
+    subgraph BACKEND_REFUND["Spring Boot — Refund Flow (Admin)"]
+        direction TB
+        ADMIN_CTRL["AdminController\nPOST /admin/orders/{id}/refund"]
+        REFUND_SVC["OrderService\n.processRefund()"]
+        REFUND_API["Mollie Refund API\nPOST /payments/{id}/refunds"]
+        REVERSAL["LedgerEntry\nentry_type: REFUND_REVERSAL"]
+        ECO_REVERSE["BrandEconomics\npendingBalance -= brandPayout"]
+    end
+
+    subgraph MOLLIE_EXT["External — Mollie"]
+        direction TB
+        MOLLIE_CREATE["POST /v2/payments\n(create payment link)"]
+        MOLLIE_WEBHOOK["POST {MOLLIE_WEBHOOK_URL}\n(async status callback)"]
+        MOLLIE_REFUND_EXT["POST /v2/payments/{id}/refunds"]
+        PCI["PCI Compliance\n(Mollie handles card data)"]
+    end
+
+    subgraph DB["PostgreSQL"]
+        ORDERS[("orders")]
+        PAYMENTS[("payments")]
+        VARIANTS[("product_variants\n(stockQuantity)")]
+        LEDGER_DB[("ledger_entries\n(INSERT-only)")]
+        ECONOMICS[("brand_economics\n(denormalized)")]
+    end
+
+    subgraph PAYOUT_FLOW["Payout Flow (Admin-Initiated)"]
+        direction TB
+        HOLD["7-day hold\nstatus: PENDING_RELEASE"]
+        AVAILABLE["Promoted to AVAILABLE\n(scheduled job)"]
+        PAYOUT_GEN["generatePayouts()\n(Admin triggers)"]
+        PAYOUT_APPROVE["approvePayout()\n(Admin approves)"]
+        PAYOUT_PAID["markPaid()\n(Admin confirms bank transfer)"]
+        PAYOUT_RECORD["LedgerEntry\nentry_type: PAYOUT_TRANSFER"]
+        BRAND_BALANCE["BrandEconomics\npayoutBalance = 0\npaidOutTotal += amount"]
+    end
+
+    %% ── Order Creation ──────────────────────────────────────────
+    CART -->|"items + shipping"| CHECKOUT
+    CHECKOUT -->|"orderApi.create()"| ORDER_API
+    ORDER_API -->|"POST /orders [JWT]"| ORD_CTRL
+    ORD_CTRL -->|"createOrder()"| ORD_SVC
+    ORD_SVC -->|"check stock"| STOCK_CHECK
+    STOCK_CHECK -->|"SELECT stockQuantity"| VARIANTS
+    ORD_SVC -->|"build Order + OrderItems"| ORDERS
+    ORD_SVC -->|"build Payment (PENDING)"| PAYMENTS
+
+    %% ── Payment Initiation ──────────────────────────────────────
+    ORD_SVC -->|"createPayment()"| PAY_INTERFACE
+    PAY_INTERFACE -->|"implements (prod)"| MOLLIE_SVC
+    PAY_INTERFACE -->|"implements (dev)"| MOCK_SVC
+    MOLLIE_SVC -->|"POST /v2/payments"| MOLLIE_CREATE
+    MOLLIE_CREATE -->|"{ checkoutUrl, transactionId }"| MOLLIE_SVC
+    MOLLIE_SVC -->|"checkoutUrl"| ORD_SVC
+    ORD_CTRL -->|"201 { order, checkoutUrl }"| ORDER_API
+    ORDER_API -->|"redirect"| MOLLIE_PAGE
+    MOLLIE_PAGE -->|"hosted by Mollie\nPCI-compliant"| PCI
+
+    %% ── Webhook Processing ──────────────────────────────────────
+    MOLLIE_WEBHOOK -->|"POST /webhooks/mollie\n{ id: tr_xxx }"| WEBHOOK_CTRL
+    WEBHOOK_CTRL -->|"check idempotency"| IDEMPOTENCY
+    IDEMPOTENCY -->|"not duplicate"| ORD_SVC
+    ORD_SVC -->|"optimistic lock check"| OPT_LOCK
+    ORD_SVC -->|"order.status = PAID"| ORDERS
+    ORD_SVC -->|"payment.status = PAID"| PAYMENTS
+    ORD_SVC -->|"decrement stock"| STOCK_DEC
+    STOCK_DEC -->|"UPDATE stockQuantity"| VARIANTS
+    ORD_SVC -->|"recordOrderPayment()"| LEDGER_SVC
+    LEDGER_SVC -->|"INSERT LedgerEntry\n(ORDER_PAYMENT)"| LEDGER_ENTRY
+    LEDGER_ENTRY -->|"INSERT"| LEDGER_DB
+    LEDGER_SVC -->|"pendingBalance += brandPayout"| ECO_UPDATE
+    ECO_UPDATE -->|"UPDATE"| ECONOMICS
+
+    %% ── Customer Redirect ───────────────────────────────────────
+    MOLLIE_PAGE -->|"redirect to FRONTEND_BASE_URL"| CONFIRM
+
+    %% ── Refund Flow ─────────────────────────────────────────────
+    ADMIN_CTRL -->|"processRefund()"| REFUND_SVC
+    REFUND_SVC -->|"refundPayment()"| PAY_INTERFACE
+    MOLLIE_SVC -->|"POST /v2/payments/{id}/refunds"| REFUND_API
+    REFUND_API -->|"Mollie processes refund"| MOLLIE_REFUND_EXT
+    REFUND_SVC -->|"restoreStock()"| STOCK_RESTORE
+    STOCK_RESTORE -->|"UPDATE stockQuantity +qty"| VARIANTS
+    REFUND_SVC -->|"recordRefund()"| LEDGER_SVC
+    LEDGER_SVC -->|"INSERT LedgerEntry\n(REFUND_REVERSAL)"| REVERSAL
+    REVERSAL -->|"INSERT"| LEDGER_DB
+    LEDGER_SVC -->|"pendingBalance -= brandPayout"| ECO_REVERSE
+    ECO_REVERSE -->|"UPDATE"| ECONOMICS
+
+    %% ── Payout Flow ─────────────────────────────────────────────
+    LEDGER_DB -->|"after 7 days"| HOLD
+    HOLD -->|"scheduled job"| AVAILABLE
+    AVAILABLE -->|"Admin action"| PAYOUT_GEN
+    PAYOUT_GEN -->|"Admin approves"| PAYOUT_APPROVE
+    PAYOUT_APPROVE -->|"manual bank transfer + confirm"| PAYOUT_PAID
+    PAYOUT_PAID -->|"recordPayoutTransfer()"| PAYOUT_RECORD
+    PAYOUT_RECORD -->|"INSERT"| LEDGER_DB
+    PAYOUT_PAID -->|"payoutBalance = 0"| BRAND_BALANCE
+    BRAND_BALANCE -->|"UPDATE"| ECONOMICS
+
+    classDef customer fill:#E8F5E9,stroke:#2E7D32,color:#000
+    classDef order_svc fill:#EDE7F6,stroke:#4527A0,color:#000
+    classDef pay_svc fill:#E8D5FF,stroke:#6A1B9A,color:#000
+    classDef ledger fill:#FFF3E0,stroke:#E65100,color:#000
+    classDef refund fill:#FCE4EC,stroke:#880E4F,color:#000
+    classDef mollie fill:#FFE0E0,stroke:#C62828,color:#000
+    classDef db fill:#FFF8E1,stroke:#F57F17,color:#000
+    classDef payout fill:#F0E8FF,stroke:#311B92,color:#000
+
+    class CART,CHECKOUT,ORDER_API,MOLLIE_PAGE,CONFIRM customer
+    class ORD_CTRL,ORD_SVC,STOCK_CHECK,STOCK_DEC,STOCK_RESTORE order_svc
+    class PAY_INTERFACE,MOLLIE_SVC,MOCK_SVC,WEBHOOK_CTRL,IDEMPOTENCY,OPT_LOCK pay_svc
+    class LEDGER_SVC,LEDGER_ENTRY,ECO_UPDATE ledger
+    class ADMIN_CTRL,REFUND_SVC,REFUND_API,REVERSAL,ECO_REVERSE refund
+    class MOLLIE_CREATE,MOLLIE_WEBHOOK,MOLLIE_REFUND_EXT,PCI mollie
+    class ORDERS,PAYMENTS,VARIANTS,LEDGER_DB,ECONOMICS db
+    class HOLD,AVAILABLE,PAYOUT_GEN,PAYOUT_APPROVE,PAYOUT_PAID,PAYOUT_RECORD,BRAND_BALANCE payout

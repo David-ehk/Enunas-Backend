@@ -1,0 +1,93 @@
+@startuml distributed-system-map
+!theme plain
+skinparam backgroundColor #FAFAFA
+skinparam rectangleBackgroundColor #EEF3FF
+skinparam rectangleBorderColor #370E4D
+title Enunas — Distributed System Map
+
+rectangle "ZONE: Browser (Client)" as BrowserZone #E8F5E9 {
+  rectangle "Next.js App\n(Vercel CDN)" as NextApp
+  rectangle "AuthContext\n(React State)" as AuthCtxNode
+  rectangle "CartContext\n(React State)" as CartCtxNode
+  rectangle "localStorage\n[JWT + Cart]" as LocalStoreNode
+}
+
+rectangle "ZONE: Vercel Edge Network" as VercelZone #FFF3E0 {
+  rectangle "Next.js Server\n(SSR + API Routes)" as VercelServer
+  rectangle "Static Assets\n(CSS, JS bundles)" as StaticAssets
+}
+
+rectangle "ZONE: AWS Backend" as AWSZone #E8D5FF {
+  rectangle "Docker Container\n:8080" as DockerNode {
+    rectangle "Spring Security\nFilter Chain" as SpringSec
+    rectangle "REST Controllers\n(11 controllers)" as Controllers
+    rectangle "Service Layer\n(13 services)" as Services
+    rectangle "Repository Layer\n(7 repositories)" as Repos
+    rectangle "Payment Adapter\n(Mollie / Mock)" as PayAdapter
+  }
+
+  rectangle "PostgreSQL\nDatabase\n:5432" as PostgreSQLNode
+  rectangle "AWS S3\nAsset Storage" as S3Node
+}
+
+rectangle "ZONE: External SaaS" as ExternalZone #FFE0E0 {
+  rectangle "Mollie\nPayment API\nhttps://api.mollie.com" as MollieNode
+  rectangle "Mollie\nHosted Checkout\nhttps://checkout.mollie.com" as MollieCheckoutNode
+  rectangle "SMTP Server\nsmtp.gmail.com:587" as SMTPNode
+}
+
+' ─── Communication Arrows ─────────────────────────────────────────
+
+' Browser ↔ Vercel
+NextApp --> VercelServer : DNS + HTTPS (CDN)
+VercelServer --> NextApp : HTML + hydration
+
+' Browser ↔ Backend
+NextApp --> SpringSec : HTTPS REST/JSON\n"Authorization: Bearer JWT"
+note on link : CORS: allowed origins only
+
+' Frontend internal
+AuthCtxNode --> LocalStoreNode : read/write JWT
+CartCtxNode --> LocalStoreNode : read/write cart
+NextApp --> AuthCtxNode : useAuth()
+NextApp --> CartCtxNode : useCart()
+
+' Browser ↔ Mollie Checkout (redirect)
+NextApp --> MollieCheckoutNode : HTTP redirect\n(checkoutUrl)
+MollieCheckoutNode --> NextApp : HTTP redirect\n(redirectUrl after payment)
+
+' Backend internal
+SpringSec --> Controllers : authenticated request
+Controllers --> Services : business logic call
+Services --> Repos : data access
+Repos --> PostgreSQLNode : JDBC TCP:5432
+Services --> PayAdapter : payment operations
+
+' Backend ↔ External
+PayAdapter --> MollieNode : HTTPS\nPOST /v2/payments\n(create + refund)
+MollieNode --> SpringSec : POST /webhooks/mollie\n(async, no JWT — public)
+Services --> SMTPNode : SMTP/TLS:587\n(email notifications)
+Services --> S3Node : HTTPS\n(image URL storage)
+
+' ─── Legend ───────────────────────────────────────────────────────
+legend right
+  Communication Protocols
+  ──────────────────────────────
+  Browser → Vercel          HTTPS (CDN)
+  Browser → Backend         HTTPS REST/JSON + JWT
+  Browser → Mollie          HTTPS redirect
+  Backend → Mollie API      HTTPS (sync + async)
+  Mollie → Backend          HTTPS webhook (public)
+  Backend → SMTP            SMTP/TLS:587
+  Backend → PostgreSQL      JDBC TCP:5432
+  Backend → S3              HTTPS
+
+  Security Zones
+  ──────────────────────────────
+  Green  = Client browser (untrusted)
+  Orange = Vercel CDN (frontend hosting)
+  Purple = AWS backend (trusted, secured)
+  Red    = External SaaS providers
+end legend
+
+@enduml

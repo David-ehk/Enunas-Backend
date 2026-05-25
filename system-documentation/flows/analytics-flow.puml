@@ -1,0 +1,137 @@
+@startuml analytics-flow
+!theme plain
+skinparam backgroundColor #FAFAFA
+skinparam sequenceArrowThickness 1.5
+title Enunas — Analytics Flow (Current State + Planned)
+
+actor Admin
+actor "Brand Partner" as Brand
+participant "Admin Dashboard\nAnalytics Tab" as Dashboard
+participant "AdminController\n/admin/**" as AC
+participant "CustomerService" as CS
+participant "ReconciliationService" as RS
+participant "LedgerService" as LS
+participant "ProductAnalytics\nRepository" as PAR
+database "PostgreSQL" as DB
+
+note over Dashboard
+  Current state (MVP):
+  - Analytics tab in admin dashboard: Phase 2 "Coming Soon"
+  - Customer spending analytics: implemented via AdminController
+  - Financial reconciliation: implemented
+  - Product analytics entity exists (ProductAnalytics) but no dedicated analytics API
+
+  Planned (Phase 2):
+  - Full analytics dashboard for admin
+  - Vendor analytics dashboard
+  - Revenue trends, product performance
+end note
+
+' ─── Customer Spending Analytics (IMPLEMENTED) ────────────────────
+
+group Customer Spending Analytics (Admin Only — Implemented)
+
+  Admin -> Dashboard : Opens Customers tab → Select customer → View analytics
+  Dashboard -> AC : GET /admin/customers/{id}/spending
+  AC -> CS : getCustomerBrandSpending(customerId)
+
+  CS -> DB : SELECT\n  order_items.brand_snapshot_name,\n  SUM(order_items.line_total) as totalSpent,\n  COUNT(DISTINCT orders.id) as orderCount\nFROM orders\nJOIN order_items ON orders.id = order_items.order_id\nWHERE orders.buyer_id = :customerId\n  AND orders.status IN ('PAID','SHIPPED','DELIVERED')\nGROUP BY brand_snapshot_name
+  DB --> CS : [ { brandName: "Oma Kulture", totalSpent: 389.00, orders: 2 }, ... ]
+  CS --> Admin : Brand spending breakdown per customer
+
+end
+
+' ─── Financial Reconciliation Analytics (IMPLEMENTED) ────────────
+
+group Financial Reconciliation — Drift Detection (Admin Only — Implemented)
+
+  Admin -> AC : GET /admin/reconciliation
+  AC -> RS : checkReconciliation()
+  RS -> DB : SELECT\n  brand_partner_id,\n  SUM(CASE WHEN status='PENDING_RELEASE' THEN brand_payout ELSE 0 END) AS expected_pending,\n  SUM(CASE WHEN status='AVAILABLE' THEN brand_payout ELSE 0 END) AS expected_available\nFROM ledger_entries\nGROUP BY brand_partner_id
+
+  RS -> DB : SELECT brand_partner_id, pending_balance, payout_balance\n  FROM brand_economics
+
+  RS -> RS : Compare expected (from ledger) vs actual (from brand_economics)
+  alt No drift
+    RS --> Admin : { all_brands: "OK" }
+  else Drift detected
+    RS --> Admin : { brandId: 42, expected: 1200.00, actual: 1180.00, drift: 20.00 }
+  end
+end
+
+' ─── Payout Dashboard Analytics (IMPLEMENTED) ────────────────────
+
+group Payout Dashboard — Financial Status (Admin Only — Implemented)
+
+  Admin -> AC : GET /admin/payouts/dashboard
+  AC -> CS : getPayoutDashboard()
+
+  CS -> DB : SELECT status, COUNT(*) as count, SUM(amount) as total\n  FROM payouts GROUP BY status
+  DB --> CS : [\n  { status: PENDING, count: 3, total: 2340.00 },\n  { status: APPROVED, count: 1, total: 890.00 },\n  { status: PAID, count: 12, total: 8420.00 }\n]
+
+  CS -> DB : SELECT brand_partner_id, outstanding_debt\n  FROM brand_economics WHERE outstanding_debt > 0
+  DB --> CS : Brands with negative balance (debt)
+
+  CS --> Admin : Dashboard { pending: {...}, approved: {...}, paid: {...}, debtAlerts: [...] }
+end
+
+' ─── Product Analytics Entity (EXISTS, NO API) ───────────────────
+
+note over PAR
+  ProductAnalytics entity exists in the codebase:
+  ─────────────────────────────────────────────────
+  product_analytics table:
+    - product_id (FK)
+    - view_count
+    - purchase_count
+    - revenue_generated
+    - last_purchased_at
+
+  Currently: entity is created with each product
+  (CASCADE from Product).
+
+  No API endpoint reads or writes ProductAnalytics data.
+  No service method populates view_count or purchase_count.
+
+  Implementation path for Phase 2:
+  1. Track view events on GET /products/{id}
+     → increment view_count
+  2. Track purchase events in OrderService.confirmPaymentByWebhook()
+     → increment purchase_count, revenue_generated
+  3. Expose via GET /admin/analytics/products
+  4. Expose via GET /brand/analytics/products (own products only)
+end note
+
+' ─── Customer Behavior Analytics (NOT IMPLEMENTED) ───────────────
+
+note over Dashboard
+  Phase 2 Analytics — NOT YET IMPLEMENTED:
+  ─────────────────────────────────────────────────
+  Admin Analytics Dashboard:
+    - Revenue trends (daily/weekly/monthly)
+    - Order volume by status
+    - Top-selling products and brands
+    - Customer acquisition funnel
+    - Return rate analysis
+    - Commission revenue tracking
+    - Geographic distribution
+
+  Brand Analytics Dashboard:
+    - Own product view/purchase counts
+    - Revenue over time
+    - Stock depletion rate
+    - Customer repeat purchase rate
+
+  Customer Profile Analytics:
+    - Purchase frequency
+    - Average order value
+    - Category preferences vs purchases
+
+  Required infrastructure additions:
+    - Analytics event log table OR
+    - Dedicated analytics service (e.g., Mixpanel, PostHog) OR
+    - SQL aggregation views on existing order/ledger tables
+  ─────────────────────────────────────────────────
+end note
+
+@enduml

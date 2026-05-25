@@ -1,0 +1,192 @@
+@startuml full-authentication-flow
+!theme plain
+skinparam backgroundColor #FAFAFA
+skinparam sequenceArrowThickness 1.5
+skinparam participantBackgroundColor #EEF3FF
+skinparam noteBackgroundColor #FFFDE7
+title Enunas — Full Authentication Flow (Frontend + Backend)
+
+actor "User\n(Browser)" as User
+participant "Next.js\nApp" as Next
+participant "AuthContext\n(React Context)" as AC
+participant "fetcher.ts\n(API Client)" as Fetcher
+participant "localStorage" as LS
+participant "JwtAuthentication\nFilter" as JF
+participant "AuthController\n/auth/login" as AuthCtrl
+participant "Authentication\nService" as AS
+participant "JwtService" as JS
+participant "UserRepository" as UR
+participant "BCrypt\nEncoder" as BCE
+database "PostgreSQL" as DB
+
+' ─── Phase 1: App Mount / Session Hydration ──────────────────────
+
+note over User, DB
+  Phase 1: App Mount — Hydrating session from stored token
+end note
+
+User -> Next : Opens browser tab
+Next -> AC : App mounts → AuthContext.useEffect()
+AC -> LS : getToken() → localStorage["enunas_token"]
+
+alt Token found in localStorage
+  AC -> Fetcher : GET /users/me\n[auth: true]
+  Fetcher -> LS : Read "enunas_token"
+  LS --> Fetcher : JWT token
+  Fetcher -> JF : GET /users/me\nAuthorization: Bearer <token>
+
+  JF -> JF : Extract "Bearer <token>"
+  JF -> JS : extractUsername(token) → email
+  JS --> JF : email
+  JF -> UR : findByEmail(email)
+  UR -> DB : SELECT * FROM users WHERE email = ?
+  DB --> UR : User record
+  UR --> JF : UserDetails
+  JF -> JS : isTokenValid(token, userDetails)
+
+  alt JWT valid (signature OK + not expired)
+    JS --> JF : true
+    JF -> JF : Set SecurityContext\n(ROLE_CUSTOMER / ROLE_BRAND_PARTNER / ROLE_ADMIN)
+    JF --> Fetcher : Forward to controller
+    Fetcher --> AC : ApiUser { id, email, role }
+    AC -> AC : setUser(ApiUser)\nisAuthenticated = true
+
+    alt user.role === CUSTOMER
+      AC -> Fetcher : GET /customers/me [auth: true]
+      Fetcher --> AC : ApiCustomer { profile, preferences }
+      AC -> AC : setCustomer(ApiCustomer)
+    else BRAND_PARTNER or ADMIN
+      AC -> AC : customer = null
+    end
+
+    AC -> AC : isLoading = false
+
+  else JWT invalid or expired
+    JS --> JF : false
+    JF --> Fetcher : 401 Unauthorized
+    Fetcher -> Fetcher : onUnauthorized() fires
+    Fetcher -> LS : removeItem("enunas_token")
+    Fetcher --> AC : FetchError(401)
+    AC -> AC : setUser(null)\nsetCustomer(null)\nisAuthenticated = false\nisLoading = false
+  end
+
+else No token in localStorage
+  AC -> AC : user = null\ncustomer = null\nisLoading = false\nisAuthenticated = false
+end
+
+' ─── Phase 2: Login ──────────────────────────────────────────────
+
+note over User, DB
+  Phase 2: User Login
+end note
+
+User -> Next : Submit login form\n(email + password)
+Next -> Fetcher : authApi.login(email, password)\nPOST /auth/login [auth: false]
+Fetcher -> AuthCtrl : POST /auth/login\n{ email, password }
+
+note over AuthCtrl : No JWT validation\n(public endpoint)
+
+AuthCtrl -> AS : login(LoginUserDto)
+AS -> UR : findByEmail(email)
+UR -> DB : SELECT * FROM users WHERE email = ?
+DB --> UR : User
+UR --> AS : User
+
+AS -> BCE : matches(rawPassword, user.password)
+BCE --> AS : boolean
+
+alt Wrong credentials
+  AS --> AuthCtrl : BadCredentialsException
+  AuthCtrl --> Fetcher : 401 Unauthorized
+  Fetcher --> Next : FetchError(401, "Invalid credentials")
+  Next -> User : Show error message
+
+else Correct credentials
+  AS -> AS : Check User.enabled\n(brand: email verified?)
+  alt Not enabled
+    AS --> AuthCtrl : IllegalStateException\n"Account not verified"
+    AuthCtrl --> Fetcher : 409 Conflict
+    Fetcher --> Next : FetchError(409)
+    Next -> User : "Bitte E-Mail verifizieren"
+  end
+
+  AS -> AS : Check User.adminApproved\n(brand + admin only)
+  alt Not admin-approved
+    AS --> AuthCtrl : IllegalStateException\n"Pending admin approval"
+    AuthCtrl --> Fetcher : 409 Conflict
+    Fetcher --> Next : FetchError(409)
+    Next -> User : "Warte auf Admin-Freigabe"
+  end
+
+  AS -> JS : generateToken(user)
+  JS -> JS : Build JWT:\n  sub=email\n  role=user.role\n  iat=now\n  exp=now+86400000ms\n  Sign with HMAC-SHA256(JWT_SECRET)
+  JS --> AS : signedToken
+
+  AS --> AuthCtrl : LoginResponseDto { token, expiresIn }
+  AuthCtrl --> Fetcher : 200 OK { token, expiresIn }
+  Fetcher -> LS : setItem("enunas_token", token)
+  Fetcher --> Next : LoginResponse
+
+  Next -> AC : refreshUser()
+  AC -> Fetcher : GET /users/me [auth: true]
+  Fetcher --> AC : ApiUser { id, email, role }
+  AC -> AC : setUser(ApiUser)
+
+  alt role === ADMIN
+    Next -> Next : router.replace('/dashboard/admin')
+    Next -> Next : Check: user.role !== ADMIN?\n→ redirect to /dashboard/login
+  else role === BRAND_PARTNER
+    Next -> Next : router.replace('/dashboard/vendor')
+  else role === CUSTOMER
+    Next -> Next : router.replace('/') or origin URL
+  end
+
+  Next -> User : Dashboard / Homepage
+end
+
+' ─── Phase 3: Subsequent Authenticated Request ───────────────────
+
+note over User, DB
+  Phase 3: Every subsequent API request (authenticated)
+end note
+
+User -> Next : Navigate to protected page
+Next -> Fetcher : Any API call [auth: true]
+Fetcher -> LS : getItem("enunas_token")
+LS --> Fetcher : JWT token
+Fetcher -> JF : HTTP Request\nAuthorization: Bearer <token>
+JF -> JS : isTokenValid(token, userDetails)
+JS --> JF : true / false
+
+alt Token valid
+  JF -> JF : Set SecurityContext
+  JF --> AuthCtrl : Request continues to appropriate controller
+  note right : Route + method guards checked\nOwnership check in service layer
+else Token expired
+  JF --> Fetcher : 401 Unauthorized
+  Fetcher -> Fetcher : onUnauthorized() fires
+  AC -> AC : clearToken()\nsetUser(null)\nsetCustomer(null)
+  Next -> User : Redirect to login
+end
+
+' ─── Phase 4: Logout ─────────────────────────────────────────────
+
+note over User, DB
+  Phase 4: Logout
+end note
+
+User -> Next : Click "Abmelden"
+Next -> AC : logout()
+AC -> LS : removeItem("enunas_token")
+AC -> AC : setUser(null)\nsetCustomer(null)\nisAuthenticated = false
+Next -> Next : router.replace('/dashboard/login')\nOR router.replace('/')
+Next -> User : Unauthenticated state
+
+note over User, DB
+  No server-side session invalidation needed.
+  JWT is stateless — expiry is the only invalidation mechanism.
+  If token was leaked, it remains valid until exp.
+  (httpOnly cookie migration would enable server-side revocation)
+end note
+
+@enduml

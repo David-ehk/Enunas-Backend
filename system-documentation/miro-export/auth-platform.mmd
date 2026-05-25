@@ -1,0 +1,113 @@
+---
+title: Enunas — Authentication Platform (Full Cross-System Flow)
+---
+flowchart TD
+    subgraph BROWSER["Browser (Client)"]
+        direction TB
+        LS[("localStorage\n['enunas_token']")]
+        AC["AuthContext\n(React Context)"]
+        FT["fetcher.ts\n(HTTP client)"]
+    end
+
+    subgraph FRONTEND["Vercel — Next.js Frontend"]
+        direction TB
+        LP["LoginPage\n/login"]
+        RP["RegisterPage\n/register"]
+        DP["DashboardPage\n/dashboard/*"]
+        RG["Route Guard\n(client-side, UX only)"]
+        AUTH_API["authApi.ts\n.login() / .register()"]
+    end
+
+    subgraph BACKEND["AWS — Spring Boot Backend"]
+        direction TB
+        SF["Spring Security\nJWT Filter\n(all requests)"]
+        AC_CTRL["AuthController\nPOST /auth/login\nPOST /auth/register\nPOST /auth/verify\nGET /users/me"]
+        AUTH_SVC["AuthenticationService"]
+        JWT_SVC["JwtService\nHMAC-SHA256 / HS256\n24h TTL"]
+        USER_REPO["UserRepository"]
+        EMAIL_SVC["EmailService\n(SMTP)"]
+        CUST_SVC["CustomerService\n(auto-create on register)"]
+    end
+
+    subgraph DB["PostgreSQL"]
+        USERS[("users table")]
+        CUSTOMERS[("customers table")]
+    end
+
+    subgraph SMTP_EXT["External — Gmail SMTP"]
+        SMTP["smtp.gmail.com:587\n(STARTTLS)"]
+    end
+
+    %% ── App Mount / Hydration ──────────────────────────────────
+    AC -->|"GET /users/me\n[Bearer token]"| FT
+    FT -->|"HTTP request"| SF
+    SF -->|"JWT valid → AUTHENTICATED"| AC_CTRL
+    AC_CTRL -->|"{ id, email, role }"| FT
+    FT -->|"ApiUser"| AC
+    AC -->|"setUser()"| LS
+
+    %% ── Login Flow ────────────────────────────────────────────
+    LP -->|"submit credentials"| AUTH_API
+    AUTH_API -->|"POST /auth/login\n{ email, password }"| FT
+    FT -->|"no auth header"| SF
+    SF -->|"public endpoint → pass"| AC_CTRL
+    AC_CTRL -->|"login()"| AUTH_SVC
+    AUTH_SVC -->|"findByEmail()"| USER_REPO
+    USER_REPO -->|"SQL SELECT"| USERS
+    USERS -->|"User entity"| USER_REPO
+    USER_REPO -->|"User"| AUTH_SVC
+    AUTH_SVC -->|"BCrypt.matches()"| AUTH_SVC
+    AUTH_SVC -->|"generateToken(userId, email, role)"| JWT_SVC
+    JWT_SVC -->|"JWT string"| AUTH_SVC
+    AUTH_SVC -->|"{ token, user }"| AC_CTRL
+    AC_CTRL -->|"200 { token, role, ... }"| FT
+    FT -->|"{ token }"| AUTH_API
+    AUTH_API -->|"store token"| LS
+    AUTH_API -->|"setUser()"| AC
+    AC -->|"role check → redirect"| DP
+
+    %% ── Registration Flow ─────────────────────────────────────
+    RP -->|"submit form"| AUTH_API
+    AUTH_API -->|"POST /auth/register\n{ email, password, role }"| FT
+    FT -->|"HTTP POST"| SF
+    SF -->|"public endpoint → pass"| AC_CTRL
+    AC_CTRL -->|"register()"| AUTH_SVC
+    AUTH_SVC -->|"BCrypt hash + 6-digit code"| AUTH_SVC
+    AUTH_SVC -->|"save(user)"| USER_REPO
+    USER_REPO -->|"INSERT"| USERS
+    AUTH_SVC -->|"createForUser()"| CUST_SVC
+    CUST_SVC -->|"INSERT"| CUSTOMERS
+    AUTH_SVC -->|"sendVerificationEmail()"| EMAIL_SVC
+    EMAIL_SVC -->|"SMTP/TLS:587"| SMTP
+    AC_CTRL -->|"201 Created"| FT
+
+    %% ── JWT Validation (every protected request) ──────────────
+    FT -->|"Authorization: Bearer JWT"| SF
+    SF -->|"extractUserId()"| JWT_SVC
+    JWT_SVC -->|"HMAC verify + exp check"| JWT_SVC
+    SF -->|"loadUserById()"| USER_REPO
+    USER_REPO -->|"User entity"| SF
+    SF -->|"setAuthentication()"| SF
+
+    %% ── 401 Auto-Logout ───────────────────────────────────────
+    SF -->|"exp in past → 401"| FT
+    FT -->|"onUnauthorized()"| AC
+    AC -->|"clearToken()\nsetUser(null)"| LS
+
+    %% ── Route Guard ───────────────────────────────────────────
+    DP -->|"useAuth() → role check"| RG
+    RG -->|"wrong role → redirect /login"| LP
+
+    %% ── Styles ────────────────────────────────────────────────
+    classDef browser fill:#E8F5E9,stroke:#2E7D32,color:#000
+    classDef frontend fill:#E3F2FD,stroke:#1565C0,color:#000
+    classDef backend fill:#EDE7F6,stroke:#4527A0,color:#000
+    classDef db fill:#FFF8E1,stroke:#F57F17,color:#000
+    classDef external fill:#FCE4EC,stroke:#880E4F,color:#000
+    classDef storage fill:#F3E5F5,stroke:#6A1B9A,color:#000
+
+    class LS,AC,FT browser
+    class LP,RP,DP,RG,AUTH_API frontend
+    class SF,AC_CTRL,AUTH_SVC,JWT_SVC,USER_REPO,EMAIL_SVC,CUST_SVC backend
+    class USERS,CUSTOMERS db
+    class SMTP external

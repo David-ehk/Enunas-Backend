@@ -1,0 +1,124 @@
+@startuml service-communication
+!theme plain
+skinparam backgroundColor #FAFAFA
+skinparam componentBackgroundColor #EEF3FF
+skinparam componentBorderColor #370E4D
+title Enunas — Service Communication Map
+
+' ─── Service Layer Dependencies ──────────────────────────────────
+package "Service Layer" {
+  [AuthenticationService] as AuthSvc
+  [JwtService] as JwtSvc
+  [UserService] as UserSvc
+  [BrandPartnerService] as BrandSvc
+  [ProductService] as ProdSvc
+  [ProductListingService] as ListSvc
+  [OrderService] as OrdSvc
+  [CustomerService] as CustSvc
+  [WardrobeService] as WardSvc
+  [LedgerService] as LedgSvc
+  [PayoutService] as PayoutSvc
+  [AdminService] as AdminSvc
+  [EmailService] as EmailSvc
+  [ReconciliationService] as ReconcSvc
+  [MediaService] as MediaSvc
+}
+
+package "Payment Abstraction" {
+  interface "PaymentProvider" as PP
+  [MolliePaymentService] as MollieSvc
+  [MockPaymentService] as MockSvc
+}
+
+package "External Systems" {
+  [Mollie API] as MollieAPI
+  [SMTP Server] as SMTP
+}
+
+package "Repository Layer" {
+  [UserRepository] as UserRepo
+  [BrandPartnerRepository] as BrandRepo
+  [ProductRepository] as ProdRepo
+  [OrderRepository] as OrdRepo
+  [LedgerRepository] as LedgRepo
+  [PayoutRepository] as PayoutRepo
+  [CustomerRepository] as CustRepo
+  [ProductListingRepository] as ListRepo
+  [ProductVariantRepository] as VarRepo
+  [BrandEconomicsRepository] as EcoRepo
+  [BrandShippingProfileRepository] as ShipRepo
+}
+
+' ─── AuthenticationService dependencies ─────────────────────────
+AuthSvc --> JwtSvc : generateToken()\n isTokenValid()
+AuthSvc --> UserRepo : findByEmail()\n save(user)
+AuthSvc --> CustSvc : createForUser()\n(on signup)
+AuthSvc --> EmailSvc : sendWelcomeEmail()\n sendVerificationEmail()
+
+' ─── UserService dependencies ────────────────────────────────────
+UserSvc --> UserRepo : findByEmail()\n findAll()
+
+' ─── BrandPartnerService dependencies ───────────────────────────
+BrandSvc --> BrandRepo : findByUser()\n save()
+BrandSvc --> UserRepo : findByEmail()
+BrandSvc --> EmailSvc : sendVerificationEmail()\n sendPendingApprovalEmail()\n sendAccountApprovedEmail()
+
+' ─── ProductService dependencies ────────────────────────────────
+ProdSvc --> ProdRepo : findById()\n save()\n delete()
+ProdSvc --> VarRepo : generateUniqueSku()
+ProdSvc --> ListRepo : findLowestActivePriceByProductId()
+
+' ─── ProductListingService dependencies ─────────────────────────
+ListSvc --> ListRepo : findById()\n save()\n delete()
+ListSvc --> VarRepo : findById()
+
+' ─── OrderService dependencies ──────────────────────────────────
+OrdSvc --> OrdRepo : findById()\n save()\n findByBuyer()\n findByBrandPartnerCreatorId()
+OrdSvc --> ListRepo : findById()\n (listing validation)
+OrdSvc --> VarRepo : decrementStock()\n restoreStock()
+OrdSvc --> EcoRepo : findByBrandPartner_Id()
+OrdSvc --> ShipRepo : findByBrandPartner_Id()
+OrdSvc --> PP : createPayment()\n refundPayment()
+OrdSvc --> LedgSvc : recordOrderPayment()\n recordRefund()
+OrdSvc --> EmailSvc : Shipment + cancellation emails
+
+' ─── LedgerService dependencies ─────────────────────────────────
+LedgSvc --> LedgRepo : existsByOrderIdAndEntryType()\n save()\n findByBrandPartnerId()
+LedgSvc --> EcoRepo : update pendingBalance\n update payoutBalance\n update outstandingDebt
+
+' ─── PayoutService dependencies ─────────────────────────────────
+PayoutSvc --> PayoutRepo : save()\n findById()\n findAll()
+PayoutSvc --> EcoRepo : findAllWithPayoutBalance()
+PayoutSvc --> BrandRepo : findById() (for IBAN)
+PayoutSvc --> LedgSvc : recordPayoutTransfer()
+
+' ─── AdminService dependencies ──────────────────────────────────
+AdminSvc --> BrandSvc : approveBrand()\n rejectBrand()\n suspendBrand()
+AdminSvc --> ProdSvc : approveProduct()\n rejectProduct()\n hideProduct()
+AdminSvc --> OrdSvc : cancelOrder()\n approveReturn()\n receiveReturn()\n processRefund()
+AdminSvc --> PayoutSvc : generatePayouts()\n approvePayout()\n markPaid()
+AdminSvc --> CustSvc : listAllCustomers()\n getCustomerSpending()
+AdminSvc --> ReconcSvc : checkReconciliation()
+AdminSvc --> EmailSvc : sendAccountApprovedEmail()
+
+' ─── ReconciliationService dependencies ─────────────────────────
+ReconcSvc --> LedgRepo : sum by brand and status
+ReconcSvc --> EcoRepo : read and rebuild balances
+
+' ─── CustomerService dependencies ───────────────────────────────
+CustSvc --> CustRepo : findByUser()\n save()
+CustSvc --> UserRepo : findById()
+
+' ─── WardrobeService dependencies ───────────────────────────────
+WardSvc --> [WardrobeRepository] : findByUser()\n save()\n delete()
+
+' ─── Payment abstraction ─────────────────────────────────────────
+PP <|.. MollieSvc : implements (production)
+PP <|.. MockSvc : implements (mock-payments profile)
+MollieSvc --> MollieAPI : HTTPS /v2/payments
+MockSvc --> MockSvc : local simulation
+
+' ─── Email ───────────────────────────────────────────────────────
+EmailSvc --> SMTP : JavaMailSender\nSMTP/TLS:587
+
+@enduml

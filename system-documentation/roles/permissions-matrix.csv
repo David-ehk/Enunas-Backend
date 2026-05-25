@@ -1,0 +1,76 @@
+Category,Resource,Action,Endpoint,Public,CUSTOMER,BRAND_PARTNER,ADMIN,Ownership Check,Notes
+Auth,User,Register as customer,POST /auth/signup,Yes,Yes,Yes,No,None,Always creates CUSTOMER role
+Auth,User,Login,POST /auth/login,Yes,Yes,Yes,Yes,None,Brand requires email verified + admin approved
+Auth,User,Get own profile,GET /users/me,No,Yes,Yes,Yes,Self,Any authenticated user
+Auth,User,List all users,GET /users,No,No,No,Yes,None,Admin only
+Brand,BrandPartner,Apply for brand,POST /brandpartner/apply,Yes,Yes,Yes,No,None,Public — pre-account
+Brand,BrandPartner,Verify email,POST /brandpartner/verify,Yes,Yes,Yes,No,None,Public — pre-login
+Brand,BrandPartner,Resend verification,POST /brandpartner/resend-verification,Yes,Yes,Yes,No,None,Public — pre-login
+Brand,BrandPartner,View own brand profile,GET /brandpartner/me,No,No,Yes,No,Loaded from auth user,
+Brand,BrandPartner,Update own brand profile,PATCH /brandpartner/me,No,No,Yes,No,Loaded from auth user,description/logo/social only
+Brand,BrandPartner,View any brand by ID,GET /brandpartner/{id},No,Yes,Yes,Yes,None,Public brand profile
+Admin Brand,BrandPartner,Approve brand,PATCH /admin/brands/{id}/approve,No,No,No,Yes,None,Sets status=ACTIVE + adminApproved=true
+Admin Brand,BrandPartner,Reject brand,PATCH /admin/brands/{id}/reject,No,No,No,Yes,None,Sets status=REJECTED
+Admin Brand,BrandPartner,Suspend brand,PATCH /admin/brands/{id}/suspend,No,No,No,Yes,None,Sets status=SUSPENDED
+Admin Brand,BrandPartner,List all brands,GET /admin/brands,No,No,No,Yes,None,Pageable
+Admin Brand,BrandPartner,Set payout profile,PATCH /admin/brands/{id}/payout-profile,No,No,No,Yes,None,Admin manages IBAN — fraud prevention
+Product,Product,Create product,POST /products/create,No,No,Yes,No,creator set to user,status=ACTIVE on creation
+Product,Product,View product by ID,GET /products/{id},No,Yes,Yes,Yes,None,Any authenticated user
+Product,Product,View product by SKU,GET /products/sku/{sku},No,Yes,Yes,Yes,None,8-char color-level SKU
+Product,Product,List active products,GET /products,No,Yes,Yes,Yes,None,Pageable — ACTIVE status only
+Product,Product,Search products,GET /products/search,No,Yes,Yes,Yes,None,Keyword search: name/brand/description
+Product,Product,Filter by category,GET /products/category/{cat},No,Yes,Yes,Yes,None,CLOTHING/SHOES/ACCESSORIES/PERFUME
+Product,Product,View own products,GET /products/my,No,No,Yes,No,Filtered to creator,Returns all statuses for own products
+Product,Product,Update own product,PUT /products/update/{id},No,No,Yes,No,product.creator.id == user.id,Ownership enforced in service
+Product,Product,Delete own product,DELETE /products/delete/{id},No,No,Yes,No,product.creator.id == user.id,Hard delete with cascade
+Admin Product,Product,List all products,GET /admin/products,No,No,No,Yes,None,All statuses visible
+Admin Product,Product,Update any product,PUT /admin/products/{id},No,No,No,Yes,None (platform authority),Content correction
+Admin Product,Product,Delete any product,DELETE /admin/products/{id},No,No,No,Yes,None,Hard delete — irreversible
+Admin Product,Product,Approve product,PATCH /admin/products/{id}/approve,No,No,No,Yes,None,status=ACTIVE; records moderatedBy/At
+Admin Product,Product,Reject product,PATCH /admin/products/{id}/reject,No,No,No,Yes,None,status=REJECTED; stores rejectionReason
+Admin Product,Product,Hide product,PATCH /admin/products/{id}/hide,No,No,No,Yes,None,status=SUSPENDED; reversible
+Listing,ProductListing,Create listing,POST /listings,No,No,Yes,No,Product ownership via variant,Sets price/discount/availability
+Listing,ProductListing,Update listing,PUT /listings/{id},No,No,Yes,No,Listing ownership,Brand only
+Listing,ProductListing,Delete listing,DELETE /listings/{id},No,No,Yes,No,Listing ownership,Brand only
+Listing,ProductListing,View listing,GET /listings/{id},No,Yes,Yes,Yes,None,Any authenticated user
+Media,ProductImage,Upload image,POST /media/products/{id}/images,No,No,Yes,No,Product ownership,primary flag + display order
+Media,ProductImage,View images,GET /media/products/{id}/images,No,Yes,Yes,Yes,None,Any authenticated user
+Media,ProductVideo,Upload video,POST /media/products/{id}/videos,No,No,Yes,No,Product ownership,title + thumbnail
+Media,ProductVideo,View videos,GET /media/products/{id}/videos,No,Yes,Yes,Yes,None,Any authenticated user
+Order,Order,Create order,POST /orders,No,Yes,No,No,buyer set to user,Returns checkoutUrl
+Order,Order,List own orders,GET /orders/me,No,Yes,No,No,Filtered to buyer,Pageable sorted by createdAt desc
+Order,Order,View own order by ID,GET /orders/{id},No,Yes,No,No,order.buyer.id == user.id,Ownership check in service
+Order,Order,Request return,POST /orders/{id}/return,No,Yes,No,No,order.buyer.id == user.id,Order must be DELIVERED
+Brand Order,Order,List brand orders,GET /brand/orders,No,No,Yes,No,Filtered to brand creator ID,Pageable
+Brand Order,Order,Confirm shipment,PATCH /brand/orders/{id}/shipment,No,No,Yes,No,Brand item ownership,PAID → SHIPPED
+Brand Order,Order,Report shipping problem,POST /brand/orders/{id}/shipping-problem,No,No,Yes,No,Brand item ownership,PAID → SHIPPING_PROBLEM
+Admin Order,Order,List all orders,GET /admin/orders,No,No,No,Yes,None,All orders pageable
+Admin Order,Order,Filter by status,GET /admin/orders?status=X,No,No,No,Yes,None,Status filter
+Admin Order,Order,Update order status,PATCH /admin/orders/{id}/status,No,No,No,Yes,None,State machine validation
+Admin Order,Order,Cancel PENDING order,POST /admin/orders/{id}/cancel,No,No,No,Yes,None,PENDING only; sends email
+Admin Order,Order,Approve return,POST /admin/orders/{id}/return/approve,No,No,No,Yes,None,RETURN_REQUESTED → RETURN_APPROVED
+Admin Order,Order,Confirm return received,POST /admin/orders/{id}/return/receive,No,No,No,Yes,None,RETURN_APPROVED → RETURN_RECEIVED; restores stock
+Admin Order,Order,Process refund,POST /admin/orders/{id}/return/refund,No,No,No,Yes,None,RETURN_RECEIVED → REFUNDED; Mollie refund + ledger reversal
+Customer,Customer,View own profile,GET /customer/me,No,Yes,No,No,Profile loaded from user,
+Customer,Customer,Update own profile,PATCH /customer/me,No,Yes,No,No,Profile loaded from user,Partial update
+Admin Customer,Customer,List all customers,GET /admin/customers,No,No,No,Yes,None,Pageable
+Admin Customer,Customer,View customer by ID,GET /admin/customers/{id},No,No,No,Yes,None,Full profile
+Admin Customer,Customer,Update customer,PATCH /admin/customers/{id},No,No,No,Yes,None,Admin data correction
+Admin Customer,Customer,Brand spending analytics,GET /admin/customers/{id}/spending,No,No,No,Yes,None,Analytics query
+Wardrobe,WardrobeItem,Create wardrobe item,POST /wardrobe,No,Yes,No,No,User set to authenticated,isPublic=false by default
+Wardrobe,WardrobeItem,List own wardrobe,GET /wardrobe,No,Yes,No,No,Filtered to user,
+Wardrobe,WardrobeItem,Update wardrobe item,PATCH /wardrobe/{id},No,Yes,No,No,item.user.id == user.id,
+Wardrobe,WardrobeItem,Delete wardrobe item,DELETE /wardrobe/{id},No,Yes,No,No,item.user.id == user.id,
+Payout,Payout,Generate payouts,POST /admin/payouts/generate,No,No,No,Yes,None,Creates Payout records for eligible brands
+Payout,Payout,List payouts,GET /admin/payouts,No,No,No,Yes,None,Pageable + status filter
+Payout,Payout,View payout by ID,GET /admin/payouts/{id},No,No,No,Yes,None,
+Payout,Payout,Approve payout,PATCH /admin/payouts/{id}/approve,No,No,No,Yes,None,PENDING → APPROVED
+Payout,Payout,Mark payout paid,POST /admin/payouts/{id}/mark-paid,No,No,No,Yes,None,APPROVED → PAID; records PAYOUT_TRANSFER ledger entry
+Payout,Payout,Cancel payout,PATCH /admin/payouts/{id}/cancel,No,No,No,Yes,None,Any pre-PAID state
+Payout,Payout,Payout dashboard,GET /admin/payouts/dashboard,No,No,No,Yes,None,Counts + amounts by status
+Reconciliation,LedgerEntry,Check all brands,GET /admin/reconciliation,No,No,No,Yes,None,Drift detection
+Reconciliation,LedgerEntry,Check single brand,GET /admin/reconciliation/brand/{id},No,No,No,Yes,None,Single brand drift
+Reconciliation,BrandEconomics,Rebuild economics,POST /admin/reconciliation/rebuild/{id},No,No,No,Yes,None,Non-destructive repair from ledger
+Webhook,Payment,Mollie webhook,POST /webhooks/mollie,Yes,No,No,No,Idempotency guard,Mollie server-to-server; no JWT
+Webhook,Payment,Mock payment webhook,POST /webhooks/mock/payment,Yes,No,No,No,None,Test only — mock-payments profile
+Webhook,Payment,Mock refund webhook,POST /webhooks/mock/refund,Yes,No,No,No,None,Test only — mock-payments profile

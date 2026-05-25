@@ -1,0 +1,237 @@
+@startuml admin-management-flow
+!theme plain
+skinparam backgroundColor #FAFAFA
+skinparam sequenceArrowThickness 1.5
+title Enunas — Admin Management Flows
+
+actor Admin
+participant "Admin Dashboard\n/dashboard/admin" as Dashboard
+participant "adminApi.ts" as AdminAPI
+participant "AdminController\n/admin/**" as AC
+participant "AdminService" as ADS
+participant "OrderService" as OS
+participant "PayoutService" as PS
+participant "LedgerService" as LS
+participant "ReconciliationService" as RS
+participant "EmailService" as ES
+participant "PaymentProvider\n(Mollie)" as PP
+database "PostgreSQL" as DB
+
+note over Dashboard
+  Admin dashboard is a SPA (no page reloads).
+  Route guard: user.role !== 'ADMIN' → /dashboard/login
+  All API calls: Authorization: Bearer ADMIN JWT
+  All AdminService methods: @PreAuthorize("hasRole('ADMIN')")
+end note
+
+' ─── Brand Management ────────────────────────────────────────────
+
+group Brand Management (Brands Tab)
+
+  Admin -> Dashboard : Open Brands tab
+  Dashboard -> AdminAPI : adminApi.brands.getAll()
+  AdminAPI -> AC : GET /admin/brands?page=0
+  AC -> ADS : listAllBrands(pageable)
+  ADS -> DB : SELECT * FROM brand_partners ORDER BY created_at DESC
+  DB --> ADS : Page<BrandPartner>
+  ADS --> Admin : Brand list with status badges
+
+  alt Approve Brand
+    Admin -> AC : PATCH /admin/brands/{id}/approve
+    AC -> ADS : approveBrand(brandId)
+    ADS -> DB : UPDATE brand_partners SET status=ACTIVE, approved=true
+    ADS -> DB : UPDATE users SET admin_approved=true WHERE id=brandUser.id
+    ADS -> ES : sendAccountApprovedEmail(brand.contactEmail)
+    ES -> Admin : Brand can now log in
+  end
+
+  alt Reject Brand
+    Admin -> AC : PATCH /admin/brands/{id}/reject
+    AC -> ADS : rejectBrand(brandId)
+    ADS -> DB : UPDATE brand_partners SET status=REJECTED
+    note right : No email sent.\nbrand.adminApproved stays false → cannot log in.
+  end
+
+  alt Suspend Brand
+    Admin -> AC : PATCH /admin/brands/{id}/suspend
+    AC -> ADS : suspendBrand(brandId)
+    ADS -> DB : UPDATE brand_partners SET status=SUSPENDED
+    note right : Brand login blocked.\nExisting products/orders unaffected.\nNo cascade delete.
+  end
+
+  alt Set Payout Profile
+    Admin -> AC : PATCH /admin/brands/{id}/payout-profile\n{ iban, bankAccountHolder }
+    AC -> ADS : setBrandPayoutProfile(brandId, dto)
+    ADS -> DB : INSERT/UPDATE brand_payout_profiles\n  (brand_partner_id, iban, bank_account_holder)
+    note right : Admin manages IBAN — fraud prevention.\nBrand cannot set own banking details.
+  end
+end
+
+' ─── Product Moderation ──────────────────────────────────────────
+
+group Product Moderation (Products Tab)
+
+  Admin -> Dashboard : Open Products tab → Moderation queue
+  Dashboard -> AdminAPI : adminApi.products.getAll()
+  AdminAPI -> AC : GET /admin/products?page=0
+  AC -> ADS : listAllProducts(pageable)
+  ADS -> DB : SELECT * FROM products (ALL statuses)
+  DB --> Dashboard : Products list including ACTIVE, REJECTED, SUSPENDED
+
+  alt Approve Product
+    Admin -> AC : PATCH /admin/products/{id}/approve
+    AC -> ADS : approveProduct(productId, adminUser)
+    ADS -> DB : UPDATE products SET\n  status=ACTIVE,\n  rejection_reason=NULL,\n  moderated_by_id=admin.id,\n  moderated_at=now()
+    note right : Product visible in customer catalog.
+  end
+
+  alt Reject Product
+    Admin -> AC : PATCH /admin/products/{id}/reject\n{ reason: "..." }
+    AC -> ADS : rejectProduct(productId, dto, adminUser)
+    ADS -> DB : UPDATE products SET\n  status=REJECTED,\n  rejection_reason=dto.reason,\n  moderated_by_id=admin.id,\n  moderated_at=now()
+    note right : Product hidden from catalog.\nRejection reason stored for brand visibility.
+  end
+
+  alt Hide Product
+    Admin -> AC : PATCH /admin/products/{id}/hide
+    AC -> ADS : hideProduct(productId, adminUser)
+    ADS -> DB : UPDATE products SET status=SUSPENDED
+    note right : Temporary removal. Reversible via approve.
+  end
+
+  alt Hard Delete Product
+    Admin -> AC : DELETE /admin/products/{id}
+    AC -> ADS : deleteProduct(productId)
+    ADS -> DB : DELETE FROM products WHERE id=?\n  CASCADE: colors, variants, images, videos
+    note right : IRREVERSIBLE. Use only on products\nwith NO associated orders.\nOrderItem.variant_id FK will dangle.
+  end
+end
+
+' ─── Order Management ────────────────────────────────────────────
+
+group Order Management (Orders Tab)
+
+  Admin -> Dashboard : Open Orders tab
+  Dashboard -> AdminAPI : adminApi.orders.getAll(statusFilter)
+  AdminAPI -> AC : GET /admin/orders?status=PAID
+  AC -> OS : listAllOrders(status, pageable)
+  OS -> DB : SELECT * FROM orders WHERE status = ? (pageable)
+  DB --> Dashboard : All orders across all customers
+
+  alt Cancel PENDING Order
+    Admin -> AC : POST /admin/orders/{id}/cancel\n{ reason, note }
+    AC -> OS : cancelOrder(orderId, dto, admin)
+    OS -> DB : UPDATE orders SET\n  status=CANCELLED,\n  cancellation_reason=dto.reason,\n  cancellation_note=dto.note,\n  cancelled_by_admin_email=admin.email
+    OS -> ES : sendCancellationEmail(customer.email, reason)
+    note right : Only PENDING orders (stock was never decremented).\nNo Mollie refund needed.
+  end
+
+  alt Force Status Update
+    Admin -> AC : PATCH /admin/orders/{id}/status\n{ newStatus }
+    AC -> OS : updateOrderStatus(orderId, newStatus)
+    OS -> OS : Validate state machine transition
+    alt PENDING → PAID (admin forces)
+      OS -> OS : decrementStock() [same as webhook flow]
+      OS -> LS : recordOrderPayment(order)
+    end
+    alt Any status → CANCELLED (post-PAID)
+      OS -> OS : restoreStock()
+      note right : Manual Mollie refund required —\nno auto-refund via admin status override.
+    end
+    OS -> DB : UPDATE orders SET status=newStatus
+  end
+end
+
+' ─── Return & Refund Management ──────────────────────────────────
+
+group Return & Refund Management (Returns Tab)
+
+  Admin -> Dashboard : Open Returns tab
+  Dashboard -> AdminAPI : adminApi.orders.getAll({status: RETURN_REQUESTED})
+  DB --> Dashboard : Orders with return requests
+
+  Admin -> AC : POST /admin/orders/{id}/return/approve
+  AC -> OS : approveReturn(orderId)
+  OS -> DB : UPDATE return_orders SET\n  status=RETURN_APPROVED,\n  approved_at=now(),\n  return_label="pending"
+  OS -> DB : UPDATE orders SET status=RETURN_APPROVED
+
+  Admin -> AC : POST /admin/orders/{id}/return/receive
+  AC -> OS : receiveReturn(orderId)
+  loop for each ReturnItem
+    OS -> DB : UPDATE product_variants\n  SET stock_quantity = stock_quantity + qty\n  WHERE id = ? [atomic SQL]
+  end
+  OS -> DB : UPDATE return_orders SET status=RETURN_RECEIVED, received_at=now()
+  OS -> DB : UPDATE orders SET status=RETURN_RECEIVED
+
+  Admin -> AC : POST /admin/orders/{id}/return/refund\n{ refundAmount: 89.99 }
+  AC -> OS : processRefund(orderId, refundAmount)
+  OS -> PP : refundPayment(transactionId, refundAmount)
+  PP -> PP : POST /v2/payments/tr_xxx/refunds [Mollie API]
+  PP --> OS : refundId = "re_yyy"
+  OS -> LS : recordRefund(order, refundAmount, "re_yyy")
+  loop for each brand in order
+    LS -> LS : Compute pro-rated brand refund:\n  brandRefund = refundAmount × (brandTotal / orderTotal)
+    LS -> DB : INSERT ledger_entries (\n  entry_type=REFUND_REVERSAL,\n  status=REVERSED,\n  reversal_of_entry_id=originalEntryId\n)
+    LS -> DB : UPDATE brand_economics:\n  1. Deduct from pendingBalance first\n  2. Then from payoutBalance\n  3. Remainder → outstandingDebt
+  end
+  OS -> DB : UPDATE payments SET status=REFUNDED
+  OS -> DB : UPDATE orders SET status=REFUNDED
+end
+
+' ─── Payout Management ───────────────────────────────────────────
+
+group Payout Management (Payments Tab)
+
+  Admin -> Dashboard : Open Payments tab
+  Dashboard -> AdminAPI : adminApi.payouts.getDashboard()
+  AdminAPI -> AC : GET /admin/payouts/dashboard
+  AC -> PS : getPayoutDashboard()
+  PS -> DB : SELECT status, COUNT(*), SUM(amount)\n  FROM payouts GROUP BY status
+  DB --> Dashboard : { pending: 3 × €2340, approved: 1 × €890 }
+
+  Admin -> AC : POST /admin/payouts/generate
+  AC -> PS : generatePayouts()
+  loop for each brand with payoutBalance > 0
+    PS -> DB : SELECT payout_balance FROM brand_economics WHERE ...
+    PS -> DB : SELECT iban FROM brand_payout_profiles WHERE brand_partner_id=?
+    PS -> DB : INSERT INTO payouts (\n  brand_partner_id, amount=payoutBalance,\n  debt_absorbed=outstandingDebt,\n  iban, bank_account_holder,\n  status=PENDING\n)
+    PS -> DB : UPDATE brand_economics:\n  payoutBalance -= payoutAmount\n  outstanding_debt = 0
+  end
+
+  Admin -> AC : PATCH /admin/payouts/{id}/approve
+  AC -> PS : approvePayout(payoutId, adminUser)
+  PS -> DB : UPDATE payouts SET\n  status=APPROVED,\n  approved_at=now(),\n  approved_by_admin_email=admin.email
+
+  Admin -> AC : POST /admin/payouts/{id}/mark-paid\n{ externalReference: "BANK-REF-001" }
+  AC -> PS : markPayoutPaid(payoutId, dto, adminUser)
+  PS -> LS : recordPayoutTransfer(payout)
+  LS -> DB : INSERT ledger_entries (\n  entry_type=PAYOUT_TRANSFER,\n  status=PAID_OUT,\n  external_reference_id=dto.externalReference\n)
+  PS -> DB : UPDATE payouts SET\n  status=PAID,\n  paid_at=now(),\n  paid_by_admin_email=admin.email,\n  external_reference=dto.externalReference
+end
+
+' ─── Reconciliation ──────────────────────────────────────────────
+
+group Reconciliation (Admin Tool)
+
+  Admin -> AC : GET /admin/reconciliation
+  AC -> RS : checkReconciliation()
+  loop for each brand
+    RS -> DB : SUM ledger_entries WHERE brand_partner_id=? AND status IN (PENDING_RELEASE, AVAILABLE)
+    RS -> DB : SELECT pending_balance, payout_balance FROM brand_economics WHERE ...
+    RS -> RS : Compare expected vs actual
+    alt Drift detected
+      RS --> Admin : Drift report { brandId, expected, actual, difference }
+    end
+  end
+
+  alt Rebuild needed
+    Admin -> AC : POST /admin/reconciliation/rebuild/{brandId}
+    AC -> RS : rebuildBrandEconomics(brandId)
+    RS -> DB : SELECT all ledger_entries WHERE brand_partner_id = ?
+    RS -> RS : Recompute: pendingBalance, payoutBalance, lifetimeRevenue from scratch
+    RS -> DB : UPDATE brand_economics SET\n  pending_balance=computed,\n  payout_balance=computed,\n  lifetime_revenue=computed
+    note right : Non-destructive repair.\nLedger entries never modified.
+  end
+end
+
+@enduml

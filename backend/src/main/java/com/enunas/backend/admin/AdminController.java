@@ -3,6 +3,7 @@ package com.enunas.backend.admin;
 import com.enunas.backend.admin.dto.AdminProductResponseDto;
 import com.enunas.backend.admin.dto.SetPayoutProfileDto;
 import com.enunas.backend.admin.dto.RejectionDto;
+import com.enunas.backend.customer.dto.CustomerBrandSpendingDto;
 import com.enunas.backend.ledger.ReconciliationService;
 import com.enunas.backend.payout.PayoutStatus;
 import com.enunas.backend.payout.dto.MarkAsPaidDto;
@@ -200,6 +201,12 @@ public class AdminController {
             @Valid @RequestBody UpdateCustomerProfileDto dto) {
         return ResponseEntity.ok(customerService.updateCustomerByAdmin(id, dto));
     }
+
+    @GetMapping("/customers/{id}/brand-spending")
+    public ResponseEntity<List<CustomerBrandSpendingDto>> getCustomerBrandSpending(@PathVariable Long id) {
+        return ResponseEntity.ok(customerService.getCustomerBrandSpending(id));
+    }
+
 
     // ===== Order management (delegates to OrderService) =====
 

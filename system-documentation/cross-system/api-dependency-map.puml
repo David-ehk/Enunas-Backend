@@ -1,0 +1,97 @@
+@startuml api-dependency-map
+!theme plain
+skinparam backgroundColor #FAFAFA
+skinparam componentStyle rectangle
+title Enunas — API Dependency Map\n(Frontend Component → API Client → Endpoint → Controller → Service → Repository → DB)
+
+' ─── Authentication Flow ─────────────────────────────────────────
+rectangle "Login Form\n(Component)" as LC #E8F5E9
+rectangle "authApi.ts\n.login()" as AuthClient #E8D5FF
+rectangle "POST /auth/login\n(Public)" as AuthEndpoint #FFF3E0
+rectangle "AuthController" as AuthCtrl #EEF3FF
+rectangle "AuthenticationService\n+ JwtService" as AuthSvc #EEF3FF
+rectangle "UserRepository" as UserRepo #FFE0E0
+database "users" as UsersTable #F0F0FF
+
+LC --> AuthClient : call
+AuthClient --> AuthEndpoint : fetch()
+AuthEndpoint --> AuthCtrl : route
+AuthCtrl --> AuthSvc : login()
+AuthSvc --> UserRepo : findByEmail()
+UserRepo --> UsersTable : SQL
+
+' ─── Product Browsing ─────────────────────────────────────────────
+rectangle "CatalogPage\n/bekleidung" as CatalogComp #E8F5E9
+rectangle "productApi.ts\n.list()" as ProdListClient #E8D5FF
+rectangle "GET /products\n(Authenticated)" as ProdListEndpoint #FFF3E0
+rectangle "ProductController" as ProdCtrl #EEF3FF
+rectangle "ProductService\n(no ownership check)" as ProdSvc #EEF3FF
+rectangle "ProductRepository" as ProdRepo #FFE0E0
+database "products\nproduct_colors\nproduct_variants\nlistings" as ProdTables #F0F0FF
+
+CatalogComp --> ProdListClient : call
+ProdListClient --> ProdListEndpoint : fetch()
+ProdListEndpoint --> ProdCtrl : route
+ProdCtrl --> ProdSvc : listActiveProducts()
+ProdSvc --> ProdRepo : findAllByStatus(ACTIVE, pageable)
+ProdRepo --> ProdTables : SQL
+
+' ─── Order Creation ──────────────────────────────────────────────
+rectangle "CheckoutPage\n/checkout" as CheckoutComp #E8F5E9
+rectangle "orderApi.ts\n.create()" as OrdClient #E8D5FF
+rectangle "POST /orders\n(CUSTOMER)" as OrdEndpoint #FFF3E0
+rectangle "OrderController" as OrdCtrl #EEF3FF
+rectangle "OrderService\n+ LedgerService\n+ PaymentProvider" as OrdSvc #EEF3FF
+rectangle "OrderRepository\nLedgerRepository\nBrandEconomicsRepo" as OrdRepos #FFE0E0
+database "orders\norder_items\npayments\nledger_entries\nbrand_economics" as OrdTables #F0F0FF
+
+CheckoutComp --> OrdClient : call
+OrdClient --> OrdEndpoint : fetch()
+OrdEndpoint --> OrdCtrl : route
+OrdCtrl --> OrdSvc : createOrder()
+OrdSvc --> OrdRepos : save/update
+OrdRepos --> OrdTables : SQL
+
+' ─── Admin Product Moderation ────────────────────────────────────
+rectangle "AdminDashboard\nProducts Tab" as AdminComp #E8F5E9
+rectangle "adminApi.ts\n.products.*" as AdminProdClient #E8D5FF
+rectangle "PATCH /admin/products/{id}/approve\n(ADMIN only)" as AdminProdEndpoint #FFF3E0
+rectangle "AdminController" as AdminCtrl #EEF3FF
+rectangle "AdminService\n(no ownership check)" as AdminSvc #EEF3FF
+rectangle "ProductRepository" as ProdRepo2 #FFE0E0
+
+AdminComp --> AdminProdClient : call
+AdminProdClient --> AdminProdEndpoint : fetch()
+AdminProdEndpoint --> AdminCtrl : route (ADMIN guard)
+AdminCtrl --> AdminSvc : approveProduct()
+AdminSvc --> ProdRepo2 : save(product{status=ACTIVE})
+ProdRepo2 --> ProdTables : SQL UPDATE
+
+' ─── Brand Product Creation ──────────────────────────────────────
+rectangle "VendorDashboard\n[NOT IMPLEMENTED]" as VendorComp #FFFDE7
+rectangle "productApi.ts\n.create()" as BrandProdClient #E8D5FF
+rectangle "POST /products/create\n(BRAND_PARTNER)" as BrandProdEndpoint #FFF3E0
+rectangle "ProductController\n(@PreAuthorize BRAND_PARTNER)" as BrandProdCtrl #EEF3FF
+rectangle "ProductService\n(assertOwnership on writes)" as BrandProdSvc #EEF3FF
+rectangle "ProductRepository\nProductVariantService" as BrandProdRepos #FFE0E0
+
+VendorComp --> BrandProdClient : call
+BrandProdClient --> BrandProdEndpoint : fetch()
+BrandProdEndpoint --> BrandProdCtrl : route (BRAND_PARTNER guard)
+BrandProdCtrl --> BrandProdSvc : createProduct()
+BrandProdSvc --> BrandProdRepos : save
+BrandProdRepos --> ProdTables : SQL INSERT
+
+' ─── Mollie Webhook ──────────────────────────────────────────────
+rectangle "Mollie\nPayment API" as MollieNode #FFE0E0
+rectangle "POST /webhooks/mollie\n(PUBLIC — no JWT)" as WebhookEndpoint #FFF3E0
+rectangle "MollieWebhookController" as WebhookCtrl #EEF3FF
+rectangle "OrderService\n(confirmPaymentByWebhook)\n+ LedgerService" as WebhookSvc #EEF3FF
+
+MollieNode --> WebhookEndpoint : async POST
+WebhookEndpoint --> WebhookCtrl : route (no auth)
+WebhookCtrl --> WebhookSvc : confirm + record ledger
+WebhookSvc --> OrdRepos : update
+OrdRepos --> OrdTables : SQL
+
+@enduml

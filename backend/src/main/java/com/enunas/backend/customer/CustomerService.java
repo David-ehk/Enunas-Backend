@@ -1,8 +1,11 @@
 package com.enunas.backend.customer;
 
+import com.enunas.backend.customer.dto.CustomerBrandSpendingDto;
 import com.enunas.backend.customer.dto.CustomerResponseDto;
 import com.enunas.backend.customer.dto.UpdateCustomerProfileDto;
 import com.enunas.backend.exception.CustomerNotFoundException;
+import com.enunas.backend.order.OrderItemRepository;
+import com.enunas.backend.order.OrderStatus;
 import com.enunas.backend.user.User;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
@@ -12,12 +15,14 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
+import java.util.List;
 
 @Service
 @RequiredArgsConstructor
 public class CustomerService {
 
     private final CustomerRepository customerRepository;
+    private final OrderItemRepository orderItemRepository;
 
     /** Server-side: create the matching Customer record when a CUSTOMER user signs up. */
     @Transactional
@@ -54,6 +59,17 @@ public class CustomerService {
     @PreAuthorize("hasRole('ADMIN')")
     public CustomerResponseDto getCustomerById(Long id) {
         return CustomerResponseDto.from(findById(id));
+    }
+
+    @Transactional(readOnly = true)
+    @PreAuthorize("hasRole('ADMIN')")
+    public List<CustomerBrandSpendingDto> getCustomerBrandSpending(Long customerId) {
+        Customer customer = findById(customerId);
+        List<OrderStatus> paidStatuses = List.of(
+                OrderStatus.PAID, OrderStatus.SHIPPED, OrderStatus.DELIVERED,
+                OrderStatus.RETURN_REQUESTED, OrderStatus.RETURN_APPROVED,
+                OrderStatus.RETURN_RECEIVED, OrderStatus.REFUNDED);
+        return orderItemRepository.findBrandSpendingByUserId(customer.getUser().getId(), paidStatuses);
     }
 
     /** Admin partial update — same field semantics as updateMyProfile, but addressed by id. */

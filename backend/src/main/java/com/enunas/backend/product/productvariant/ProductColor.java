@@ -44,6 +44,11 @@ public class ProductColor {
     @Builder.Default
     private List<ProductVariant> variants = new ArrayList<>();
 
+    public void addVariant(ProductVariant variant) {
+        variants.add(variant);
+        variant.setProductColor(this);
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;

@@ -1,0 +1,144 @@
+@startuml deployment-overview
+!theme plain
+skinparam backgroundColor #FAFAFA
+skinparam nodeBackgroundColor #EEF3FF
+skinparam nodeBorderColor #370E4D
+skinparam cloudBackgroundColor #FFF3E0
+skinparam databaseBackgroundColor #E8F5E9
+title Enunas — Deployment Architecture
+
+' ─── Clients ──────────────────────────────────────────────────────
+node "Customer Browser\n(Desktop / Mobile)" as Browser {
+  component "Next.js\n(Server-Side Rendered\n+ Client Components)" as FE
+  component "localStorage\n[enunas_token, cart]" as LocalStore
+}
+
+' ─── Frontend Hosting ─────────────────────────────────────────────
+cloud "Vercel\n(Frontend CDN)" as Vercel {
+  component "Next.js 15\nApp Router\nStatic + Dynamic Routes" as VercelApp
+  note as VercelNote
+    Build: npm run build
+    Runtime: Node.js (Edge + Serverless)
+    Env: NEXT_PUBLIC_API_URL=https://api.enunas.com
+    Domain: https://enunas.com
+    Deploy: Git push → auto-build
+  end note
+}
+
+' ─── Backend Hosting ──────────────────────────────────────────────
+node "AWS Infrastructure\n(EC2 / ECS)" as AWS {
+
+  node "Docker Container — Backend" as DockerBE {
+    component "Spring Boot 4\n(JRE 21 Alpine)" as SpringApp
+
+    package "Controllers" as Controllers {
+      [AuthController]
+      [ProductController]
+      [OrderController]
+      [AdminController]
+      [MollieWebhookController]
+    }
+
+    package "Services" as Services {
+      [AuthenticationService]
+      [OrderService]
+      [LedgerService]
+      [EmailService]
+      [AdminService]
+    }
+
+    package "Payment" as Payment {
+      [MolliePaymentService]
+    }
+
+    component "Port 8080\n(exposed)" as Port8080
+  }
+
+  note as DockerNote
+    Dockerfile: Multi-stage build
+    Stage 1: maven:3-eclipse-temurin-21-alpine (build)
+    Stage 2: eclipse-temurin:21-jre-alpine (runtime)
+    User: appuser (unprivileged, non-root)
+    Exposed port: 8080
+    Health check: /actuator/health
+  end note
+
+  node "PostgreSQL Database" as PGHost {
+    database "Enunas DB\n(enunas schema)" as DB {
+      [users]
+      [brand_partners]
+      [products + variants]
+      [orders + items]
+      [payments]
+      [ledger_entries]
+      [payouts]
+    }
+    note as PGNote
+      Version: PostgreSQL (any modern)
+      Driver: JDBC via Spring Data JPA
+      Pool: HikariCP (Spring default)
+      Migrations: Flyway (run at startup)
+      DDL: Hibernate ddl-auto=update (sync)
+      Port: 5432
+    end note
+  }
+
+  node "AWS S3\n(Asset Storage)" as S3 {
+    component "Product Images\n(URLs stored in DB)" as S3Images
+    component "Product Videos\n(URLs stored in DB)" as S3Videos
+    component "Brand Logos\n(URLs stored in DB)" as S3Logos
+  }
+}
+
+' ─── External Services ────────────────────────────────────────────
+cloud "Mollie Payment\nProvider" as MollieCloud {
+  component "Mollie Checkout\nHosted Page" as MollieCheckout
+  component "Mollie API\nv2 (HTTPS)" as MollieAPIComp
+  note as MollieNote
+    API Key: test_xxx (staging) / live_xxx (prod)
+    Webhook URL: must be publicly accessible HTTPS
+    Supported: card, iDEAL, PayPal, Bancontact, etc.
+    PCI Compliance: Mollie handles card data
+  end note
+}
+
+cloud "SMTP Provider\n(Gmail / Custom)" as SMTPCloud {
+  component "SMTP Server\n(TLS:587)" as SMTPComp
+  note as SMTPNote
+    Default host: smtp.gmail.com
+    Port: 587 (STARTTLS)
+    Auth: MAIL_USERNAME + MAIL_PASSWORD
+    From: MAIL_USERNAME env var
+  end note
+}
+
+' ─── Local Development ────────────────────────────────────────────
+node "Local Development\n(Developer Machine)" as LocalDev {
+  node "Docker Compose" as DC {
+    component "Spring Boot\n(mock-payments profile)" as LocalBE
+    database "PostgreSQL\n(docker sidecar)" as LocalDB
+  }
+  component "Next.js Dev Server\n(npm run dev)" as LocalFE
+  note as LocalNote
+    spring.profiles.active=mock-payments
+    MockPaymentService replaces Mollie
+    Mock webhooks: /webhooks/mock/**
+    No external payment calls
+    NEXT_PUBLIC_API_URL=http://localhost:8080/api
+    Frontend: localhost:3000
+    Backend: localhost:8080
+  end note
+}
+
+' ─── Connections ──────────────────────────────────────────────────
+Browser --> Vercel : HTTPS (CDN)\nBrowser loads Next.js app
+Vercel --> SpringApp : HTTPS REST/JSON\nAuthorization: Bearer JWT\nCORS: allowed origin
+SpringApp --> DB : JDBC TCP:5432
+SpringApp --> MollieAPIComp : HTTPS\nPOST /v2/payments\n(payment creation + refunds)
+SpringApp --> SMTPComp : SMTP/TLS:587\n(notification emails)
+SpringApp --> S3 : HTTPS\n(asset URL persistence)
+MollieAPIComp --> SpringApp : POST /webhooks/mollie\n(async — payment confirmed)
+MollieCheckout --> Browser : HTTP redirect (redirectUrl)\nafter customer pays
+Browser --> MollieCheckout : HTTPS redirect\n(after order creation)
+
+@enduml

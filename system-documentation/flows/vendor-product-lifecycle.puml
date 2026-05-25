@@ -1,0 +1,155 @@
+@startuml vendor-product-lifecycle
+!theme plain
+skinparam backgroundColor #FAFAFA
+skinparam sequenceArrowThickness 1.5
+title Enunas — Vendor Product Lifecycle\n(Creation → Moderation → Publishing → Discovery → Analytics)
+
+actor "Brand Partner\n(Vendor)" as Brand
+participant "Vendor\nDashboard UI" as UI
+participant "productApi.ts /\nbrandApi.ts" as API
+participant "ProductController\n/products/**" as PC
+participant "ProductService" as PS
+participant "ProductVariant\nService" as PVS
+participant "MediaService\n/media/**" as MS
+participant "ProductListing\nController" as PLC
+participant "AdminController\n/admin/products/**" as AC
+participant "AdminService" as ADS
+participant "EmailService" as ES
+participant "ProductAnalytics\nRepository" as PAR
+database "PostgreSQL" as DB
+actor "Customer\n(Browser)" as Customer
+
+' ─── Phase 1: Product Creation ───────────────────────────────────
+
+note over Brand, Customer
+  Phase 1: Brand Partner creates a new product
+end note
+
+Brand -> UI : Fill product creation form:\n  name, description, category,\n  gender, productType, material,\n  variants (colors × sizes × stock)
+UI -> API : productApi.create(createProductDto)
+API -> PC : POST /products/create\n[Authorization: Bearer BRAND_PARTNER JWT]
+
+PC -> PC : @PreAuthorize hasRole('BRAND_PARTNER')
+PC -> PS : createProduct(dto, authenticatedUser)
+
+group Input Validation
+  PS -> PS : Validate catalogue category\n(only valid for CLOTHING)\nMax 3 categories
+  PS -> PS : Compute outfitSlot from productType\n(HOODIE → TOP, etc.)
+end
+
+group Product Entity Creation
+  PS -> DB : INSERT INTO products (\n  name, brand_id=brandPartner.id,\n  creator_id=user.id,\n  category, gender, productType,\n  status=ACTIVE\n)
+  note right : creator_id is IMMUTABLE — set once, never changed
+end
+
+group Color + Variant Creation
+  PS -> PS : Group dto.variants by color:\n  "Black" → [{S,10},{M,15}]\n  "White" → [{S,8}]
+
+  loop for each color group
+    PS -> PVS : generateUniqueSku()
+    PVS -> DB : Check existsBySku(candidateSku)
+    PVS --> PS : Unique 8-char hex SKU (e.g., "4A3F9BC1")
+
+    PS -> DB : INSERT INTO product_colors (\n  product_id, sku, color\n)
+
+    loop for each size in color group
+      PS -> DB : INSERT INTO product_variants (\n  product_color_id, product_id,\n  size, stock_quantity\n)
+    end
+  end
+end
+
+PS --> PC : ProductResponseDto
+PC --> Brand : 201 Created { product }
+
+note over Brand : Product is ACTIVE immediately.\nNo admin pre-approval required at creation.\nAdmin can retroactively moderate.
+
+' ─── Phase 2: Add Media ──────────────────────────────────────────
+
+note over Brand, Customer
+  Phase 2: Brand uploads media (images, videos)
+end note
+
+Brand -> UI : Upload product images/videos
+UI -> MS : POST /media/products/{id}/images\n{ imageUrl, isPrimary, displayOrder }
+MS -> MS : assertOwnership(product, user)
+MS -> DB : INSERT INTO product_images\n  (product_id, image_url, primary, display_order)
+MS --> Brand : 201 Created
+
+' ─── Phase 3: Create Listings (Pricing) ──────────────────────────
+
+note over Brand, Customer
+  Phase 3: Brand configures pricing via listings
+end note
+
+loop for each variant to price
+  Brand -> UI : Set price, discountPrice,\navailableFrom, availableUntil,\ndropDate, region
+  UI -> PLC : POST /listings {\n  productId, variantId, price,\n  discountPrice, availableFrom, availableUntil\n}
+  PLC -> DB : INSERT INTO listings (\n  product_id, variant_id, price,\n  discount_price, active=true, currency=EUR\n)
+  PLC --> Brand : 201 Created
+end
+
+' ─── Phase 4: Admin Moderation (Retroactive) ─────────────────────
+
+note over Brand, Customer
+  Phase 4: Admin reviews and moderates product\n(retroactive — product is already ACTIVE)
+end note
+
+AC -> ADS : PATCH /admin/products/{id}/reject\n{ reason: "Does not meet quality standards" }
+ADS -> DB : UPDATE products SET\n  status=REJECTED,\n  rejection_reason="...",\n  moderated_by_id=admin.id,\n  moderated_at=now()
+note over ADS : Product hidden from customer catalog.\nBrand can still see in /products/my.
+
+Brand -> UI : Sees REJECTED status in dashboard
+Brand -> UI : Updates product to address feedback
+UI -> API : PUT /products/update/{id} { ... }
+API -> PC : PUT /products/update/{id}\n[Bearer BRAND_PARTNER JWT]
+PC -> PS : updateProduct(id, dto, user)
+PS -> PS : assertOwnership(product, user)
+PS -> DB : UPDATE products SET\n  name=dto.name, description=dto.description, ...
+
+AC -> ADS : PATCH /admin/products/{id}/approve
+ADS -> DB : UPDATE products SET\n  status=ACTIVE,\n  rejection_reason=NULL,\n  moderated_by_id=admin.id,\n  moderated_at=now()
+
+' ─── Phase 5: Customer Discovery ─────────────────────────────────
+
+note over Brand, Customer
+  Phase 5: Customer discovers and interacts with product
+end note
+
+Customer -> DB : GET /products?page=0&size=20\n→ Returns ACTIVE products across all brands
+Customer -> DB : GET /products/search?keyword="hoodie"
+Customer -> DB : GET /products/{id}\n→ Full product detail (variants, images, listings, CTL)
+
+' ─── Phase 6: Order + Analytics ──────────────────────────────────
+
+note over Brand, Customer
+  Phase 6: Product purchased — analytics and financial impact
+end note
+
+Customer -> DB : POST /orders → Order created\n  order_items.brand_snapshot_name stored\n  commission snapshotted
+
+note over DB : After Mollie webhook:\n  product_variants.stock_quantity decremented\n  LedgerEntry (ORDER_PAYMENT) created\n  BrandEconomics.pendingBalance += brandPayout
+
+Brand -> UI : Views order in /brand/orders\nConfirms shipment → SHIPPED
+
+' ─── Phase 7: Product End of Life ────────────────────────────────
+
+note over Brand, Customer
+  Phase 7: Product deactivation
+end note
+
+alt Brand deletes product (own products only)
+  Brand -> UI : Click "Delete" on product
+  UI -> PC : DELETE /products/delete/{id}
+  PC -> PS : deleteProduct(id, user)
+  PS -> PS : assertOwnership(product, user)
+  PS -> DB : DELETE FROM products WHERE id=?\n  CASCADE to: product_colors, product_variants,\n              product_images, product_videos,\n              product_economics, product_analytics
+  note right : WARNING: If orders reference this product's variants,\nOrderItem.variant_id FK becomes dangling.\nOnly delete products with no order history.
+end
+
+alt Admin hides product
+  AC -> ADS : PATCH /admin/products/{id}/hide
+  ADS -> DB : UPDATE products SET status=SUSPENDED
+  note right : Reversible. Product hidden from catalog\nbut remains in database.
+end
+
+@enduml

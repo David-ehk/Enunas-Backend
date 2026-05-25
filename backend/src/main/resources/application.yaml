@@ -16,7 +16,9 @@ spring:
 
   jpa:
     hibernate:
-      ddl-auto: update
+      # Flyway owns the schema (see db/migration). Hibernate only validates that the
+      # entity model matches the migrated schema; it never modifies the database.
+      ddl-auto: validate
     show-sql: false
     properties:
       hibernate:

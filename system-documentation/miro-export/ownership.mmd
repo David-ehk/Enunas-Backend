@@ -1,0 +1,110 @@
+---
+title: Enunas — Ownership & Tenant Isolation Model
+---
+flowchart TD
+    subgraph IDENTITY["Identity Root"]
+        USER["User\n(id, email, role)\nRole IMMUTABLE"]
+    end
+
+    subgraph ENFORCEMENT["6-Layer Ownership Enforcement"]
+        direction LR
+        L1["① HTTPS + CORS\n(network boundary)"]
+        L2["② JWT Filter\n(identity extraction)"]
+        L3["③ Route Guard\n(frontend UX only)"]
+        L4["④ @PreAuthorize\n(role required)"]
+        L5["⑤ assertOwnership()\n(entity.ownerId == userId)"]
+        L6["⑥ Input Validation\n(@Valid + business rules)"]
+        L1 --> L2 --> L3 --> L4 --> L5 --> L6
+    end
+
+    subgraph CUSTOMER_CHAIN["Customer Ownership Chain"]
+        direction TB
+        CUST["Customer Profile\nWrite: self only\nRead: self + ADMIN"]
+        WARD["WardrobeItem\nWrite: self only\nRead: self (private) / all (public)"]
+        ORD["Order\nbuyerId IMMUTABLE\nRead: self + ADMIN"]
+        RET["ReturnOrder\nMust own parent Order"]
+        CUST --- WARD
+        CUST --- ORD
+        ORD --- RET
+    end
+
+    subgraph BRAND_CHAIN["Brand Ownership Chain"]
+        direction TB
+        BRAND["BrandPartner\nuserId UNIQUE\nbrandName IMMUTABLE\nslug IMMUTABLE\nStatus: PENDING→ACTIVE (Admin gates)"]
+        PROD["Product\ncreatorId IMMUTABLE\nassertBrandOwnership() on writes\nAdmin bypasses"]
+        COLOR["ProductColor\nInherited from Product"]
+        VARIANT["ProductVariant\nstock: decremented atomically"]
+        IMG["ProductImage\nCASCADE from Product"]
+        VID["ProductVideo\nCASCADE from Product"]
+        LISTING["ProductListing\nBrand manages price/availability"]
+        BRAND --- PROD
+        PROD --- COLOR
+        PROD --- IMG
+        PROD --- VID
+        PROD --- LISTING
+        COLOR --- VARIANT
+    end
+
+    subgraph ADMIN_ONLY["Admin-Only Resources (no brand/customer API)"]
+        direction TB
+        ECO["BrandEconomics\nDenormalized from LedgerEntry\nNo direct writes"]
+        SHIP["BrandShippingProfile\nAdmin-managed\nBrand cannot edit"]
+        PAYOUT_PROF["BrandPayoutProfile\nIBAN — Admin-only\n(fraud prevention)"]
+        LEDGER["LedgerEntry\nAPPEND-ONLY — no UPDATE/DELETE\nIdempotency guard"]
+        PAYOUT["Payout\nAdmin-initiated\nApproved + paid by Admin"]
+    end
+
+    subgraph CROSS_OWNERSHIP["Cross-Ownership Resources"]
+        OI["OrderItem\nReadable by:\n• Order buyer (CUSTOMER)\n• Brand of that item\n• ADMIN\nAll snapshot fields IMMUTABLE"]
+    end
+
+    subgraph QUERY_ENFORCEMENT["Query-Layer Tenant Isolation"]
+        direction TB
+        Q1["Brand Products:\nSELECT p FROM Product p\nJOIN p.brand b\nWHERE b.user.id = :userId"]
+        Q2["Brand Orders:\nSELECT o FROM Order o\nJOIN o.items i\nJOIN i.variant v\nJOIN v.product p\nWHERE p.brand.user.id = :userId"]
+        Q3["Customer Orders:\nSELECT o FROM Order o\nWHERE o.buyer.id = :userId"]
+        Q4["Ledger (admin):\nSELECT l FROM LedgerEntry l\nWHERE l.brandPartnerId = :brandId"]
+    end
+
+    subgraph VIOLATIONS["Ownership Violation Responses"]
+        V1["Wrong role → 403 Forbidden\n(@PreAuthorize fails)"]
+        V2["Not owner → 403 Forbidden\n(assertOwnership fails)"]
+        V3["Entity not found → 404 Not Found\n(query filter hides it)"]
+        V4["Expired token → 401 Unauthorized\n(JWT filter rejects)"]
+    end
+
+    %% Connections
+    USER -->|"OneToOne"| CUST
+    USER -->|"OneToOne"| BRAND
+    USER -->|"JWT claims\nextract userId + role"| ENFORCEMENT
+
+    BRAND -->|"OneToOne"| ECO
+    BRAND -->|"ZeroOrOne"| SHIP
+    BRAND -->|"OneToOne"| PAYOUT_PROF
+    BRAND -->|"Admin-initiated"| PAYOUT
+
+    ORD -->|"CASCADE"| OI
+    LEDGER -.->|"references"| ORD
+    LEDGER -.->|"references"| OI
+    LEDGER -.->|"tenant key"| BRAND
+    ECO -.->|"rebuilt from"| LEDGER
+
+    ENFORCEMENT -->|"violation"| VIOLATIONS
+
+    classDef identity fill:#FFD700,stroke:#B8860B,color:#000,font-weight:bold
+    classDef customer fill:#E8F5E9,stroke:#2E7D32,color:#000
+    classDef brand fill:#E8D5FF,stroke:#4527A0,color:#000
+    classDef admin fill:#FFAAAA,stroke:#C62828,color:#000
+    classDef cross fill:#FFF3E0,stroke:#E65100,color:#000
+    classDef enforce fill:#EEF3FF,stroke:#1A237E,color:#000
+    classDef query fill:#F3E5F5,stroke:#6A1B9A,color:#000
+    classDef violation fill:#FCE4EC,stroke:#880E4F,color:#000
+
+    class USER identity
+    class CUST,WARD,ORD,RET customer
+    class BRAND,PROD,COLOR,VARIANT,IMG,VID,LISTING brand
+    class ECO,SHIP,PAYOUT_PROF,LEDGER,PAYOUT admin
+    class OI cross
+    class L1,L2,L3,L4,L5,L6 enforce
+    class Q1,Q2,Q3,Q4 query
+    class V1,V2,V3,V4 violation

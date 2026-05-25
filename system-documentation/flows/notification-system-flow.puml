@@ -1,0 +1,129 @@
+@startuml notification-system-flow
+!theme plain
+skinparam backgroundColor #FAFAFA
+skinparam sequenceArrowThickness 1.5
+title Enunas — Notification System Flow (Email Events)
+
+participant "AuthenticationService" as Auth
+participant "BrandPartnerService" as Brand
+participant "OrderService" as Order
+participant "AdminService" as AdminSvc
+participant "EmailService" as ES
+participant "JavaMailSender\n(Spring Mail)" as Mail
+participant "SMTP Server\n(Gmail / Custom)" as SMTP
+
+note over ES, SMTP
+  All emails sent via Spring Mail (JavaMailSender).
+  Configuration via env vars:
+    MAIL_HOST (default: smtp.gmail.com)
+    MAIL_PORT (default: 587)
+    MAIL_USERNAME
+    MAIL_PASSWORD
+
+  Email methods use sendMimeMessage() for HTML
+  and sendSimpleMailMessage() for plain text.
+  No template engine — inline HTML strings.
+end note
+
+' ─── Customer Signup ─────────────────────────────────────────────
+
+group Customer Signup (POST /auth/signup)
+  Auth -> ES : sendWelcomeEmail(email, firstName)
+  ES -> Mail : buildMimeMessage():\n  To: customer@email.com\n  Subject: "Willkommen bei Enunas"\n  Body: HTML welcome with brand colors
+  Mail -> SMTP : Send via TLS:587
+  note right : Customer receives welcome email immediately.
+end
+
+' ─── Brand Application ───────────────────────────────────────────
+
+group Brand Application (POST /brandpartner/apply)
+  Brand -> ES : sendVerificationEmail(email, verificationCode)
+  ES -> Mail : buildMimeMessage():\n  To: brand@email.com\n  Subject: "E-Mail verifizieren"\n  Body: HTML with 6-digit code\n  Note: 15-minute TTL
+  Mail -> SMTP : Send
+  note right : Brand must submit this code\nvia POST /brandpartner/verify\nwithin 15 minutes.
+end
+
+' ─── Brand Email Verified ─────────────────────────────────────────
+
+group Brand Email Verified (POST /brandpartner/verify)
+  Brand -> ES : sendPendingApprovalEmail(adminEmail)
+  ES -> Mail : buildMimeMessage():\n  To: admin@enunas.com (ADMIN_EMAIL env var)\n  Subject: "New Brand Application"\n  Body: "Brand [name] is awaiting review"
+  Mail -> SMTP : Send
+  note right : Admin receives notification.\nAdmin must approve via\nPATCH /admin/brands/{id}/approve.
+end
+
+' ─── Verification Code Resend ─────────────────────────────────────
+
+group Resend Verification (POST /brandpartner/resend-verification)
+  Brand -> ES : sendVerificationEmail(email, newCode)
+  note right : New code generated.\nPrevious code invalidated.\nNew 15-minute TTL starts.
+  ES -> Mail : Send new code email
+  Mail -> SMTP : Send
+end
+
+' ─── Brand Approved ───────────────────────────────────────────────
+
+group Brand Approved (PATCH /admin/brands/{id}/approve)
+  AdminSvc -> ES : sendAccountApprovedEmail(brand.contactEmail)
+  ES -> Mail : buildMimeMessage():\n  To: brand@email.com\n  Subject: "Dein Account wurde genehmigt"\n  Body: HTML approval confirmation
+  Mail -> SMTP : Send
+  note right : Brand can now log in.\nFull vendor dashboard access granted.
+end
+
+' ─── Order Shipped ────────────────────────────────────────────────
+
+group Order Shipped (PATCH /brand/orders/{id}/shipment)
+  Order -> ES : sendHtmlEmail / sendPlainTextEmail(\n  to: customer.email,\n  subject: "Deine Bestellung wurde verschickt",\n  content: carrier + trackingNumber\n)
+  ES -> Mail : Build email with:\n  carrier name\n  tracking number\n  order reference
+  Mail -> SMTP : Send
+  note right : Customer notified when brand\nconfirms shipment dispatch.
+end
+
+' ─── Order Cancelled ──────────────────────────────────────────────
+
+group Order Cancelled (POST /admin/orders/{id}/cancel)
+  Order -> ES : Cancellation email to customer
+  ES -> Mail : buildMimeMessage():\n  To: customer.email\n  Subject: "Bestellung storniert"\n  Body: cancellationReason + cancellationNote
+  Mail -> SMTP : Send
+  note right : Only PENDING orders can be cancelled\nby admin. Customer receives reason.
+end
+
+' ─── Not Yet Implemented ──────────────────────────────────────────
+
+group NOT YET IMPLEMENTED — Planned Email Events
+
+  note over ES
+    Missing notification emails (future implementation):
+    ──────────────────────────────────────────────────────────
+    Return approved notification
+      → Customer: "Deine Rücksendung wurde genehmigt"
+      → Include return label URL when implemented
+
+    Refund issued notification
+      → Customer: "Deine Erstattung wurde veranlasst"
+      → Include refund amount + processing time
+
+    Payout notification to brand
+      → Brand: "Deine Auszahlung wurde überwiesen"
+      → Include payout amount + reference
+
+    Password reset email
+      → User: "Passwort zurücksetzen"
+      → Include time-limited reset link
+
+    Low stock alert to brand
+      → Brand: "Geringer Lagerbestand"
+      → Alert when stockQuantity < threshold
+
+    Order delivery confirmation
+      → Customer: "Bestellung zugestellt"
+      → When order status = DELIVERED
+
+    Return rejection notification
+      → Customer: "Rücksendung abgelehnt"
+      → When admin rejects (not implemented)
+    ──────────────────────────────────────────────────────────
+  end note
+end
+
+@enduml

@@ -71,7 +71,7 @@ public class ProductService {
             applyCompleteTheLook(saved, dto.getCompleteTheLookProductIds());
         }
 
-        return toResponse(productRepository.save(saved));
+        return toResponse(saved);
     }
 
     @Transactional(readOnly = true)
@@ -208,6 +208,7 @@ public class ProductService {
                         .weightGrams(vDto.getWeightGrams())
                         .product(product)
                         .build());
+                productColor.getVariants().add(variant);
                 product.addVariant(variant);
             }
         }

@@ -1,0 +1,256 @@
+@startuml ownership-relations
+!theme plain
+skinparam backgroundColor #FAFAFA
+skinparam classBackgroundColor #EEF3FF
+skinparam classBorderColor #370E4D
+skinparam noteBackgroundColor #FFFDE7
+skinparam arrowColor #370E4D
+title Enunas — Ownership Relations\n(Who owns what, and how ownership is enforced)
+
+' ─── OWNERSHIP ROOT ───────────────────────────────────────────────
+class User <<Identity Root>> #FFD700 {
+  + id: BIGINT <<PK>>
+  + email: VARCHAR <<UNIQUE>>
+  + role: ENUM {CUSTOMER, BRAND_PARTNER, ADMIN}
+  ..Ownership Note..
+  All ownership chains originate here.
+  role is IMMUTABLE after creation.
+}
+
+' ─── CUSTOMER OWNERSHIP CHAIN ────────────────────────────────────
+package "Customer Ownership Chain" #E8F5E9 {
+
+  class Customer <<Owned by User>> {
+    + id: BIGINT <<PK>>
+    + userId: BIGINT <<FK, UNIQUE>>
+    ..Ownership Enforcement..
+    UNIQUE userId — one profile per user
+    Write: userId == authenticatedUser.id
+    Read: self or ADMIN
+  }
+
+  class WardrobeItem <<Owned by User>> {
+    + id: BIGINT <<PK>>
+    + userId: BIGINT <<FK>>
+    ..Ownership Enforcement..
+    userId == authenticatedUser.id (on write)
+    userId == authenticatedUser.id (on read, unless isPublic)
+    ADMIN: unrestricted read
+  }
+
+  class Order <<Owned by User (buyer)>> {
+    + id: BIGINT <<PK>>
+    + buyerId: BIGINT <<FK, IMMUTABLE>>
+    + version: BIGINT <<optimistic lock>>
+    ..Ownership Enforcement..
+    buyerId == authenticatedUser.id (CUSTOMER read/write)
+    buyerId is IMMUTABLE after creation
+    ADMIN: unrestricted access
+  }
+
+  class ReturnOrder <<Owned by User>> {
+    + id: BIGINT <<PK>>
+    + userId: BIGINT <<FK>>
+    + orderId: BIGINT <<FK>>
+    ..Ownership Enforcement..
+    userId == authenticatedUser.id (on creation)
+    Must own parent Order
+  }
+}
+
+' ─── BRAND OWNERSHIP CHAIN ───────────────────────────────────────
+package "Brand Ownership Chain" #E8D5FF {
+
+  class BrandPartner <<Owned by User>> {
+    + id: BIGINT <<PK>>
+    + userId: BIGINT <<FK, UNIQUE>>
+    + brandName: VARCHAR <<IMMUTABLE>>
+    + slug: VARCHAR <<IMMUTABLE>>
+    + status: ENUM {PENDING_REVIEW, ACTIVE, SUSPENDED, REJECTED}
+    ..Ownership Enforcement..
+    UNIQUE userId — one brand per user
+    brandName + slug IMMUTABLE after creation
+    Write: userId == authenticatedUser.id
+    Approval/suspension: ADMIN only
+  }
+
+  class BrandEconomics <<Admin-Only>> #FFAAAA {
+    + id: BIGINT <<PK>>
+    + brandPartnerId: BIGINT <<FK, UNIQUE>>
+    ..Ownership Enforcement..
+    ADMIN-ONLY — no brand-facing API
+    No direct writes — rebuilt from LedgerEntry
+  }
+
+  class BrandShippingProfile <<Admin-Managed>> #FFAAAA {
+    + id: BIGINT <<PK>>
+    + brandPartnerId: BIGINT <<FK>>
+    ..Ownership Enforcement..
+    Created and managed by ADMIN only
+    Brand cannot modify shipping costs
+  }
+
+  class BrandPayoutProfile <<Admin-Only>> #FFAAAA {
+    + id: BIGINT <<PK>>
+    + brandPartnerId: BIGINT <<FK, UNIQUE>>
+    + iban: VARCHAR
+    ..Ownership Enforcement..
+    ADMIN-ONLY (fraud prevention)
+    Brand cannot read or write IBAN
+  }
+
+  class Product <<Owned by Brand>> {
+    + id: BIGINT <<PK>>
+    + brandId: BIGINT <<FK>>
+    + creatorId: BIGINT <<FK, IMMUTABLE>>
+    + status: ENUM {ACTIVE, SUSPENDED, REJECTED, INACTIVE, ARCHIVED}
+    ..Ownership Enforcement..
+    assertBrandOwnership(creatorId, authenticatedUser)
+    creatorId IMMUTABLE after creation
+    ADMIN bypasses ownership check
+    Only ACTIVE brand can create products
+  }
+
+  class ProductColor <<Owned by Product>> {
+    + id: BIGINT <<PK>>
+    + productId: BIGINT <<FK>>
+    ..Ownership Enforcement..
+    Inherited from Product ownership
+    Cascades on Product delete
+  }
+
+  class ProductVariant <<Owned by ProductColor>> {
+    + id: BIGINT <<PK>>
+    + productColorId: BIGINT <<FK>>
+    + productId: BIGINT <<FK, denorm>>
+    ..Ownership Enforcement..
+    Inherited from Product ownership
+    stockQuantity: decremented atomically on payment
+  }
+
+  class ProductImage <<Owned by Product>> {
+    + id: BIGINT <<PK>>
+    + productId: BIGINT <<FK>>
+    ..Ownership Enforcement..
+    Inherited from Product ownership
+    Cascades on Product delete
+  }
+
+  class ProductVideo <<Owned by Product>> {
+    + id: BIGINT <<PK>>
+    + productId: BIGINT <<FK>>
+    ..Ownership Enforcement..
+    Inherited from Product ownership
+    Cascades on Product delete
+  }
+
+  class ProductListing <<Owned by Product/Brand>> {
+    + id: BIGINT <<PK>>
+    + productId: BIGINT <<FK>>
+    + variantId: BIGINT <<FK>>
+    ..Ownership Enforcement..
+    Inherited from Product ownership
+    Brand manages pricing/availability
+  }
+}
+
+' ─── FINANCIAL OWNERSHIP (ADMIN-ONLY) ────────────────────────────
+package "Financial Ownership (Admin-Only)" #F0E8FF {
+
+  class LedgerEntry <<Append-Only, Admin-Read>> #FFAAAA {
+    + id: BIGINT <<PK>>
+    + brandPartnerId: BIGINT <<tenant key>>
+    + orderId: BIGINT <<reference>>
+    + orderItemId: BIGINT <<reference>>
+    ..Ownership Enforcement..
+    INSERT-ONLY — no UPDATE or DELETE ever
+    ADMIN-ONLY read access
+    Idempotency: existsByOrderIdAndEntryType()
+    Immutable once written
+  }
+
+  class Payout <<Admin-Initiated>> #FFAAAA {
+    + id: BIGINT <<PK>>
+    + brandPartnerId: BIGINT
+    ..Ownership Enforcement..
+    ADMIN creates and manages
+    Approved + paid by ADMIN with audit trail
+    Brand cannot initiate payouts
+  }
+}
+
+' ─── SHARED READ RESOURCES ────────────────────────────────────────
+package "Shared / Cross-Ownership Resources" #FFF3E0 {
+
+  class OrderItem <<Snapshot, Multi-Ownership>> {
+    + id: BIGINT <<PK>>
+    + orderId: BIGINT <<FK>>
+    + variantId: BIGINT <<FK>>
+    + productSnapshotName: VARCHAR <<IMMUTABLE>>
+    + brandSnapshotName: VARCHAR <<IMMUTABLE>>
+    + priceAtPurchase: DECIMAL <<IMMUTABLE>>
+    + commissionRate: DECIMAL <<IMMUTABLE>>
+    ..Ownership Enforcement..
+    Readable by: order owner (CUSTOMER), brand of that item, ADMIN
+    No writes after creation
+    Snapshot decouples from live catalog
+  }
+
+  class ReturnItem <<Owned by ReturnOrder>> {
+    + id: BIGINT <<PK>>
+    + returnOrderId: BIGINT <<FK>>
+    + orderItemId: BIGINT <<FK>>
+    ..Ownership Enforcement..
+    Inherited from ReturnOrder ownership
+    Cascades on ReturnOrder delete
+  }
+}
+
+' ─── OWNERSHIP CHAINS ─────────────────────────────────────────────
+note as OwnershipNote
+  Ownership Enforcement Rules:
+  ─────────────────────────────────────────────────────────────────
+  1. Identity Layer   : JWT token → userId extracted from claims
+  2. Role Layer       : @PreAuthorize("hasRole('X')") on endpoints
+  3. Ownership Layer  : Service-layer assertOwnership(entity, user)
+  4. Query Layer      : JPQL WHERE brand.user.id = :userId
+  5. ADMIN Override   : Admin bypasses all ownership checks
+  ─────────────────────────────────────────────────────────────────
+  Immutable ownership fields (cannot be transferred):
+  - User.role                  (set at registration)
+  - BrandPartner.brandName     (set at creation)
+  - BrandPartner.slug          (set at creation)
+  - Order.buyerId              (set at creation)
+  - Product.creatorId          (set at creation)
+  - OrderItem.*Snapshot*       (all snapshot fields)
+  - LedgerEntry.*              (append-only — never changed)
+  ─────────────────────────────────────────────────────────────────
+end note
+
+' ─── RELATIONSHIPS ────────────────────────────────────────────────
+User "1" --> "0..1" Customer : owns (user_id)\nWrite: self only
+User "1" --> "0..1" BrandPartner : owns (user_id)\nWrite: self only
+User "1" --> "*" WardrobeItem : owns (user_id)\nRead/Write: self only
+User "1" --> "*" Order : owns as buyer (buyer_id)\nIMMUTABLE
+
+BrandPartner "1" --> "1" BrandEconomics : has (brand_partner_id)\nAdmin-only read
+BrandPartner "1" --> "0..1" BrandShippingProfile : has (brand_partner_id)\nAdmin-managed
+BrandPartner "1" --> "0..1" BrandPayoutProfile : has (brand_partner_id)\nAdmin-only
+BrandPartner "1" --> "*" Product : owns (brand_id)\nEnforced via creatorId
+
+Product "1" --> "*" ProductColor : owns\nCASCADE delete
+Product "1" --> "*" ProductImage : owns\nCASCADE delete
+Product "1" --> "*" ProductVideo : owns\nCASCADE delete
+Product "1" --> "*" ProductListing : owns\nBrand manages
+ProductColor "1" --> "*" ProductVariant : owns\nCASCADE delete
+
+Order "1" --> "*" OrderItem : owns\nCASCADE delete
+Order "1" --> "0..1" ReturnOrder : has\nBuyer initiates
+ReturnOrder "1" --> "*" ReturnItem : owns\nCASCADE delete
+
+LedgerEntry "*" ..> BrandPartner : tenant key (brand_partner_id)
+LedgerEntry "*" ..> Order : references (order_id)
+LedgerEntry "*" ..> OrderItem : references (order_item_id)
+Payout "*" ..> BrandPartner : for (brand_partner_id)
+
+@enduml

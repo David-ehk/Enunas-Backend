@@ -1,0 +1,121 @@
+@startuml ownership-flow
+!theme plain
+skinparam backgroundColor #FAFAFA
+skinparam activityBackgroundColor #EEF3FF
+skinparam activityBorderColor #370E4D
+skinparam diamondBackgroundColor #F5F5F0
+title Enunas — Ownership Enforcement Flow
+
+|#E8F5E9| Request Entry |
+|#E8D5FF| JWT Layer |
+|#FFE0E0| Role Guard |
+|#FFF3E0| Ownership Check |
+|#EEF3FF| Business Logic |
+
+start
+
+' ─── JWT Extraction ──────────────────────────────────────────────
+|JWT Layer|
+:Receive HTTP Request;
+:Extract Authorization header\n"Bearer <token>";
+
+if (Token present?) then (no)
+  :Pass unauthenticated\nto Spring Security;
+  |Role Guard|
+  :Is route Public?\n(/auth/**, /public/**, /webhooks/**);
+  if (Public?) then (yes)
+    |Business Logic|
+    :Process request (no ownership check needed);
+    stop
+  else (no)
+    :401 Unauthorized;
+    stop
+  end
+endif
+
+|JWT Layer|
+:JwtService.extractUsername(token) → email;
+:UserRepository.findByEmail(email) → UserDetails;
+:JwtService.isTokenValid(token, userDetails);
+
+if (Token valid?\n(signature OK + not expired)) then (no)
+  :401 Unauthorized\n"Token invalid or expired";
+  stop
+else (yes)
+  :Set SecurityContext\n{ email, ROLE_XXX };
+endif
+
+' ─── Route Authorization ──────────────────────────────────────────
+|Role Guard|
+:Spring Security evaluates\nRoute Authorization rules;
+
+if (ADMIN route /admin/**?) then (yes)
+  if (Role = ADMIN?) then (no)
+    :403 Forbidden;
+    stop
+  endif
+else if (BRAND route /products/create, /brand/**?) then (yes)
+  if (Role = BRAND_PARTNER?) then (no)
+    :403 Forbidden;
+    stop
+  endif
+else if (CUSTOMER route /orders/**, /wardrobe/**?) then (yes)
+  if (Role = CUSTOMER?) then (no)
+    :403 Forbidden;
+    stop
+  endif
+endif
+
+' ─── Method Authorization ──────────────────────────────────────────
+|Role Guard|
+:@PreAuthorize AOP check\n(method-level, redundant guard);
+if (@PreAuthorize passes?) then (no)
+  :403 Forbidden;
+  stop
+endif
+
+' ─── Ownership Check ──────────────────────────────────────────────
+|Ownership Check|
+:Load resource from database;
+
+if (Admin route? No ownership check) then (yes)
+  note right : Admin has platform-wide authority.\nNo assertOwnership() called.
+  |Business Logic|
+  :Execute admin operation;
+  :200 / 201 / 204 OK;
+  stop
+endif
+
+if (Resource has ownership?) then (yes)
+  :Identify resource owner:
+  ─────────────────────────────
+  Product → product.creator.id
+  Order (customer) → order.buyer.id
+  Brand Order → item.product.creator.id
+  Wardrobe item → item.user.id
+  Brand profile → loaded from auth user (no ID param);
+
+  :Compare resource owner to authenticated user;
+
+  if (Owner matches?) then (no)
+    :400 Bad Request\n"You do not own this resource"\n\nNOTE: Returns 400, not 404.\nResource existence is revealed\nbut content is not exposed.;
+    stop
+  else (yes)
+    :Ownership validated;
+  end
+endif
+
+' ─── Input Validation ────────────────────────────────────────────
+|Business Logic|
+:Apply DTO @Valid validation\n(@NotBlank, @Email, @Size, @Min);
+if (Validation passes?) then (no)
+  :400 Bad Request\n{ field errors };
+  stop
+endif
+
+:Execute business logic\n(create / update / delete / read);
+:Commit transaction;
+:200 / 201 / 204 response;
+stop
+
+@enduml

@@ -1,0 +1,223 @@
+@startuml complete-checkout-flow
+!theme plain
+skinparam backgroundColor #FAFAFA
+skinparam sequenceArrowThickness 1.5
+title Enunas — Complete Checkout Flow (Frontend + Backend + Payment)
+
+actor "Customer\n(Browser)" as Customer
+participant "CartSidebar /\nCart Page" as Cart
+participant "CheckoutPage\n/checkout" as Checkout
+participant "CartContext\n(localStorage)" as CartCtx
+participant "orderApi.ts" as OrderAPI
+participant "fetcher.ts" as Fetcher
+participant "OrderController\nPOST /orders" as OC
+participant "OrderService" as OS
+participant "ProductListing\nRepository" as PLR
+participant "BrandEconomics\nRepository" as BER
+participant "BrandShipping\nRepository" as BSPR
+participant "PaymentProvider\n(Mollie)" as PP
+participant "Mollie API" as Mollie
+participant "Mollie Webhook\nController" as WC
+participant "LedgerService" as LS
+database "PostgreSQL" as DB
+
+' ─── Phase 1: Cart Review ────────────────────────────────────────
+
+note over Customer, DB
+  Phase 1: Customer reviews cart and navigates to checkout
+end note
+
+Customer -> Cart : Click "Zur Kasse" / navigate to /checkout
+Cart -> CartCtx : Read cartItems[] from localStorage["cart"]
+CartCtx --> Checkout : cartItems[] { productId, name, price, qty, size, color }
+
+Checkout -> Checkout : Check isAuthenticated
+alt Not authenticated
+  Checkout -> Customer : Show inline login prompt
+  Customer -> Checkout : Log in (auth flow)
+end
+
+Checkout -> Customer : Display order summary:\n  - Product name, size, color, qty × price\n  - Subtotal\n  - Shipping (free if ≥ €50)\n  - Total
+
+' ─── Phase 2: Shipping Form ──────────────────────────────────────
+
+note over Customer, DB
+  Phase 2: Customer fills shipping form
+end note
+
+Customer -> Checkout : Fill shipping form:\n  firstName, lastName, email,\n  street, city, postalCode,\n  country (DE/AT/CH/NL/BE/LU)
+
+Checkout -> Checkout : Client-side form validation
+alt Form invalid
+  Checkout -> Customer : Show field-level errors
+end
+
+' ─── Phase 3: Order Submission ───────────────────────────────────
+
+note over Customer, DB
+  Phase 3: Customer submits order
+end note
+
+Customer -> Checkout : Click "Jetzt kaufen"
+Checkout -> OrderAPI : orderApi.create({\n  items: cartItems.map(→ {listingId, quantity}),\n  shippingAddress: formData,\n  notes: "..."\n})
+OrderAPI -> Fetcher : POST /orders\n[Authorization: Bearer JWT]
+Fetcher -> OC : POST /orders { items, shippingAddress, notes }
+
+OC -> OC : @PreAuthorize hasRole('CUSTOMER')
+
+OC -> OS : createOrder(dto, authenticatedCustomer)
+
+' ─── Backend: Validation ─────────────────────────────────────────
+group Listing & Stock Validation
+  loop for each item in dto.items
+    OS -> PLR : findById(listingId)
+    PLR -> DB : SELECT * FROM listings WHERE id = ?
+    DB --> PLR : ProductListing
+    PLR --> OS : ProductListing
+
+    OS -> OS : listing.isCurrentlyActive()?\n  active = true?\n  now within availableFrom/availableUntil?
+    alt Listing inactive or outside availability window
+      OS --> OC : IllegalArgumentException\n"Listing not available"
+      OC --> Customer : 400 Bad Request
+    end
+
+    OS -> DB : SELECT stock_quantity FROM product_variants WHERE id = ?
+    alt Insufficient stock
+      OS --> OC : IllegalArgumentException\n"Insufficient stock for: {name}"
+      OC --> Customer : 400 Bad Request
+    end
+  end
+end
+
+' ─── Backend: Build OrderItems ───────────────────────────────────
+group Build Order Items with Snapshots + Commission
+  loop for each item
+    OS -> BER : findByBrandPartner_Id(brandId)
+    BER -> DB : SELECT commission_rate FROM brand_economics WHERE brand_partner_id = ?
+    DB --> BER : BrandEconomics
+    BER --> OS : defaultCommissionRate (e.g., 0.18)
+
+    OS -> OS : Build OrderItem snapshot:\n  productSnapshotName = product.name\n  variantSnapshotSku = color.sku\n  variantSnapshotColor = color.color\n  variantSnapshotSize = variant.size\n  brandSnapshotName = brand.brandName\n  priceAtPurchase = listing.getCurrentPrice()\n  lineTotal = price × quantity\n  platformFeeAmount = lineTotal × commissionRate\n  brandPayoutAmount = lineTotal - platformFeeAmount
+  end
+end
+
+' ─── Backend: Shipping Calculation ───────────────────────────────
+group Shipping Cost Calculation
+  OS -> OS : Group items by brandId
+  loop for each brand in order
+    OS -> BSPR : findByBrandPartner_Id(brandId)
+    BSPR -> DB : SELECT shipping_cost FROM brand_shipping_profiles WHERE brand_partner_id = ?
+    DB --> BSPR : BrandShippingProfile (or null → 0.00)
+    BSPR --> OS : shippingCost
+  end
+  OS -> OS : subtotal = sum(lineTotal)\nshippingTotal = sum(brandShippingCosts)\ntotal = subtotal + shippingTotal
+end
+
+' ─── Backend: Create Order ───────────────────────────────────────
+OS -> DB : INSERT INTO orders\n  (order_number=ENS-YYYY-XXXXXX,\n   buyer_id=customer.id,\n   status=PENDING,\n   total, subtotal, shippingTotal, ...)
+OS -> DB : INSERT INTO order_items\n  (order_id, variant_id, snapshots, amounts, ...)
+
+' ─── Backend: Initiate Payment ───────────────────────────────────
+group Payment Initiation (Mollie)
+  OS -> PP : createPayment({\n  amount: order.total,\n  currency: EUR,\n  description: "Order ENS-2026-XXXXXX",\n  redirectUrl: FRONTEND_BASE_URL + /order/confirmation\n})
+  PP -> Mollie : POST /v2/payments\n[Authorization: Bearer MOLLIE_API_KEY]
+  Mollie --> PP : { id: "tr_xxx",\n  _links.checkout.href: "https://checkout.mollie.com/..." }
+  PP --> OS : PaymentResult { paymentId: "tr_xxx", checkoutUrl }
+
+  OS -> DB : INSERT INTO payments\n  (order_id, amount, status=PENDING,\n   transactionId="tr_xxx")
+end
+
+OS --> OC : OrderResponseDto { id, orderNumber, total, checkoutUrl }
+OC --> Fetcher : 201 Created { order, checkoutUrl }
+Fetcher --> OrderAPI : OrderResponse
+OrderAPI --> Checkout : { checkoutUrl, orderNumber }
+
+Checkout -> Customer : Redirect to checkoutUrl
+Customer -> Mollie : Opens Mollie hosted checkout page
+
+note over Customer, Mollie
+  Stock is NOT decremented yet.
+  Order status = PENDING.
+  Payment status = PENDING.
+  Customer chooses payment method on Mollie's page.
+end note
+
+' ─── Phase 4: Customer Pays ──────────────────────────────────────
+
+note over Customer, DB
+  Phase 4: Customer completes payment on Mollie
+end note
+
+Customer -> Mollie : Select payment method, confirm payment
+Mollie -> Mollie : Process payment (card / iDEAL / etc.)
+
+' ─── Phase 5: Webhook ────────────────────────────────────────────
+
+note over Customer, DB
+  Phase 5: Mollie calls webhook (async)
+end note
+
+Mollie -> WC : POST /webhooks/mollie\n{ id: "tr_xxx" }
+
+note over WC : Public endpoint — no JWT\nIdempotency guard prevents double processing
+
+WC -> Mollie : GET /v2/payments/tr_xxx\n(verify payment status)
+Mollie --> WC : { status: "paid", amount: {...} }
+
+WC -> OS : confirmPaymentByWebhook("tr_xxx")
+OS -> DB : SELECT * FROM payments WHERE transaction_id = "tr_xxx"
+DB --> OS : Payment { status=PENDING, order_id }
+
+alt Payment.status == PAID (idempotent guard)
+  OS --> WC : no-op
+  WC --> Mollie : 200 OK
+else PENDING → process
+  OS -> DB : UPDATE payments SET status=PAID, paid_at=now()
+
+  group Atomic Stock Decrement
+    loop for each OrderItem
+      OS -> DB : UPDATE product_variants\n  SET stock_quantity = stock_quantity - qty\n  WHERE id = ? AND stock_quantity >= qty\n  [atomic SQL — prevents overselling]
+      alt rowsUpdated == 0 (race condition — stock already gone)
+        OS -> OS : restoreAlreadyDecrementedItems()
+        OS -> DB : UPDATE orders SET status=CANCELLED
+        OS -> DB : UPDATE payments SET status=PENDING\n  (flag for manual Mollie refund)
+        note right : Admin must process manual refund.\nWebhook still returns 200 (idempotent).
+        OS --> WC : early return
+        WC --> Mollie : 200 OK
+      end
+    end
+  end
+
+  group Financial Ledger Recording
+    OS -> LS : recordOrderPayment(order)
+    loop for each OrderItem per Brand
+      LS -> DB : INSERT INTO ledger_entries (\n  orderId, orderItemId, brandPartnerId,\n  totalAmount, platformFee, brandPayout,\n  commissionRate,\n  status=PENDING_RELEASE,\n  payoutEligibleAt=now+7days,\n  externalReferenceId="tr_xxx"\n)
+      LS -> DB : UPDATE brand_economics\n  SET pending_balance = pending_balance + brandPayout,\n      lifetime_revenue = lifetime_revenue + totalAmount\n  WHERE brand_partner_id = ?
+    end
+  end
+
+  OS -> DB : UPDATE orders SET status=PAID
+  OS --> WC : success
+  WC --> Mollie : 200 OK
+end
+
+' ─── Phase 6: Customer Redirect ──────────────────────────────────
+
+note over Customer, DB
+  Phase 6: Customer redirected back to frontend
+end note
+
+Mollie -> Customer : Redirect to redirectUrl\n(FRONTEND_BASE_URL/order/confirmation?orderNumber=ENS-2026-XXXXXX)
+Customer -> Checkout : Lands on confirmation page
+Checkout -> CartCtx : clearCart()\n→ Remove "cart" from localStorage
+CartCtx --> Customer : Cart emptied
+
+note over Customer
+  Order is now PAID.
+  Stock decremented.
+  Ledger entries created (PENDING_RELEASE, 7-day hold).
+  Brand can see order in /brand/orders.
+  Customer sees order in /account.
+end note
+
+@enduml

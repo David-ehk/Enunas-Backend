@@ -1,0 +1,106 @@
+@startuml complete-order-lifecycle
+!theme plain
+skinparam backgroundColor #FAFAFA
+skinparam state {
+  BackgroundColor #EEF3FF
+  BorderColor #370E4D
+  ArrowColor #370E4D
+}
+title Enunas — Complete Order Lifecycle (State Machine)
+
+state PENDING : Customer placed order\nPayment link generated\nStock NOT decremented\n\nTrigger: POST /orders
+
+state PAID : Payment confirmed by Mollie webhook\nStock decremented (atomic SQL)\nLedger entries created (PENDING_RELEASE)\n7-day payout hold starts\n\nTrigger: POST /webhooks/mollie
+
+state SHIPPED : Brand confirmed shipment\nCarrier + tracking number stored\nShippedAt timestamp set\n\nTrigger: PATCH /brand/orders/{id}/shipment
+
+state DELIVERED : Order delivered to customer\nReturn window opens (14 days default)\n\nTrigger: Admin force-sets OR auto-confirmation
+
+state SHIPPING_PROBLEM : Brand reported a logistics issue\nProblem description stored\n\nTrigger: POST /brand/orders/{id}/shipping-problem
+
+state AWAITING_ADMIN : Shipping problem escalated\nAdmin review required\n\nTrigger: Admin state transition
+
+state MANUAL_REVIEW : Admin is actively investigating\n\nTrigger: Admin escalation
+
+state RETURN_REQUESTED : Customer submitted return request\nReturnOrder created (PENDING)\nReturnItems linked\n\nTrigger: POST /orders/{id}/return\n(order must be DELIVERED)
+
+state RETURN_APPROVED : Admin approved return\nReturn label placeholder set\nApprovedAt timestamp recorded\n\nTrigger: POST /admin/orders/{id}/return/approve
+
+state RETURN_RECEIVED : Goods received back at warehouse\nStock RESTORED for returned items (atomic)\nReceivedAt timestamp recorded\n\nTrigger: POST /admin/orders/{id}/return/receive
+
+state REFUNDED : Mollie refund issued\nLedger REFUND_REVERSAL entry created\nBrandEconomics deducted\nPayment.status = REFUNDED\n\nTrigger: POST /admin/orders/{id}/return/refund
+
+state CANCELLED : Order cancelled\nStock restored if was PAID\nCancellation reason + admin email stored\n\nTrigger: POST /admin/orders/{id}/cancel\nOR payment expiry (OrderExpiryService)
+
+[*] --> PENDING : Customer: POST /orders\n→ OrderService.createOrder()
+
+PENDING --> PAID : Mollie webhook fires\n→ confirmPaymentByWebhook()\n→ Stock decremented
+
+PENDING --> CANCELLED : (a) Admin: POST /admin/orders/{id}/cancel\n[PENDING orders only]\n→ Sends cancellation email\n\n(b) OrderExpiryService\n[payment link expired]
+
+PAID --> SHIPPED : Brand: PATCH /brand/orders/{id}/shipment\n{ carrier, trackingNumber }\n→ Order.shippedAt = now()\n→ Email sent to customer
+
+PAID --> SHIPPING_PROBLEM : Brand: POST /brand/orders/{id}/shipping-problem\n{ problemDescription }\n→ problemReportedAt = now()\n→ problemReportedBy = brand
+
+PAID --> CANCELLED : Admin force-cancels post-payment\n→ Stock RESTORED\n→ Manual Mollie refund required
+
+SHIPPED --> DELIVERED : Admin: PATCH /admin/orders/{id}/status\nOR automatic confirmation
+
+SHIPPED --> SHIPPING_PROBLEM : Brand reports problem after shipment
+
+SHIPPING_PROBLEM --> AWAITING_ADMIN : Admin review triggered
+
+AWAITING_ADMIN --> MANUAL_REVIEW : Admin escalates investigation
+
+MANUAL_REVIEW --> REFUNDED : Admin resolves with refund\n→ Calls Mollie refund API
+
+DELIVERED --> RETURN_REQUESTED : Customer: POST /orders/{id}/return\n{ reason, description }\n→ ReturnOrder.status = PENDING\n→ Order.status = RETURN_REQUESTED
+
+RETURN_REQUESTED --> RETURN_APPROVED : Admin: POST /admin/orders/{id}/return/approve\n→ ReturnOrder.status = APPROVED\n→ ReturnOrder.approvedAt = now()\n→ Return label placeholder set
+
+RETURN_APPROVED --> RETURN_RECEIVED : Admin: POST /admin/orders/{id}/return/receive\n→ ReturnOrder.status = RECEIVED\n→ ReturnOrder.receivedAt = now()\n→ Stock RESTORED for all ReturnItems
+
+RETURN_RECEIVED --> REFUNDED : Admin: POST /admin/orders/{id}/return/refund\n{ refundAmount }\n→ Mollie refund API called\n→ LedgerEntry (REFUND_REVERSAL) inserted\n→ BrandEconomics deducted
+
+REFUNDED --> [*]
+CANCELLED --> [*]
+
+note right of PAID
+  KEY MILESTONE:
+  ─────────────────────────────
+  stockQuantity decremented
+  LedgerEntry.status = PENDING_RELEASE
+  payoutEligibleAt = now + 7 days
+  BrandEconomics.pendingBalance += brandPayout
+  BrandEconomics.lifetimeRevenue += totalAmount
+end note
+
+note right of REFUNDED
+  KEY ACTIONS:
+  ─────────────────────────────
+  Mollie: POST /v2/payments/tr_xxx/refunds
+  LedgerEntry: REFUND_REVERSAL (status=REVERSED)
+  reversalOfEntryId → links to ORDER_PAYMENT
+  BrandEconomics: deducted (pendingBalance first,
+    then payoutBalance, remainder → outstandingDebt)
+  Payment.status = REFUNDED
+end note
+
+note right of RETURN_RECEIVED
+  STOCK RESTORE:
+  ─────────────────────────────
+  UPDATE product_variants
+  SET stock_quantity = stock_quantity + qty
+  WHERE id = ? [atomic SQL]
+end note
+
+note right of CANCELLED
+  STOCK NOTE:
+  ─────────────────────────────
+  PENDING → CANCELLED: no stock was held, no restore needed
+  PAID → CANCELLED: stock was decremented, must be restored
+  Admin cancellation of PAID order requires
+    manual Mollie refund (no auto-refund on cancel)
+end note
+
+@enduml

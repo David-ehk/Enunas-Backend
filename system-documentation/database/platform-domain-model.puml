@@ -1,0 +1,372 @@
+@startuml platform-domain-model
+!theme plain
+skinparam backgroundColor #FAFAFA
+skinparam classBackgroundColor #EEF3FF
+skinparam classBorderColor #370E4D
+skinparam noteBackgroundColor #FFFDE7
+title Enunas — Platform Domain Model (Complete Entity Diagram)
+
+' ─── IDENTITY DOMAIN ──────────────────────────────────────────────
+package "Identity Domain" #F5F5F0 {
+
+  class User {
+    + id: BIGINT <<PK>>
+    + email: VARCHAR <<UNIQUE, NOT NULL>>
+    + password: VARCHAR <<BCrypt hash>>
+    + role: ENUM {CUSTOMER, BRAND_PARTNER, ADMIN}
+    + enabled: BOOLEAN <<default: false>>
+    + adminApproved: BOOLEAN <<default: false>>
+    + verificationCode: VARCHAR(6)
+    + verificationCodeExpiresAt: TIMESTAMP
+    + createdAt: TIMESTAMP
+    ..Constraints..
+    UNIQUE(email)
+    ..Ownership..
+    role is IMMUTABLE after creation
+  }
+}
+
+' ─── CUSTOMER DOMAIN ─────────────────────────────────────────────
+package "Customer Domain" #E8F5E9 {
+
+  class Customer {
+    + id: BIGINT <<PK>>
+    + userId: BIGINT <<FK users.id, UNIQUE>>
+    + firstName: VARCHAR
+    + lastName: VARCHAR
+    + username: VARCHAR
+    + profileImageUrl: VARCHAR
+    + country: VARCHAR
+    + city: VARCHAR
+    + preferredSizeTop: VARCHAR
+    + preferredSizeBottom: VARCHAR
+    + preferredSizeShoes: VARCHAR
+    + heightCm: INT
+    + weightKg: INT
+    + totalOrders: INT <<denormalized>>
+    + totalSpent: DECIMAL(19,2) <<denormalized>>
+    + createdAt: TIMESTAMP
+    --
+    + preferredStyles: List<String>
+    + favoriteBrands: List<String>
+    + favoriteCategories: List<String>
+  }
+
+  class WardrobeItem {
+    + id: BIGINT <<PK>>
+    + userId: BIGINT <<FK users.id>>
+    + imageUrl: VARCHAR
+    + category: VARCHAR
+    + color: VARCHAR
+    + brand: VARCHAR
+    + styleTag: VARCHAR
+    + isPublic: BOOLEAN <<default: false>>
+    + createdAt: TIMESTAMP
+    ..Ownership..
+    user.id == authenticatedUser.id (on write)
+  }
+}
+
+' ─── BRAND DOMAIN ─────────────────────────────────────────────────
+package "Brand Domain" #E8D5FF {
+
+  class BrandPartner {
+    + id: BIGINT <<PK>>
+    + userId: BIGINT <<FK users.id, UNIQUE>>
+    + brandName: VARCHAR <<UNIQUE, IMMUTABLE>>
+    + slug: VARCHAR <<UNIQUE, IMMUTABLE>>
+    + description: TEXT
+    + logoUrl: VARCHAR
+    + websiteUrl: VARCHAR
+    + instagramHandle: VARCHAR
+    + tiktokHandle: VARCHAR
+    + country: VARCHAR(2)
+    + contactEmail: VARCHAR
+    + status: ENUM {PENDING_REVIEW, ACTIVE, SUSPENDED, REJECTED}
+    + approved: BOOLEAN
+    + createdAt: TIMESTAMP
+    + updatedAt: TIMESTAMP
+  }
+
+  class BrandEconomics {
+    + id: BIGINT <<PK>>
+    + brandPartnerId: BIGINT <<FK brand_partners.id, UNIQUE>>
+    + defaultCommissionRate: DECIMAL(5,4) <<default: 0.18>>
+    + pendingBalance: DECIMAL(19,2)
+    + payoutBalance: DECIMAL(19,2)
+    + lifetimeRevenue: DECIMAL(19,2)
+    + paidOutTotal: DECIMAL(19,2)
+    + outstandingDebt: DECIMAL(19,2)
+    ..Access..
+    Admin-only (no brand-facing API)
+    Denormalized read model of LedgerEntries
+  }
+
+  class BrandShippingProfile {
+    + id: BIGINT <<PK>>
+    + brandPartnerId: BIGINT <<FK brand_partners.id>>
+    + shippingCost: DECIMAL(10,2) <<EUR flat rate per order>>
+    ..Access..
+    Admin-managed
+  }
+
+  class BrandPayoutProfile {
+    + id: BIGINT <<PK>>
+    + brandPartnerId: BIGINT <<FK brand_partners.id, UNIQUE>>
+    + iban: VARCHAR
+    + bankAccountHolder: VARCHAR
+    ..Access..
+    Admin-only (fraud prevention)
+  }
+}
+
+' ─── CATALOG DOMAIN ──────────────────────────────────────────────
+package "Catalog Domain" #FFF3E0 {
+
+  class Product {
+    + id: BIGINT <<PK>>
+    + name: VARCHAR
+    + brandId: BIGINT <<FK brand_partners.id>>
+    + creatorId: BIGINT <<FK users.id, IMMUTABLE>>
+    + description: TEXT
+    + inspirationStory: TEXT
+    + category: ENUM {CLOTHING, SHOES, ACCESSORIES, PERFUME}
+    + gender: ENUM {UNISEX, MEN, WOMEN, OTHER}
+    + productType: VARCHAR
+    + outfitSlot: ENUM {TOP, BOTTOM, OUTERWEAR, FOOTWEAR, ACCESSORY}
+    + material: VARCHAR
+    + originCountry: VARCHAR
+    + careInstructions: TEXT
+    + collectionName: VARCHAR
+    + releaseDate: DATE
+    + returnPeriodDays: INT <<default: 14>>
+    + status: ENUM {ACTIVE, SUSPENDED, REJECTED, INACTIVE, ARCHIVED}
+    + completeTheLookEnabled: BOOLEAN
+    + moderatedById: BIGINT <<FK users.id, NULLABLE>>
+    + moderatedAt: TIMESTAMP
+    + rejectionReason: TEXT
+    + createdAt: TIMESTAMP
+    + updatedAt: TIMESTAMP
+    --
+    + catalogueCategories: List<String>
+    + completeTheLookProducts: Set<Product> <<M:M self>>
+    ..Ownership..
+    creator.id == authenticatedUser.id (on write)
+    Admin bypasses ownership check
+  }
+
+  class ProductColor {
+    + id: BIGINT <<PK>>
+    + productId: BIGINT <<FK products.id>>
+    + sku: VARCHAR(8) <<UNIQUE platform-wide>>
+    + color: VARCHAR
+    ..Constraints..
+    UNIQUE(productId, color)
+  }
+
+  class ProductVariant {
+    + id: BIGINT <<PK>>
+    + productColorId: BIGINT <<FK product_colors.id>>
+    + productId: BIGINT <<FK products.id, denorm>>
+    + size: VARCHAR
+    + stockQuantity: INT <<decremented on payment>>
+    + weightGrams: INT
+    ..Constraints..
+    UNIQUE(productColorId, size)
+    ..Stock..
+    Decremented atomically on Mollie webhook
+    Restored atomically on return or cancel
+  }
+
+  class ProductImage {
+    + id: BIGINT <<PK>>
+    + productId: BIGINT <<FK products.id>>
+    + imageUrl: VARCHAR
+    + altText: VARCHAR
+    + isPrimary: BOOLEAN
+    + displayOrder: INT
+    + createdAt: TIMESTAMP
+  }
+
+  class ProductVideo {
+    + id: BIGINT <<PK>>
+    + productId: BIGINT <<FK products.id>>
+    + videoUrl: VARCHAR
+    + title: VARCHAR
+    + thumbnailUrl: VARCHAR
+    + createdAt: TIMESTAMP
+  }
+
+  class ProductListing {
+    + id: BIGINT <<PK>>
+    + productId: BIGINT <<FK products.id>>
+    + variantId: BIGINT <<FK product_variants.id>>
+    + price: DECIMAL(10,2)
+    + discountPrice: DECIMAL(10,2)
+    + currency: VARCHAR(3) <<EUR>>
+    + active: BOOLEAN <<default: true>>
+    + region: VARCHAR
+    + dropDate: TIMESTAMP
+    + availableFrom: TIMESTAMP
+    + availableUntil: TIMESTAMP
+    + createdAt: TIMESTAMP
+    + updatedAt: TIMESTAMP
+  }
+}
+
+' ─── ORDER DOMAIN ────────────────────────────────────────────────
+package "Order Domain" #FFE0E0 {
+
+  class Order {
+    + id: BIGINT <<PK>>
+    + version: BIGINT <<optimistic lock>>
+    + orderNumber: VARCHAR <<UNIQUE: ENS-YYYY-XXXXXX>>
+    + buyerId: BIGINT <<FK users.id, IMMUTABLE>>
+    + status: ENUM {PENDING, PAID, SHIPPED, DELIVERED, ..., CANCELLED}
+    + subtotal: DECIMAL(10,2)
+    + shippingTotal: DECIMAL(10,2)
+    + total: DECIMAL(10,2)
+    + currency: VARCHAR(3) <<EUR>>
+    + notes: TEXT
+    + shippingFirstName, shippingLastName, shippingStreet,
+    + shippingCity, shippingPostalCode, shippingCountry: VARCHAR
+    + shippingCarrier: VARCHAR
+    + trackingNumber: VARCHAR
+    + shippedAt: TIMESTAMP
+    + problemDescription: TEXT
+    + problemReportedAt: TIMESTAMP
+    + problemReportedBy: VARCHAR
+    + cancellationReason: VARCHAR
+    + cancellationNote: VARCHAR
+    + cancelledByAdminEmail: VARCHAR
+    + createdAt: TIMESTAMP
+    + updatedAt: TIMESTAMP
+  }
+
+  class OrderItem {
+    + id: BIGINT <<PK>>
+    + orderId: BIGINT <<FK orders.id>>
+    + variantId: BIGINT <<FK product_variants.id>>
+    + productSnapshotName: VARCHAR <<IMMUTABLE>>
+    + variantSnapshotSku: VARCHAR <<IMMUTABLE>>
+    + variantSnapshotColor: VARCHAR <<IMMUTABLE>>
+    + variantSnapshotSize: VARCHAR <<IMMUTABLE>>
+    + brandSnapshotName: VARCHAR <<IMMUTABLE>>
+    + priceAtPurchase: DECIMAL(10,2) <<IMMUTABLE>>
+    + discountPriceAtPurchase: DECIMAL(10,2)
+    + quantity: INT
+    + lineTotal: DECIMAL(10,2) <<IMMUTABLE>>
+    + commissionRate: DECIMAL(5,4) <<IMMUTABLE snapshot>>
+    + platformFeeAmount: DECIMAL(10,2) <<IMMUTABLE>>
+    + brandPayoutAmount: DECIMAL(10,2) <<IMMUTABLE>>
+  }
+
+  class Payment {
+    + id: BIGINT <<PK>>
+    + version: BIGINT <<optimistic lock>>
+    + orderId: BIGINT <<FK orders.id, UNIQUE>>
+    + amount: DECIMAL(10,2)
+    + currency: VARCHAR(3) <<EUR>>
+    + paymentMethod: VARCHAR
+    + status: ENUM {PENDING, PAID, FAILED, REFUNDED}
+    + transactionId: VARCHAR <<Mollie tr_xxx>>
+    + paidAt: TIMESTAMP
+    + createdAt: TIMESTAMP
+    + updatedAt: TIMESTAMP
+  }
+
+  class ReturnOrder {
+    + id: BIGINT <<PK>>
+    + returnNumber: VARCHAR <<UNIQUE: RET-YYYY-XXXXXX>>
+    + orderId: BIGINT <<FK orders.id>>
+    + userId: BIGINT <<FK users.id>>
+    + reason: ENUM {DEFECTIVE, WRONG_SIZE, WRONG_COLOR, ...}
+    + description: VARCHAR
+    + status: ENUM {PENDING, APPROVED, RECEIVED}
+    + returnLabel: VARCHAR
+    + approvedAt: TIMESTAMP
+    + receivedAt: TIMESTAMP
+    + createdAt: TIMESTAMP
+  }
+
+  class ReturnItem {
+    + id: BIGINT <<PK>>
+    + returnOrderId: BIGINT <<FK return_orders.id>>
+    + orderItemId: BIGINT <<FK order_items.id>>
+    + quantityReturned: INT
+  }
+}
+
+' ─── FINANCIAL DOMAIN ────────────────────────────────────────────
+package "Financial Domain (Admin-Only)" #F0E8FF {
+
+  class LedgerEntry {
+    + id: BIGINT <<PK>>
+    + orderId: BIGINT <<reference>>
+    + orderItemId: BIGINT <<reference>>
+    + brandPartnerId: BIGINT <<tenant key>>
+    + totalAmount: DECIMAL(19,2) <<IMMUTABLE>>
+    + platformFee: DECIMAL(19,2) <<IMMUTABLE>>
+    + brandPayout: DECIMAL(19,2) <<IMMUTABLE>>
+    + commissionRate: DECIMAL(5,4) <<IMMUTABLE>>
+    + currency: VARCHAR(3)
+    + entryType: ENUM {ORDER_PAYMENT, REFUND_REVERSAL, PAYOUT_TRANSFER}
+    + status: ENUM {PENDING_RELEASE, AVAILABLE, REVERSED, PAID_OUT}
+    + payoutEligibleAt: TIMESTAMP <<7-day hold>>
+    + movedToAvailable: BOOLEAN
+    + reversalOfEntryId: BIGINT <<links REFUND to ORDER_PAYMENT>>
+    + externalReferenceId: VARCHAR <<Mollie ID / bank ref>>
+    ..Immutability..
+    INSERT only — no UPDATE or DELETE ever
+    Idempotency: existsByOrderIdAndEntryType()
+  }
+
+  class Payout {
+    + id: BIGINT <<PK>>
+    + brandPartnerId: BIGINT
+    + amount: DECIMAL(19,2)
+    + debtAbsorbed: DECIMAL(19,2)
+    + status: ENUM {PENDING, APPROVED, PAID, CANCELLED}
+    + iban: VARCHAR
+    + bankAccountHolder: VARCHAR
+    + currency: VARCHAR(3)
+    + approvedAt: TIMESTAMP
+    + approvedByAdminEmail: VARCHAR
+    + paidAt: TIMESTAMP
+    + paidByAdminEmail: VARCHAR
+    + externalReference: VARCHAR
+    + createdAt: TIMESTAMP
+    + updatedAt: TIMESTAMP
+  }
+}
+
+' ─── Relationships ────────────────────────────────────────────────
+User "1" --o "0..1" Customer : OneToOne (user_id)
+User "1" --o "0..1" BrandPartner : OneToOne (user_id)
+User "1" --o "*" WardrobeItem : OneToMany (user_id)
+User "1" --o "*" Order : OneToMany (buyer_id)
+
+BrandPartner "1" --|| BrandEconomics : OneToOne (brand_partner_id)
+BrandPartner "1" --o "0..1" BrandShippingProfile : OneToMany
+BrandPartner "1" --o "0..1" BrandPayoutProfile : OneToOne
+BrandPartner "1" --o "*" Product : OneToMany (brand_id)
+
+Product "1" --o "*" ProductColor : OneToMany + CASCADE
+Product "1" --o "*" ProductImage : OneToMany + CASCADE
+Product "1" --o "*" ProductVideo : OneToMany + CASCADE
+Product "1" --o "*" ProductListing : OneToMany
+Product "*" --o "*" Product : ManyToMany (complete_the_look)
+
+ProductColor "1" --o "*" ProductVariant : OneToMany + CASCADE
+
+ProductVariant "1" --o "*" ProductListing : OneToMany
+ProductVariant "1" --o "*" OrderItem : OneToMany (variant_id)
+
+Order "1" --o "*" OrderItem : OneToMany + CASCADE
+Order "1" --|| Payment : OneToOne
+Order "1" --o "0..1" ReturnOrder : OneToMany
+
+ReturnOrder "1" --o "*" ReturnItem : OneToMany + CASCADE
+ReturnItem "*" --o "1" OrderItem : ManyToOne (order_item_id)
+
+@enduml

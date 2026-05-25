@@ -1,0 +1,188 @@
+---
+title: Enunas — Complete Platform System Map
+---
+flowchart TD
+    subgraph USER_BROWSER["User Browser"]
+        direction TB
+        AUTH_CTX["AuthContext\n(JWT + user state)"]
+        CART_CTX["CartContext\n(cart state)"]
+        LOCAL_STORE[("localStorage\n['enunas_token']\n['cart']")]
+        FETCHER["fetcher.ts\n(HTTP client\nautomatically injects JWT)"]
+        AUTH_CTX --- LOCAL_STORE
+        CART_CTX --- LOCAL_STORE
+        AUTH_CTX --> FETCHER
+    end
+
+    subgraph NEXT_PAGES["Next.js Pages (Vercel)"]
+        direction TB
+        PUBLIC_PAGES["Public Pages\n/ (Landing)\n/bekleidung (Catalog)\n/produkt/{slug} (PDP)\n/login\n/register"]
+        CUSTOMER_PAGES["Customer Pages\n/dashboard/customer\n/warenkorb\n/checkout\n/orders"]
+        BRAND_PAGES["Brand Pages (NOT YET IMPL)\n/dashboard/vendor\n/dashboard/vendor/products"]
+        ADMIN_PAGES["Admin Pages\n/dashboard/admin\n(brands, products, orders, payouts)"]
+    end
+
+    subgraph API_CLIENTS["TypeScript API Clients"]
+        direction TB
+        AUTH_API["authApi.ts\nlogin, register, verify"]
+        PROD_API["productApi.ts\nlist, get, create"]
+        ORDER_API["orderApi.ts\ncreate, list, get"]
+        ADMIN_API["adminApi.ts\nbrand/product/order/payout mgmt"]
+        CUSTOMER_API["customerApi.ts\nprofile, wardrobe"]
+    end
+
+    subgraph SPRING_SECURITY["Spring Security Filter Chain"]
+        direction LR
+        CORS_FILTER["CORS Filter\n(allowed origins: enunas.com)"]
+        JWT_FILTER["JWT Authentication Filter\nextract userId+role from token"]
+        ROUTE_GUARD["Route Authorization\nhasRole() checks"]
+        CORS_FILTER --> JWT_FILTER --> ROUTE_GUARD
+    end
+
+    subgraph CONTROLLERS["REST Controllers"]
+        direction TB
+        AUTH_CTRL["AuthController\n/auth/**\n(PUBLIC)"]
+        USER_CTRL["UserController\n/users/**\n(AUTHENTICATED)"]
+        PROD_CTRL["ProductController\n/products/**\n(BRAND_PARTNER / PUBLIC)"]
+        ORD_CTRL["OrderController\n/orders/**\n(CUSTOMER)"]
+        ADMIN_CTRL["AdminController\n/admin/**\n(ADMIN)"]
+        WEBHOOK_CTRL["MollieWebhookController\n/webhooks/mollie\n(PUBLIC — no JWT)"]
+    end
+
+    subgraph SERVICES["Service Layer"]
+        direction TB
+        AUTH_SVC["AuthenticationService\n+ JwtService"]
+        BRAND_SVC["BrandPartnerService"]
+        PROD_SVC["ProductService"]
+        LIST_SVC["ProductListingService"]
+        ORD_SVC["OrderService\n(core business logic)"]
+        LEDGER_SVC["LedgerService\n(financial recording)"]
+        PAYOUT_SVC["PayoutService"]
+        ADMIN_SVC["AdminService\n(orchestrates all admin ops)"]
+        CUST_SVC["CustomerService"]
+        EMAIL_SVC["EmailService"]
+        RECONCIL_SVC["ReconciliationService\n(drift detection)"]
+        MEDIA_SVC["MediaService\n(S3 uploads)"]
+    end
+
+    subgraph PAYMENT_LAYER["Payment Abstraction"]
+        PP_IFACE["PaymentProvider\n(interface)"]
+        MOLLIE_PAY["MolliePaymentService\n(production)"]
+        MOCK_PAY["MockPaymentService\n(mock-payments profile)"]
+        PP_IFACE --> MOLLIE_PAY
+        PP_IFACE --> MOCK_PAY
+    end
+
+    subgraph DB["PostgreSQL Database"]
+        direction TB
+        IDENTITY_DB[("Identity\nusers")]
+        CUSTOMER_DB[("Customer\ncustomers\nwardrobe_items")]
+        BRAND_DB[("Brand\nbrand_partners\nbrand_economics\nbrand_shipping_profiles\nbrand_payout_profiles")]
+        CATALOG_DB[("Catalog\nproducts\nproduct_colors\nproduct_variants\nproduct_images\nproduct_videos\nproduct_listings")]
+        ORDER_DB[("Order\norders\norder_items\npayments\nreturn_orders\nreturn_items")]
+        FINANCIAL_DB[("Financial\nledger_entries\npayouts")]
+    end
+
+    subgraph AWS_INFRA["AWS Infrastructure"]
+        direction TB
+        EC2["EC2 / ECS\n(Docker: Spring Boot)"]
+        S3["S3 Object Storage\nproduct-images/\nproduct-videos/\nbrand-assets/"]
+        ALB["Load Balancer + SSL\nnginx or ALB\nHTTPS:443 → HTTP:8080"]
+    end
+
+    subgraph EXTERNAL_SVC["External Services"]
+        direction TB
+        MOLLIE_EXT["Mollie\napi.mollie.com/v2\nPayment links + webhooks\nPCI-compliant"]
+        SMTP_EXT["Gmail SMTP\nsmtp.gmail.com:587\nSTARTTLS\nEmail notifications"]
+    end
+
+    subgraph VERCEL_INFRA["Vercel Infrastructure"]
+        direction TB
+        VERCEL_CDN["Edge CDN\n(global)"]
+        VERCEL_RT["Next.js Runtime\n(serverless)"]
+    end
+
+    %% ── Frontend → API ─────────────────────────────────────────
+    PUBLIC_PAGES --> AUTH_API
+    PUBLIC_PAGES --> PROD_API
+    CUSTOMER_PAGES --> ORDER_API
+    CUSTOMER_PAGES --> CUSTOMER_API
+    ADMIN_PAGES --> ADMIN_API
+    BRAND_PAGES --> PROD_API
+
+    AUTH_API --> FETCHER
+    PROD_API --> FETCHER
+    ORDER_API --> FETCHER
+    ADMIN_API --> FETCHER
+    CUSTOMER_API --> FETCHER
+
+    %% ── API → Backend ──────────────────────────────────────────
+    FETCHER -->|"HTTPS REST\nAuthorization: Bearer JWT"| ALB
+    ALB -->|"HTTP:8080"| SPRING_SECURITY
+    SPRING_SECURITY --> CONTROLLERS
+
+    %% ── Controllers → Services ─────────────────────────────────
+    AUTH_CTRL --> AUTH_SVC
+    PROD_CTRL --> PROD_SVC
+    PROD_CTRL --> LIST_SVC
+    ORD_CTRL --> ORD_SVC
+    ADMIN_CTRL --> ADMIN_SVC
+    WEBHOOK_CTRL --> ORD_SVC
+    USER_CTRL --> CUST_SVC
+
+    %% ── Services → Services ────────────────────────────────────
+    ADMIN_SVC --> BRAND_SVC
+    ADMIN_SVC --> PROD_SVC
+    ADMIN_SVC --> ORD_SVC
+    ADMIN_SVC --> PAYOUT_SVC
+    ADMIN_SVC --> RECONCIL_SVC
+    ORD_SVC --> LEDGER_SVC
+    ORD_SVC --> PP_IFACE
+    PAYOUT_SVC --> LEDGER_SVC
+    AUTH_SVC --> CUST_SVC
+    AUTH_SVC --> EMAIL_SVC
+
+    %% ── Services → DB ──────────────────────────────────────────
+    AUTH_SVC -->|"findByEmail, save"| IDENTITY_DB
+    CUST_SVC -->|"findByUser, save"| CUSTOMER_DB
+    BRAND_SVC -->|"findByUser, save"| BRAND_DB
+    PROD_SVC -->|"findById, save"| CATALOG_DB
+    ORD_SVC -->|"save, findById"| ORDER_DB
+    LEDGER_SVC -->|"INSERT-only"| FINANCIAL_DB
+    PAYOUT_SVC -->|"save, findAll"| FINANCIAL_DB
+    RECONCIL_SVC -->|"sum, read"| FINANCIAL_DB
+
+    %% ── Services → External ────────────────────────────────────
+    MOLLIE_PAY -->|"HTTPS"| MOLLIE_EXT
+    MOLLIE_EXT -->|"POST /webhooks/mollie"| ALB
+    EMAIL_SVC -->|"SMTP/TLS:587"| SMTP_EXT
+    MEDIA_SVC -->|"HTTPS upload"| S3
+
+    %% ── Infrastructure ─────────────────────────────────────────
+    NEXT_PAGES --> VERCEL_CDN
+    VERCEL_CDN --> VERCEL_RT
+    EC2 -->|"JDBC:5432"| DB
+    EC2 -->|"VPC internal"| S3
+
+    classDef browser fill:#E8F5E9,stroke:#2E7D32,color:#000
+    classDef pages fill:#E3F2FD,stroke:#1565C0,color:#000
+    classDef api_clients fill:#F3E5F5,stroke:#6A1B9A,color:#000
+    classDef security fill:#EEF3FF,stroke:#1A237E,color:#000,font-weight:bold
+    classDef controllers fill:#E8D5FF,stroke:#4527A0,color:#000
+    classDef services fill:#FFF3E0,stroke:#E65100,color:#000
+    classDef payment fill:#FCE4EC,stroke:#880E4F,color:#000
+    classDef db fill:#FFF8E1,stroke:#F57F17,color:#000
+    classDef aws fill:#F0E8FF,stroke:#311B92,color:#000
+    classDef external fill:#FFE0E0,stroke:#C62828,color:#000
+    classDef vercel fill:#E1F5FE,stroke:#0277BD,color:#000
+
+    class AUTH_CTX,CART_CTX,LOCAL_STORE,FETCHER browser
+    class PUBLIC_PAGES,CUSTOMER_PAGES,BRAND_PAGES,ADMIN_PAGES pages
+    class AUTH_API,PROD_API,ORDER_API,ADMIN_API,CUSTOMER_API api_clients
+    class CORS_FILTER,JWT_FILTER,ROUTE_GUARD security
+    class AUTH_CTRL,USER_CTRL,PROD_CTRL,ORD_CTRL,ADMIN_CTRL,WEBHOOK_CTRL controllers
+    class AUTH_SVC,BRAND_SVC,PROD_SVC,LIST_SVC,ORD_SVC,LEDGER_SVC,PAYOUT_SVC,ADMIN_SVC,CUST_SVC,EMAIL_SVC,RECONCIL_SVC,MEDIA_SVC services
+    class PP_IFACE,MOLLIE_PAY,MOCK_PAY payment
+    class IDENTITY_DB,CUSTOMER_DB,BRAND_DB,CATALOG_DB,ORDER_DB,FINANCIAL_DB db
+    class EC2,S3,ALB aws
+    class MOLLIE_EXT,SMTP_EXT external
+    class VERCEL_CDN,VERCEL_RT vercel

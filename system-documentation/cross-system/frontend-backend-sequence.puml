@@ -1,0 +1,146 @@
+@startuml frontend-backend-sequence
+!theme plain
+skinparam backgroundColor #FAFAFA
+skinparam sequenceArrowThickness 1.5
+title Enunas — Frontend to Backend: Key Cross-System Sequences
+
+' ─── Sequence 1: Protected Page Load ─────────────────────────────
+
+group Sequence 1: Protected Page Load (Admin Dashboard)
+
+  actor Admin
+  participant "Browser" as B
+  participant "Next.js\nAdminPage" as NP
+  participant "AuthContext" as AC
+  participant "adminApi.ts" as AA
+  participant "fetcher.ts" as F
+  participant "Spring Security\nFilter" as SF
+  participant "AdminController" as ACtrl
+  participant "AdminService" as AS
+  database "PostgreSQL" as DB
+
+  Admin -> B : Navigate to /dashboard/admin
+  B -> NP : Page renders (HTML shell delivered)
+  NP -> AC : useAuth() → { user, isLoading }
+
+  alt isLoading === true
+    NP -> Admin : Show loading spinner
+  end
+
+  AC -> F : GET /users/me [auth: true]
+  F -> SF : GET /users/me\nAuthorization: Bearer JWT
+  SF -> SF : Validate JWT → set SecurityContext ROLE_ADMIN
+  SF -> ACtrl : Forward
+  ACtrl --> F : ApiUser { id, email, role: ADMIN }
+  F --> AC : ApiUser
+  AC -> AC : setUser(ApiUser)\nisAuthenticated = true
+
+  NP -> NP : Check: user.role !== ADMIN\n→ router.replace('/dashboard/login')
+
+  alt role === ADMIN
+    NP -> AA : adminApi.brands.getAll()
+    AA -> F : GET /admin/brands [auth: true]
+    F -> SF : GET /admin/brands\nAuthorization: Bearer JWT
+    SF -> SF : Validate JWT\nRoute guard: hasRole(ADMIN) → pass
+    SF -> ACtrl : Forward (ADMIN route)
+    ACtrl -> AS : listAllBrands(pageable)
+    AS -> DB : SELECT * FROM brand_partners
+    DB --> AS : Page<BrandPartner>
+    AS --> ACtrl : Page<BrandPartnerResponseDto>
+    ACtrl --> F : 200 OK { content, totalElements }
+    F --> NP : Brand list data
+    NP -> Admin : Render brands tab
+  end
+end
+
+' ─── Sequence 2: Product Creation Cross-System ───────────────────
+
+group Sequence 2: Brand Partner Creates Product
+
+  actor Brand
+  participant "Vendor\nDashboard" as VD
+  participant "productApi.ts" as PA
+  participant "fetcher.ts" as F2
+  participant "Spring Security" as SF2
+  participant "ProductController" as PC
+  participant "ProductService" as PS
+  database DB2
+
+  Brand -> VD : Fill product creation form
+  VD -> PA : productApi.create(createProductDto)
+  PA -> F2 : POST /products/create\n[auth: true]
+  F2 -> SF2 : POST /products/create\nAuthorization: Bearer BRAND_PARTNER JWT
+  SF2 -> SF2 : JWT valid, role=BRAND_PARTNER\nRoute: /products/create → hasRole(BRAND_PARTNER) ✓
+  SF2 -> PC : Forward
+  PC -> PC : @PreAuthorize hasRole('BRAND_PARTNER')
+  PC -> PS : createProduct(dto, authenticatedUser)
+  PS -> PS : Validate + build entities
+  PS -> DB2 : INSERT products, product_colors, product_variants
+  DB2 --> PS : Saved entities
+  PS --> PC : ProductResponseDto
+  PC --> F2 : 201 Created { product }
+  F2 --> VD : Product created
+  VD -> Brand : Show success, product in list
+end
+
+' ─── Sequence 3: 401 Auto-Logout ─────────────────────────────────
+
+group Sequence 3: Token Expiry → Auto-Logout
+
+  actor Customer
+  participant "Any Page" as Page
+  participant "fetcher.ts" as F3
+  participant "AuthContext" as AC3
+  participant "Spring Security" as SF3
+
+  Customer -> Page : Interact with page
+  Page -> F3 : Any API call [auth: true]
+  F3 -> SF3 : Request\nAuthorization: Bearer EXPIRED_JWT
+  SF3 -> SF3 : isTokenValid() = false\n(exp claim in past)
+  SF3 --> F3 : 401 Unauthorized
+  F3 -> F3 : res.status === 401\n→ onUnauthorized() callback fires
+  F3 -> AC3 : onUnauthorized()
+  AC3 -> AC3 : clearToken()\nsetUser(null)\nsetCustomer(null)\nisAuthenticated = false
+  AC3 -> Page : Context update triggers re-render
+  Page -> Customer : Page shows as unauthenticated\nOR redirect to login
+end
+
+' ─── Sequence 4: Add to Cart → Checkout ──────────────────────────
+
+group Sequence 4: Cart to Payment (Cross-System Summary)
+
+  actor Customer
+  participant "Product\nDetail Page" as PDP
+  participant "CartContext" as CC
+  participant "localStorage" as LS
+  participant "Checkout\nPage" as CP
+  participant "orderApi.ts" as OA
+  participant "fetcher.ts" as F4
+  participant "OrderController" as OC
+  participant "Mollie API" as Mollie
+
+  Customer -> PDP : Select size + color, click "In den Warenkorb"
+  PDP -> CC : addToCart({ productId, name, price, size, color, ... })
+  CC -> LS : Write updated cart to localStorage["cart"]
+  CC -> PDP : CartSidebar opens
+
+  Customer -> CP : Navigate to /checkout
+  CP -> CC : Read cartItems from context
+  Customer -> CP : Fill shipping form + submit
+
+  CP -> OA : orderApi.create({ items: [{ listingId, qty }], shippingAddress })
+  OA -> F4 : POST /orders [auth: true]
+  F4 -> OC : POST /orders\nAuthorization: Bearer JWT
+  OC -> OC : Process order (see complete-checkout-flow.puml)
+  OC --> F4 : 201 { order, checkoutUrl }
+  F4 --> CP : { checkoutUrl }
+
+  CP -> CC : clearCart()
+  CC -> LS : Remove localStorage["cart"]
+  CP -> Customer : Redirect to checkoutUrl
+  Customer -> Mollie : Pay on hosted page
+  Mollie -> OC : POST /webhooks/mollie
+  OC -> OC : Confirm payment, decrement stock, record ledger
+end
+
+@enduml

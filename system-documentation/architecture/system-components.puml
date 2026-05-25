@@ -1,0 +1,191 @@
+@startuml system-components
+!theme plain
+skinparam backgroundColor #FAFAFA
+skinparam componentStyle rectangle
+skinparam componentBackgroundColor #EEF3FF
+skinparam componentBorderColor #370E4D
+skinparam packageBackgroundColor #F5F5F0
+skinparam packageBorderColor #AAAAAA
+title Enunas — System Component Diagram
+
+package "Frontend (Next.js 15 — Vercel)" {
+
+  package "App Router" {
+    component "(root) Layout\nAuthProvider + CartProvider" as RootLayout
+    component "(dashboard) Layout\nMinimal Shell" as DashLayout
+  }
+
+  package "Context Layer" {
+    component "AuthContext\n(user, isAuthenticated, refreshUser, logout)" as AuthCtx
+    component "CartContext\n(cartItems, addToCart, clearCart)" as CartCtx
+  }
+
+  package "Customer Routes" {
+    component "/ Homepage" as HomePage
+    component "/bekleidung\nCatalog" as CatalogPage
+    component "/bekleidung/[brand]/[slug]\nProduct Detail" as ProductPage
+    component "/checkout\nCheckout" as CheckoutPage
+    component "/account\nCustomer Dashboard" as AccountPage
+    component "/cart\nCart Page" as CartPage
+    component "/saved-lists\nWardrobe" as WardrobePage
+  }
+
+  package "Dashboard Routes" {
+    component "/dashboard/admin\nAdmin SPA" as AdminDash
+    component "/dashboard/vendor\n[NOT IMPLEMENTED]" as VendorDash
+  }
+
+  package "API Client Layer" {
+    component "fetcher.ts\nHTTP wrapper + JWT injection + 401 handler" as Fetcher
+    component "authApi.ts" as AuthAPI
+    component "productApi.ts" as ProductAPI
+    component "orderApi.ts" as OrderAPI
+    component "brandApi.ts" as BrandAPI
+    component "adminApi.ts" as AdminAPI
+    component "wardrobeApi.ts" as WardrobeAPI
+  }
+
+  package "Persistence (Browser)" {
+    component "localStorage\n[enunas_token, cart]" as LocalStorage
+  }
+}
+
+package "Backend (Spring Boot 4 — AWS Docker)" {
+
+  package "Security Filter Chain" {
+    component "JwtAuthenticationFilter\n(token validation, SecurityContext)" as JWTFilter
+    component "SecurityConfiguration\n(CORS, route guards, filter chain)" as SecConfig
+  }
+
+  package "Controller Layer" {
+    component "AuthController\n/auth/**" as AuthCtrl
+    component "UserController\n/users/**" as UserCtrl
+    component "BrandPartnerController\n/brandpartner/**" as BrandCtrl
+    component "ProductController\n/products/**" as ProdCtrl
+    component "ProductListingController\n/listings/**" as ListCtrl
+    component "OrderController\n/orders/**" as OrdCtrl
+    component "BrandPartnerOrderController\n/brand/orders/**" as BOrdCtrl
+    component "CustomerController\n/customer/**" as CustCtrl
+    component "WardrobeController\n/wardrobe/**" as WardCtrl
+    component "MediaController\n/media/**" as MediaCtrl
+    component "AdminController\n/admin/**" as AdminCtrl
+    component "MollieWebhookController\n/webhooks/mollie" as WebhookCtrl
+  }
+
+  package "Service Layer" {
+    component "AuthenticationService\n(signup, login, JWT generation)" as AuthSvc
+    component "JwtService\n(generateToken, isTokenValid)" as JwtSvc
+    component "BrandPartnerService\n(apply, verify, approve, profile)" as BrandSvc
+    component "ProductService\n(create, update, delete, moderate)" as ProdSvc
+    component "ProductListingService\n(price configs)" as ListSvc
+    component "OrderService\n(createOrder, confirmPayment, returns)" as OrdSvc
+    component "CustomerService\n(profile, analytics)" as CustSvc
+    component "WardrobeService\n(items CRUD)" as WardSvc
+    component "LedgerService\n(recordOrderPayment, recordRefund)" as LedgSvc
+    component "PayoutService\n(generate, approve, mark-paid)" as PayoutSvc
+    component "AdminService\n(brand/product/order moderation)" as AdminSvc
+    component "EmailService\n(JavaMailSender, SMTP)" as EmailSvc
+    component "ReconciliationService\n(drift detection, rebuild)" as ReconcSvc
+  }
+
+  package "Payment Abstraction" {
+    component "PaymentProvider\n(interface)" as PayProv
+    component "MolliePaymentService\n(production)" as MollieSvc
+    component "MockPaymentService\n(mock-payments profile)" as MockSvc
+  }
+
+  package "Repository Layer" {
+    component "UserRepository" as UserRepo
+    component "BrandPartnerRepository" as BrandRepo
+    component "ProductRepository" as ProdRepo
+    component "OrderRepository" as OrdRepo
+    component "LedgerRepository" as LedgRepo
+    component "PayoutRepository" as PayoutRepo
+    component "CustomerRepository" as CustRepo
+  }
+}
+
+package "External Services" {
+  component "Mollie API\n(payment creation, refunds, webhook)" as MollieAPI
+  component "SMTP Server\n(Gmail / custom TLS:587)" as SMTPServer
+  database "PostgreSQL\n(AWS / local)" as PostgreSQL
+}
+
+package "Frontend Assets" {
+  component "AWS S3\n(product images, videos, brand media)" as S3
+}
+
+' ─── Relationships ────────────────────────────────────────────────
+
+' Frontend routing
+RootLayout --> AuthCtx
+RootLayout --> CartCtx
+HomePage --> Fetcher
+CatalogPage --> Fetcher
+ProductPage --> Fetcher
+CheckoutPage --> Fetcher
+AccountPage --> Fetcher
+AdminDash --> Fetcher
+Fetcher --> LocalStorage : reads/writes JWT + cart
+
+' Frontend → Backend
+Fetcher --> JWTFilter : HTTPS REST/JSON\nAuthorization: Bearer JWT
+
+' Security layer
+JWTFilter --> SecConfig
+SecConfig --> AuthCtrl
+SecConfig --> UserCtrl
+SecConfig --> BrandCtrl
+SecConfig --> ProdCtrl
+SecConfig --> OrdCtrl
+SecConfig --> BOrdCtrl
+SecConfig --> CustCtrl
+SecConfig --> WardCtrl
+SecConfig --> AdminCtrl
+SecConfig --> WebhookCtrl
+
+' Controllers → Services
+AuthCtrl --> AuthSvc
+BrandCtrl --> BrandSvc
+ProdCtrl --> ProdSvc
+OrdCtrl --> OrdSvc
+BOrdCtrl --> OrdSvc
+CustCtrl --> CustSvc
+WardCtrl --> WardSvc
+AdminCtrl --> AdminSvc
+WebhookCtrl --> OrdSvc
+
+' Services → Services
+AuthSvc --> JwtSvc
+AuthSvc --> EmailSvc
+BrandSvc --> EmailSvc
+OrdSvc --> PayProv
+OrdSvc --> LedgSvc
+OrdSvc --> EmailSvc
+AdminSvc --> BrandSvc
+AdminSvc --> ProdSvc
+AdminSvc --> OrdSvc
+AdminSvc --> PayoutSvc
+AdminSvc --> ReconcSvc
+PayoutSvc --> LedgSvc
+
+' Payment abstraction
+PayProv --> MollieSvc
+PayProv --> MockSvc
+MollieSvc --> MollieAPI : HTTPS
+
+' Repos → DB
+UserRepo --> PostgreSQL
+BrandRepo --> PostgreSQL
+ProdRepo --> PostgreSQL
+OrdRepo --> PostgreSQL
+LedgRepo --> PostgreSQL
+PayoutRepo --> PostgreSQL
+CustRepo --> PostgreSQL
+
+' External
+EmailSvc --> SMTPServer : SMTP/TLS
+MollieAPI --> WebhookCtrl : POST /webhooks/mollie (async)
+ProdCtrl --> S3 : image/video URL storage
+
+@enduml
