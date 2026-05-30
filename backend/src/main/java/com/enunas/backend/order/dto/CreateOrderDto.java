@@ -19,4 +19,7 @@ public class CreateOrderDto {
     private ShippingAddressDto shippingAddress;
 
     private String notes;
+
+    /** Optional single discount code (max one per order — no stacking). */
+    private String discountCode;
 }

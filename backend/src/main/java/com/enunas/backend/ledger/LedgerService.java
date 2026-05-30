@@ -55,10 +55,17 @@ public class LedgerService {
                 log.warn("LedgerService: skipping item {} with no brand (orderId={})", item.getId(), order.getId());
                 continue;
             }
-            BigDecimal rate      = resolveBrandRate(brandId);
+            // The OrderItem snapshot is authoritative — it already folds in any discount.
+            // Fall back to a recompute only for legacy items missing the snapshot.
             BigDecimal lineTotal = item.getLineTotal();
-            BigDecimal fee       = lineTotal.multiply(rate).setScale(2, RoundingMode.HALF_UP);
-            BigDecimal payout    = lineTotal.subtract(fee);
+            BigDecimal rate      = item.getCommissionRate() != null
+                    ? item.getCommissionRate() : resolveBrandRate(brandId);
+            BigDecimal fee       = item.getPlatformFeeAmount() != null
+                    ? item.getPlatformFeeAmount()
+                    : lineTotal.multiply(rate).setScale(2, RoundingMode.HALF_UP);
+            BigDecimal payout    = item.getBrandPayoutAmount() != null
+                    ? item.getBrandPayoutAmount()
+                    : lineTotal.subtract(fee);
 
             entries.add(LedgerEntry.builder()
                     .orderId(order.getId())
@@ -108,26 +115,39 @@ public class LedgerService {
         }
 
         BigDecimal orderTotal = order.getTotal();
-        Map<Long, BigDecimal> brandSubtotals = new HashMap<>();
+
+        // Reverse against the immutable per-item snapshot (already discount-adjusted), not a
+        // gross recompute — so a full refund nets each brand's credited payout exactly to zero.
+        Map<Long, BigDecimal> brandPayouts = new HashMap<>(); // credited brand payout per brand
+        Map<Long, BigDecimal> brandFees    = new HashMap<>(); // credited platform fee per brand
+        Map<Long, BigDecimal> brandRates   = new HashMap<>();
         for (OrderItem item : order.getItems()) {
-            if (item.getBrandId() != null) {
-                brandSubtotals.merge(item.getBrandId(), item.getLineTotal(), BigDecimal::add);
-            }
+            Long bId = item.getBrandId();
+            if (bId == null) continue;
+            BigDecimal rate = item.getCommissionRate() != null
+                    ? item.getCommissionRate() : resolveBrandRate(bId);
+            BigDecimal fee    = item.getPlatformFeeAmount() != null
+                    ? item.getPlatformFeeAmount()
+                    : item.getLineTotal().multiply(rate).setScale(2, RoundingMode.HALF_UP);
+            BigDecimal payout = item.getBrandPayoutAmount() != null
+                    ? item.getBrandPayoutAmount()
+                    : item.getLineTotal().subtract(fee);
+            brandPayouts.merge(bId, payout, BigDecimal::add);
+            brandFees.merge(bId, fee, BigDecimal::add);
+            brandRates.putIfAbsent(bId, rate);
         }
+
+        // Fraction of the order being refunded (1.0 for a full refund / cancel).
+        BigDecimal fraction = orderTotal.signum() == 0
+                ? BigDecimal.ZERO
+                : refundAmount.divide(orderTotal, 6, RoundingMode.HALF_UP);
 
         List<LedgerEntry> reversals = new ArrayList<>();
 
-        for (Map.Entry<Long, BigDecimal> entry : brandSubtotals.entrySet()) {
-            Long brandId             = entry.getKey();
-            BigDecimal brandSubtotal = entry.getValue();
-
-            BigDecimal brandRefund = refundAmount
-                    .multiply(brandSubtotal)
-                    .divide(orderTotal, 2, RoundingMode.HALF_UP);
-
-            BigDecimal rate              = resolveBrandRate(brandId);
-            BigDecimal platformPortion   = brandRefund.multiply(rate).setScale(2, RoundingMode.HALF_UP);
-            BigDecimal brandPortion      = brandRefund.subtract(platformPortion);
+        for (Long brandId : brandPayouts.keySet()) {
+            BigDecimal rate            = brandRates.get(brandId);
+            BigDecimal platformPortion = brandFees.get(brandId).multiply(fraction).setScale(2, RoundingMode.HALF_UP);
+            BigDecimal brandPortion    = brandPayouts.get(brandId).multiply(fraction).setScale(2, RoundingMode.HALF_UP);
 
             List<LedgerEntry> originals = ledgerRepository
                     .findActivePaymentEntriesByOrderAndBrand(order.getId(), brandId);
@@ -136,7 +156,7 @@ public class LedgerService {
                     .orderId(order.getId())
                     .orderItemId(originals.isEmpty() ? null : originals.get(0).getOrderItemId())
                     .brandPartnerId(brandId)
-                    .totalAmount(brandRefund.negate())
+                    .totalAmount(platformPortion.add(brandPortion).negate())
                     .platformFee(platformPortion.negate())
                     .brandPayout(brandPortion.negate())
                     .commissionRate(rate)

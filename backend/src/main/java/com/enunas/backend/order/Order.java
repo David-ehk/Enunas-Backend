@@ -60,6 +60,26 @@ public class Order {
     @Builder.Default
     private String currency = "EUR";
 
+    // ===== Discount snapshot (immutable; null/zero when no code was applied) =====
+    // total = subtotal − discountAmount + shippingTotal
+
+    private String discountCode;
+
+    @Enumerated(EnumType.STRING)
+    private com.enunas.backend.discount.DiscountType discountType;
+
+    @Column(precision = 5, scale = 4)
+    private BigDecimal discountPercent;
+
+    @Column(precision = 10, scale = 2)
+    private BigDecimal discountAmount;          // platformDiscountAmount + brandDiscountAmount
+
+    @Column(precision = 10, scale = 2)
+    private BigDecimal platformDiscountAmount;  // total absorbed by Enunas
+
+    @Column(precision = 10, scale = 2)
+    private BigDecimal brandDiscountAmount;     // total absorbed by brands
+
     @Column(columnDefinition = "TEXT")
     private String notes;
 

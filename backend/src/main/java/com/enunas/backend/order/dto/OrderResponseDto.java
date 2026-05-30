@@ -1,5 +1,6 @@
 package com.enunas.backend.order.dto;
 
+import com.enunas.backend.discount.DiscountType;
 import com.enunas.backend.order.Order;
 import com.enunas.backend.order.OrderStatus;
 import com.enunas.backend.order.ShippingAddress;
@@ -25,6 +26,10 @@ public class OrderResponseDto {
     private BigDecimal shippingTotal;
     private BigDecimal total;
     private String currency;
+    private String discountCode;
+    private DiscountType discountType;
+    private BigDecimal discountPercent;
+    private BigDecimal discountAmount;
     private String notes;
     private String checkoutUrl;
     private LocalDateTime createdAt;
@@ -45,6 +50,10 @@ public class OrderResponseDto {
                 .shippingTotal(order.getShippingTotal())
                 .total(order.getTotal())
                 .currency(order.getCurrency())
+                .discountCode(order.getDiscountCode())
+                .discountType(order.getDiscountType())
+                .discountPercent(order.getDiscountPercent())
+                .discountAmount(order.getDiscountAmount())
                 .notes(order.getNotes())
                 .createdAt(order.getCreatedAt())
                 .updatedAt(order.getUpdatedAt())

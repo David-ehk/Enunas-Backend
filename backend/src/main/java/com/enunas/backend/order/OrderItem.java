@@ -73,6 +73,16 @@ public class OrderItem {
     @Column(precision = 10, scale = 2)
     private BigDecimal brandPayoutAmount;
 
+    // --- Discount snapshot (set at order creation; zero when no code applied) ---
+    @Column(precision = 10, scale = 2)
+    private BigDecimal itemDiscountAmount;     // platformDiscountShare + brandDiscountShare
+
+    @Column(precision = 10, scale = 2)
+    private BigDecimal platformDiscountShare;  // portion of the discount Enunas absorbs
+
+    @Column(precision = 10, scale = 2)
+    private BigDecimal brandDiscountShare;     // portion of the discount the brand absorbs
+
     // Convenience for ownership (no DB column - transient)
     public Long getBrandId() {
         var brand = variant.getProduct().getBrand();
@@ -80,10 +90,35 @@ public class OrderItem {
     }
 
     public void applyCommissionSnapshot(BigDecimal rate) {
+        applyCommissionSnapshot(rate, null, null);
+    }
+
+    /**
+     * Folds the commission rate and any discount shares into the authoritative per-item
+     * money snapshot. The ledger reads {@code platformFeeAmount} / {@code brandPayoutAmount}
+     * directly, so all discount math lands here and nowhere else.
+     *
+     *   brandPayoutAmount = lineTotal·(1−rate) − brandDiscountShare
+     *   platformFeeAmount = lineTotal·rate      − platformDiscountShare
+     *
+     * With zero shares this is byte-for-byte the previous no-discount behaviour.
+     */
+    public void applyCommissionSnapshot(BigDecimal rate,
+                                        BigDecimal platformDiscShare,
+                                        BigDecimal brandDiscShare) {
         if (rate == null || this.lineTotal == null) return;
-        this.commissionRate    = rate;
-        this.platformFeeAmount = this.lineTotal.multiply(rate).setScale(2, RoundingMode.HALF_UP);
-        this.brandPayoutAmount = this.lineTotal.subtract(this.platformFeeAmount);
+        this.commissionRate        = rate;
+        this.platformDiscountShare = nz(platformDiscShare);
+        this.brandDiscountShare    = nz(brandDiscShare);
+        this.itemDiscountAmount    = this.platformDiscountShare.add(this.brandDiscountShare);
+
+        BigDecimal baseFee = this.lineTotal.multiply(rate).setScale(2, RoundingMode.HALF_UP);
+        this.platformFeeAmount = baseFee.subtract(this.platformDiscountShare);
+        this.brandPayoutAmount = this.lineTotal.subtract(baseFee).subtract(this.brandDiscountShare);
+    }
+
+    private static BigDecimal nz(BigDecimal v) {
+        return v != null ? v : BigDecimal.ZERO;
     }
 
     // Helper to calculate line total

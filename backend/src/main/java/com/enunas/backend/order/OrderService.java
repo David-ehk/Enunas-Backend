@@ -26,6 +26,8 @@ import com.enunas.backend.product.productlisting.ProductListingRepository;
 import com.enunas.backend.product.productvariant.ProductVariant;
 import com.enunas.backend.product.productvariant.ProductVariantRepository;
 import com.enunas.backend.ledger.LedgerService;
+import com.enunas.backend.discount.DiscountApplication;
+import com.enunas.backend.discount.DiscountService;
 import com.enunas.backend.user.EmailService;
 import com.enunas.backend.user.User;
 import lombok.RequiredArgsConstructor;
@@ -68,6 +70,7 @@ public class OrderService {
     private final PaymentProvider paymentProvider;
     private final LedgerService ledgerService;
     private final RefundPersistenceHelper refundPersistenceHelper;
+    private final DiscountService discountService;
 
     @Value("${app.frontend.base-url}")
     private String frontendBaseUrl;
@@ -134,13 +137,29 @@ public class OrderService {
             orderItems.add(item);
         }
 
-        // !! 4. Compute shipping per brand (one charge per brand, not per item). Has to change to Order not Brand
+        // 4. Apply optional discount code (max one per order — no stacking). Folds each item's
+        //    platform/brand discount share into its commission snapshot, so the ledger (which
+        //    reads platformFeeAmount/brandPayoutAmount) stays correct per brand. Reserves usage.
+        DiscountApplication discount = null;
+        BigDecimal discountAmount = BigDecimal.ZERO;
+        if (dto.getDiscountCode() != null && !dto.getDiscountCode().isBlank()) {
+            discount = discountService.validateAndApply(dto.getDiscountCode(), orderItems);
+            for (int i = 0; i < orderItems.size(); i++) {
+                OrderItem item = orderItems.get(i);
+                DiscountApplication.ItemShare share = discount.itemShares().get(i);
+                item.applyCommissionSnapshot(item.getCommissionRate(),
+                        share.platformShare(), share.brandShare());
+            }
+            discountAmount = discount.discountAmount();
+        }
+
+        // !! 5. Compute shipping per brand (one charge per brand, not per item). Has to change to Order not Brand
         BigDecimal shippingTotal = BigDecimal.ZERO;
         for (Long brandId : distinctBrandIds) {
             shippingTotal = shippingTotal.add(shippingCostForBrand(brandId));
         }
 
-        // 5. Build & persist order.
+        // 6. Build & persist order.
         ShippingAddress address = ShippingAddress.builder()
                 .fullName(dto.getShippingAddress().getFullName())
                 .street(dto.getShippingAddress().getStreet())
@@ -152,17 +171,29 @@ public class OrderService {
                 .phone(dto.getShippingAddress().getPhone())
                 .build();
 
-        Order order = Order.builder()
+        Order.OrderBuilder orderBuilder = Order.builder()
                 .orderNumber(generateOrderNumber())
                 .buyer(buyer)
                 .status(OrderStatus.PENDING)
                 .shippingAddress(address)
                 .subtotal(subtotal)
                 .shippingTotal(shippingTotal)
-                .total(subtotal.add(shippingTotal))
+                // Discounted total — this is what Mollie charges and the webhook verifies.
+                .total(subtotal.subtract(discountAmount).add(shippingTotal))
                 .currency(listings.get(0).getCurrency())
-                .notes(dto.getNotes())
-                .build();
+                .notes(dto.getNotes());
+
+        if (discount != null) {
+            orderBuilder
+                    .discountCode(discount.code().getCode())
+                    .discountType(discount.type())
+                    .discountPercent(discount.percent())
+                    .discountAmount(discount.discountAmount())
+                    .platformDiscountAmount(discount.platformDiscountAmount())
+                    .brandDiscountAmount(discount.brandDiscountAmount());
+        }
+
+        Order order = orderBuilder.build();
 
         Order saved = orderRepository.save(order);
         orderItems.forEach(saved::addItem);
