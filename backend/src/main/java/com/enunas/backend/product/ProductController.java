@@ -3,6 +3,7 @@ package com.enunas.backend.product;
 import com.enunas.backend.product.dto.CreateProductDto;
 import com.enunas.backend.product.dto.ProductResponseDto;
 import com.enunas.backend.product.dto.UpdateProductDto;
+import com.enunas.backend.product.productvariant.ColorFamily;
 import com.enunas.backend.user.User;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -65,6 +66,14 @@ public class ProductController {
             @PathVariable ProductCategory category,
             @PageableDefault(size = 20) Pageable pageable) {
         return ResponseEntity.ok(productService.getProductsByCategory(category, pageable));
+    }
+
+    @GetMapping("/color-family/{colorFamily}")
+    @PreAuthorize("hasAnyRole('CUSTOMER', 'BRAND_PARTNER')")
+    public ResponseEntity<Page<ProductResponseDto>> getByColorFamily(
+            @PathVariable ColorFamily colorFamily,
+            @PageableDefault(size = 20) Pageable pageable) {
+        return ResponseEntity.ok(productService.getProductsByColorFamily(colorFamily, pageable));
     }
 
     @GetMapping("/my")

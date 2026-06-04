@@ -1,8 +1,9 @@
 package com.enunas.backend.product.productlisting.dto;
 
+import com.enunas.backend.product.productvariant.ColorFamily;
+import com.enunas.backend.product.productvariant.ProductVariant;
 import lombok.Builder;
 import lombok.Data;
-import com.enunas.backend.product.productvariant.ProductVariant;
 
 @Data
 @Builder
@@ -10,6 +11,7 @@ public class ProductVariantResponseDto {
     private Long id;
     private String sku;
     private String color;
+    private ColorFamily colorFamily;
     private String size;
     private Integer stockQuantity;
     private Integer weightGrams;
@@ -20,6 +22,7 @@ public class ProductVariantResponseDto {
                 .id(variant.getId())
                 .sku(variant.getSku())
                 .color(variant.getColor())
+                .colorFamily(variant.getColorFamily())
                 .size(variant.getSize())
                 .stockQuantity(variant.getStockQuantity())
                 .weightGrams(variant.getWeightGrams())

@@ -36,6 +36,10 @@ public class ProductColor {
     @Column(nullable = false)
     private String color;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "color_family", nullable = false)
+    private ColorFamily colorFamily;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "product_id", nullable = false)
     private Product product;

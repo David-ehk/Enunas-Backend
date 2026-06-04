@@ -2,6 +2,7 @@ package com.enunas.backend.product;
 
 import com.enunas.backend.product.dto.CreateProductDto;
 import com.enunas.backend.product.dto.ProductVariantDto;
+import com.enunas.backend.product.productvariant.ColorFamily;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.Validation;
 import jakarta.validation.Validator;
@@ -159,6 +160,7 @@ class CreateProductDtoValidationTest {
 
         ProductVariantDto variant = new ProductVariantDto();
         variant.setColor("Black");
+        variant.setColorFamily(ColorFamily.BLACK);
         variant.setSize("M");
         variant.setStockQuantity(10);
         dto.setVariants(List.of(variant));

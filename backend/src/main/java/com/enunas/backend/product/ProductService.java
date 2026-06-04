@@ -9,6 +9,7 @@ import com.enunas.backend.product.productvariant.ProductColor;
 import com.enunas.backend.product.productvariant.ProductColorRepository;
 import com.enunas.backend.product.productvariant.ProductVariant;
 import com.enunas.backend.product.productvariant.ProductVariantRepository;
+import com.enunas.backend.product.productvariant.ColorFamily;
 import com.enunas.backend.product.productvariant.ProductVariantService;
 import com.enunas.backend.user.User;
 import lombok.RequiredArgsConstructor;
@@ -107,6 +108,11 @@ public class ProductService {
     }
 
     @Transactional(readOnly = true)
+    public Page<ProductResponseDto> getProductsByColorFamily(ColorFamily colorFamily, Pageable pageable) {
+        return productRepository.findByColorFamily(colorFamily, pageable).map(this::toResponse);
+    }
+
+    @Transactional(readOnly = true)
     public List<ProductResponseDto> getMyProducts(User creator) {
         return productRepository.findByCreator(creator).stream()
                 .map(this::toResponse)
@@ -189,13 +195,21 @@ public class ProductService {
                 throw new IllegalArgumentException(
                     "Duplicate size for color '" + entry.getKey() + "' in the same request");
             }
+            long distinctFamilies = entry.getValue().stream()
+                    .map(ProductVariantDto::getColorFamily).distinct().count();
+            if (distinctFamilies > 1) {
+                throw new IllegalArgumentException(
+                    "All variants with color '" + entry.getKey() + "' must share the same colorFamily");
+            }
         }
 
         for (Map.Entry<String, List<ProductVariantDto>> entry : byColor.entrySet()) {
+            ColorFamily colorFamily = entry.getValue().get(0).getColorFamily();
             ProductColor productColor = productColorRepository.save(
                 ProductColor.builder()
                     .sku(variantService.generateUniqueSku())
                     .color(entry.getKey())
+                    .colorFamily(colorFamily)
                     .product(product)
                     .build());
 

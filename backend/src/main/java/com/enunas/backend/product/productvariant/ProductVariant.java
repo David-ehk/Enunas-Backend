@@ -54,6 +54,10 @@ public class ProductVariant {
         return productColor != null ? productColor.getColor() : null;
     }
 
+    public ColorFamily getColorFamily() {
+        return productColor != null ? productColor.getColorFamily() : null;
+    }
+
     // ===== Stock helpers =====
 
     public boolean hasStock(int requestedQuantity) {

@@ -1,5 +1,6 @@
 package com.enunas.backend.product;
 
+import com.enunas.backend.product.productvariant.ColorFamily;
 import com.enunas.backend.user.User;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -28,4 +29,12 @@ public interface ProductRepository extends JpaRepository<Product, Long> {
            "LOWER(p.brand.brandName) LIKE LOWER(CONCAT('%', :keyword, '%')) OR " +
            "LOWER(p.description) LIKE LOWER(CONCAT('%', :keyword, '%'))")
     Page<Product> search(@Param("keyword") String keyword, Pageable pageable);
+
+    @Query(
+        value = "SELECT DISTINCT pc.product FROM ProductColor pc " +
+                "WHERE pc.colorFamily = :colorFamily AND pc.product.status = 'ACTIVE'",
+        countQuery = "SELECT COUNT(DISTINCT pc.product) FROM ProductColor pc " +
+                     "WHERE pc.colorFamily = :colorFamily AND pc.product.status = 'ACTIVE'"
+    )
+    Page<Product> findByColorFamily(@Param("colorFamily") ColorFamily colorFamily, Pageable pageable);
 }

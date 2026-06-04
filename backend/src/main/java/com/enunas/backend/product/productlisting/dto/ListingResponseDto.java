@@ -1,6 +1,7 @@
 package com.enunas.backend.product.productlisting.dto;
 
 import com.enunas.backend.product.productlisting.ProductListing;
+import com.enunas.backend.product.productvariant.ColorFamily;
 import lombok.Builder;
 import lombok.Getter;
 
@@ -17,6 +18,7 @@ public class ListingResponseDto {
     private Long variantId;
     private String variantSku;
     private String variantColor;
+    private ColorFamily variantColorFamily;
     private String variantSize;
     /** Live stock pulled from the variant (the single source of truth). */
     private int variantStockQuantity;
@@ -39,6 +41,7 @@ public class ListingResponseDto {
                 .variantId(productListing.getVariant().getId())
                 .variantSku(productListing.getVariant().getSku())
                 .variantColor(productListing.getVariant().getColor())
+                .variantColorFamily(productListing.getVariant().getColorFamily())
                 .variantSize(productListing.getVariant().getSize())
                 .variantStockQuantity(productListing.getVariant().getStockQuantity())
                 .price(productListing.getPrice())

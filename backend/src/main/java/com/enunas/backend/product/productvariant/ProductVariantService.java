@@ -29,7 +29,7 @@ public class ProductVariantService {
     public ProductVariantResponseDto addVariant(Long productId, ProductVariantDto dto, User creator) {
         Product product = findProductAndVerifyOwnership(productId, creator);
 
-        ProductColor productColor = findOrCreateColor(product, dto.getColor());
+        ProductColor productColor = findOrCreateColor(product, dto.getColor(), dto.getColorFamily());
 
         if (variantRepository.existsByProductColorIdAndSize(productColor.getId(), dto.getSize())) {
             throw new IllegalArgumentException(
@@ -67,7 +67,7 @@ public class ProductVariantService {
 
         if (colorChanged || sizeChanged) {
             ProductColor targetColor_ = colorChanged
-                    ? findOrCreateColor(product, dto.getColor())
+                    ? findOrCreateColor(product, dto.getColor(), dto.getColorFamily() != null ? dto.getColorFamily() : variant.getColorFamily())
                     : variant.getProductColor();
 
             if (variantRepository.existsByProductColorIdAndSizeExcluding(
@@ -77,6 +77,11 @@ public class ProductVariantService {
             }
 
             if (colorChanged) variant.setProductColor(targetColor_);
+        }
+
+        if (dto.getColorFamily() != null && !colorChanged
+                && !dto.getColorFamily().equals(variant.getColorFamily())) {
+            variant.getProductColor().setColorFamily(dto.getColorFamily());
         }
 
         if (dto.getSize()          != null) variant.setSize(dto.getSize());
@@ -94,13 +99,14 @@ public class ProductVariantService {
 
     // ===== Internal =====
 
-    private ProductColor findOrCreateColor(Product product, String color) {
+    private ProductColor findOrCreateColor(Product product, String color, ColorFamily colorFamily) {
         return productColorRepository
                 .findByProductIdAndColor(product.getId(), color)
                 .orElseGet(() -> productColorRepository.save(
                     ProductColor.builder()
                         .sku(generateUniqueSku())
                         .color(color)
+                        .colorFamily(colorFamily)
                         .product(product)
                         .build()));
     }

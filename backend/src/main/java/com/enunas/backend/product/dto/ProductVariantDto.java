@@ -1,5 +1,6 @@
 package com.enunas.backend.product.dto;
 
+import com.enunas.backend.product.productvariant.ColorFamily;
 import jakarta.validation.constraints.*;
 import lombok.Data;
 
@@ -8,6 +9,9 @@ public class ProductVariantDto {
 
     @NotBlank
     private String color;
+
+    @NotNull
+    private ColorFamily colorFamily;
 
     @NotBlank
     private String size;
