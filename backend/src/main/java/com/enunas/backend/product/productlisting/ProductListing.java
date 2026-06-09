@@ -33,11 +33,23 @@ public class ProductListing {
     @JoinColumn(name = "variant_id", nullable = false)
     private ProductVariant variant;
 
+    // price / discountPrice hold the GROSS (customer-facing) values — canonical for display
+    // and order math. The matching *Net columns are derived from priceInputMode at write time.
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal price;
 
     @Column(precision = 10, scale = 2)
     private BigDecimal discountPrice;
+
+    @Column(precision = 10, scale = 2)
+    private BigDecimal priceNet;
+
+    @Column(precision = 10, scale = 2)
+    private BigDecimal discountPriceNet;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "price_input_mode")
+    private PriceInputMode priceInputMode;
 
     @Column(nullable = false, length = 3)
     @Builder.Default
@@ -84,6 +96,19 @@ public class ProductListing {
             return discountPrice;
         }
         return price;
+    }
+
+    /** Customer-facing gross used to build an order line: the sale gross if on sale, else the regular gross. */
+    public BigDecimal getEffectiveGross() {
+        return getCurrentPrice();
+    }
+
+    /** Net counterpart of {@link #getEffectiveGross()} — the discount net if on sale, else the regular net. */
+    public BigDecimal getEffectiveNet() {
+        if (discountPrice != null && discountPrice.compareTo(BigDecimal.ZERO) > 0) {
+            return discountPriceNet;
+        }
+        return priceNet;
     }
 
     // Convenience: Ist das Listing aktuell aktiv?

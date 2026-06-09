@@ -1,11 +1,11 @@
 package com.enunas.backend.order;
 
+import com.enunas.backend.common.MoneyMath;
 import com.enunas.backend.product.productvariant.ProductVariant;
 import jakarta.persistence.*;
 import lombok.*;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 
 /**
  * Line item in an Order. Owns its own price/variant snapshot — the variant FK is the only
@@ -61,27 +61,71 @@ public class OrderItem {
 
     // --- Calculated fields ---
     @Column(nullable = false, precision = 10, scale = 2)
-    private BigDecimal lineTotal;  // priceAtPurchase * quantity (set before save)
+    private BigDecimal lineTotal;  // back-compat alias of lineGross (set before save)
 
     // --- Commission snapshot (set at order creation time) ---
     @Column(precision = 5, scale = 4)
     private BigDecimal commissionRate;
 
+    // Legacy gross-basis fields, kept populated so nothing downstream NPEs. platformFeeAmount now
+    // mirrors commissionGross and brandPayoutAmount mirrors brandPayout; new code reads the
+    // explicit net/VAT fields below.
     @Column(precision = 10, scale = 2)
     private BigDecimal platformFeeAmount;
 
     @Column(precision = 10, scale = 2)
     private BigDecimal brandPayoutAmount;
 
-    // --- Discount snapshot (set at order creation; zero when no code applied) ---
-    @Column(precision = 10, scale = 2)
-    private BigDecimal itemDiscountAmount;     // platformDiscountShare + brandDiscountShare
+    // --- Net + VAT money snapshot (§4; frozen at order creation, read-only thereafter) ---
+    @Column(precision = 5, scale = 4)
+    private BigDecimal vatRateProduct;
+
+    @Column(precision = 5, scale = 4)
+    private BigDecimal vatRateService;
 
     @Column(precision = 10, scale = 2)
-    private BigDecimal platformDiscountShare;  // portion of the discount Enunas absorbs
+    private BigDecimal lineNet;
 
     @Column(precision = 10, scale = 2)
-    private BigDecimal brandDiscountShare;     // portion of the discount the brand absorbs
+    private BigDecimal lineVat;
+
+    @Column(precision = 10, scale = 2)
+    private BigDecimal lineGross;
+
+    @Column(precision = 10, scale = 2)
+    private BigDecimal baseCommissionNet;     // lineNet × rate, pre-discount
+
+    @Column(precision = 10, scale = 2)
+    private BigDecimal commissionNet;         // platform revenue (final)
+
+    @Column(precision = 10, scale = 2)
+    private BigDecimal commissionVat;         // 0 under reverse charge
+
+    @Column(precision = 10, scale = 2)
+    private BigDecimal commissionGross;       // commissionNet + commissionVat
+
+    @Column(precision = 10, scale = 2)
+    private BigDecimal customerGrossAfterDiscount; // what the customer actually pays for this line
+
+    @Column(precision = 10, scale = 2)
+    private BigDecimal brandPayout;           // cash transferred to the brand
+
+    @Column(precision = 10, scale = 2)
+    private BigDecimal brandNetRevenue;       // brand economic margin (reporting)
+
+    private boolean brandIsDomestic;
+
+    private boolean reverseCharge;
+
+    // --- Discount snapshot (set at order creation; zero when no code applied) — NET shares ---
+    @Column(precision = 10, scale = 2)
+    private BigDecimal itemDiscountAmount;     // platformDiscountShare + brandDiscountShare (net)
+
+    @Column(precision = 10, scale = 2)
+    private BigDecimal platformDiscountShare;  // net portion of the discount Enunas absorbs
+
+    @Column(precision = 10, scale = 2)
+    private BigDecimal brandDiscountShare;     // net portion of the discount the brand absorbs
 
     // Convenience for ownership (no DB column - transient)
     public Long getBrandId() {
@@ -89,32 +133,60 @@ public class OrderItem {
         return brand != null ? brand.getId() : null;
     }
 
-    public void applyCommissionSnapshot(BigDecimal rate) {
-        applyCommissionSnapshot(rate, null, null);
+    /** Pre-discount pass — sets lineNet/baseCommissionNet so the discount guard can read them. */
+    public void applyMoneySnapshot(BigDecimal rate, boolean brandIsDomestic,
+                                   BigDecimal vatProduct, BigDecimal vatService) {
+        applyMoneySnapshot(rate, brandIsDomestic, vatProduct, vatService,
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
     }
 
     /**
-     * Folds the commission rate and any discount shares into the authoritative per-item
-     * money snapshot. The ledger reads {@code platformFeeAmount} / {@code brandPayoutAmount}
-     * directly, so all discount math lands here and nowhere else.
+     * The single place the canonical net/VAT money formula lives (spec §4). Net is the source of
+     * truth: commission is a percentage of {@code lineNet}; VAT is a pass-through added only on the
+     * commission for domestic brands (reverse charge ⇒ 0). All persisted figures round HALF_UP/2dp.
      *
-     *   brandPayoutAmount = lineTotal·(1−rate) − brandDiscountShare
-     *   platformFeeAmount = lineTotal·rate      − platformDiscountShare
-     *
-     * With zero shares this is byte-for-byte the previous no-discount behaviour.
+     * Discount shares (§5) are NET amounts already split by {@code DiscountService}; {@code percent}
+     * scales the customer's gross. The ledger reads {@code commissionNet}/{@code commissionVat}/
+     * {@code brandPayout} directly, so all money math lands here and nowhere else.
      */
-    public void applyCommissionSnapshot(BigDecimal rate,
-                                        BigDecimal platformDiscShare,
-                                        BigDecimal brandDiscShare) {
-        if (rate == null || this.lineTotal == null) return;
-        this.commissionRate        = rate;
-        this.platformDiscountShare = nz(platformDiscShare);
-        this.brandDiscountShare    = nz(brandDiscShare);
-        this.itemDiscountAmount    = this.platformDiscountShare.add(this.brandDiscountShare);
+    public void applyMoneySnapshot(BigDecimal rate, boolean brandIsDomestic,
+                                   BigDecimal vatProduct, BigDecimal vatService,
+                                   BigDecimal platformShareNet, BigDecimal brandShareNet,
+                                   BigDecimal percent) {
+        if (rate == null || this.lineGross == null) return;
+        BigDecimal pShare = nz(platformShareNet);
+        BigDecimal bShare = nz(brandShareNet);
+        BigDecimal pct    = nz(percent);
 
-        BigDecimal baseFee = this.lineTotal.multiply(rate).setScale(2, RoundingMode.HALF_UP);
-        this.platformFeeAmount = baseFee.subtract(this.platformDiscountShare);
-        this.brandPayoutAmount = this.lineTotal.subtract(baseFee).subtract(this.brandDiscountShare);
+        this.commissionRate  = rate;
+        this.brandIsDomestic = brandIsDomestic;
+        this.reverseCharge   = !brandIsDomestic;
+        this.vatRateProduct  = vatProduct;
+        this.vatRateService  = vatService;
+
+        this.lineNet           = MoneyMath.netFromGross(lineGross, vatProduct);
+        this.lineVat           = lineGross.subtract(lineNet);
+        this.baseCommissionNet = MoneyMath.round2(lineNet.multiply(rate));
+
+        this.commissionNet   = baseCommissionNet.subtract(pShare);
+        this.commissionVat   = brandIsDomestic
+                ? MoneyMath.round2(commissionNet.multiply(vatService))
+                : BigDecimal.ZERO.setScale(2);
+        this.commissionGross = commissionNet.add(commissionVat);
+
+        this.customerGrossAfterDiscount =
+                MoneyMath.round2(lineGross.multiply(BigDecimal.ONE.subtract(pct)));
+        this.brandNetRevenue = lineNet.subtract(baseCommissionNet).subtract(bShare);
+        this.brandPayout     = customerGrossAfterDiscount.subtract(commissionGross);
+
+        this.platformDiscountShare = pShare;
+        this.brandDiscountShare    = bShare;
+        this.itemDiscountAmount    = pShare.add(bShare);
+
+        // Legacy gross-basis mirrors (kept non-null for any old reader).
+        this.lineTotal         = lineGross;
+        this.platformFeeAmount = commissionGross;
+        this.brandPayoutAmount = brandPayout;
     }
 
     private static BigDecimal nz(BigDecimal v) {

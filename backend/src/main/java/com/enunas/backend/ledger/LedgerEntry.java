@@ -38,11 +38,23 @@ public class LedgerEntry {
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal totalAmount;
 
+    // platformFee mirrors commissionNet for post-V5 entries (net basis); pre-V5 rows are gross.
+    // Use commissionNet as the canonical platform-revenue figure for reporting — see migration note.
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal platformFee;
 
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal brandPayout;
+
+    // Net + VAT split (nullable: only populated for post-V5 entries from a net-aware OrderItem).
+    @Column(precision = 10, scale = 2)
+    private BigDecimal commissionNet;
+
+    @Column(precision = 10, scale = 2)
+    private BigDecimal commissionVat;
+
+    @Column(precision = 10, scale = 2)
+    private BigDecimal brandNetRevenue;
 
     @Column(nullable = false, precision = 5, scale = 4)
     private BigDecimal commissionRate;

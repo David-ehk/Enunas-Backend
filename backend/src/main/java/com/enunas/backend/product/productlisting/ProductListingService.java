@@ -1,5 +1,6 @@
 package com.enunas.backend.product.productlisting;
 
+import com.enunas.backend.common.MoneyMath;
 import com.enunas.backend.exception.ProductNotFoundException;
 import com.enunas.backend.product.Product;
 import com.enunas.backend.product.ProductRepository;
@@ -10,9 +11,11 @@ import com.enunas.backend.product.productvariant.ProductVariant;
 import com.enunas.backend.product.productvariant.ProductVariantRepository;
 import com.enunas.backend.user.User;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 @Service
@@ -22,6 +25,9 @@ public class ProductListingService {
     private final ProductListingRepository productListingRepository;
     private final ProductRepository productRepository;
     private final ProductVariantRepository variantRepository;
+
+    @Value("${enunas.vat.product-rate:0.19}")
+    private BigDecimal vatRateProduct;
 
     @Transactional
     public ListingResponseDto createListing(Long productId, CreateListingDto dto, User creator) {
@@ -36,14 +42,19 @@ public class ProductListingService {
         ProductListing productListing = ProductListing.builder()
                 .product(product)
                 .variant(variant)
-                .price(dto.getPrice())
-                .discountPrice(dto.getDiscountPrice())
+                .priceInputMode(dto.getPriceInputMode())
                 .currency(dto.getCurrency() != null ? dto.getCurrency() : "EUR")
                 .region(dto.getRegion())
                 .dropDate(dto.getDropDate())
                 .availableFrom(dto.getAvailableFrom())
                 .availableUntil(dto.getAvailableUntil())
                 .build();
+
+        // Derive the gross/net pair from the entered figure(s) under the chosen mode.
+        setPricePair(productListing, dto.getPrice(), dto.getPriceInputMode(), false);
+        if (dto.getDiscountPrice() != null) {
+            setPricePair(productListing, dto.getDiscountPrice(), dto.getPriceInputMode(), true);
+        }
 
         return ListingResponseDto.from(productListingRepository.save(productListing));
     }
@@ -79,8 +90,27 @@ public class ProductListingService {
         findProductAndVerifyOwnership(productId, creator);
         ProductListing productListing = findById(listingId);
 
-        if (dto.getPrice() != null) productListing.setPrice(dto.getPrice());
-        if (dto.getDiscountPrice() != null) productListing.setDiscountPrice(dto.getDiscountPrice());
+        // Recompute the gross/net pair whenever a price field OR the input mode changes, so a
+        // partial update never leaves a stale net that disagrees with its gross.
+        PriceInputMode oldMode = productListing.getPriceInputMode();
+        PriceInputMode effectiveMode = dto.getPriceInputMode() != null ? dto.getPriceInputMode() : oldMode;
+        boolean modeChanged = dto.getPriceInputMode() != null && dto.getPriceInputMode() != oldMode;
+
+        if (dto.getPriceInputMode() != null) productListing.setPriceInputMode(effectiveMode);
+
+        if (dto.getPrice() != null) {
+            setPricePair(productListing, dto.getPrice(), effectiveMode, false);
+        } else if (modeChanged) {
+            // Reinterpret the originally-entered figure under the new mode.
+            setPricePair(productListing, enteredValue(productListing, oldMode, false), effectiveMode, false);
+        }
+
+        if (dto.getDiscountPrice() != null) {
+            setPricePair(productListing, dto.getDiscountPrice(), effectiveMode, true);
+        } else if (modeChanged && productListing.getDiscountPrice() != null) {
+            setPricePair(productListing, enteredValue(productListing, oldMode, true), effectiveMode, true);
+        }
+
         if (dto.getActive() != null) productListing.setActive(dto.getActive());
         if (dto.getRegion() != null) productListing.setRegion(dto.getRegion());
         if (dto.getDropDate() != null) productListing.setDropDate(dto.getDropDate());
@@ -88,6 +118,38 @@ public class ProductListingService {
         if (dto.getAvailableUntil() != null) productListing.setAvailableUntil(dto.getAvailableUntil());
 
         return ListingResponseDto.from(productListingRepository.save(productListing));
+    }
+
+    /**
+     * Sets the gross + net pair on the listing from a single entered figure interpreted under
+     * {@code mode}. NET ⇒ gross is derived; GROSS ⇒ net is derived. Defaults to GROSS if the
+     * mode is somehow absent (legacy rows). {@code discount=true} targets the sale-price columns.
+     */
+    private void setPricePair(ProductListing listing, BigDecimal entered, PriceInputMode mode, boolean discount) {
+        BigDecimal gross;
+        BigDecimal net;
+        if (mode == PriceInputMode.NET) {
+            net = MoneyMath.round2(entered);
+            gross = MoneyMath.grossFromNet(entered, vatRateProduct);
+        } else {
+            gross = MoneyMath.round2(entered);
+            net = MoneyMath.netFromGross(entered, vatRateProduct);
+        }
+        if (discount) {
+            listing.setDiscountPrice(gross);
+            listing.setDiscountPriceNet(net);
+        } else {
+            listing.setPrice(gross);
+            listing.setPriceNet(net);
+        }
+    }
+
+    /** The figure the brand originally entered, recovered from the stored pair under {@code mode}. */
+    private BigDecimal enteredValue(ProductListing listing, PriceInputMode mode, boolean discount) {
+        if (mode == PriceInputMode.NET) {
+            return discount ? listing.getDiscountPriceNet() : listing.getPriceNet();
+        }
+        return discount ? listing.getDiscountPrice() : listing.getPrice();
     }
 
     @Transactional

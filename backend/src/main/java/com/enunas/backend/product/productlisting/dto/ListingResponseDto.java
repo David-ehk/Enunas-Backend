@@ -1,5 +1,6 @@
 package com.enunas.backend.product.productlisting.dto;
 
+import com.enunas.backend.product.productlisting.PriceInputMode;
 import com.enunas.backend.product.productlisting.ProductListing;
 import com.enunas.backend.product.productvariant.ColorFamily;
 import lombok.Builder;
@@ -22,8 +23,17 @@ public class ListingResponseDto {
     private String variantSize;
     /** Live stock pulled from the variant (the single source of truth). */
     private int variantStockQuantity;
+    // price/discountPrice are the GROSS (customer-facing) figures, kept for API stability.
+    // The *Net / *Vat fields expose the Netto · USt · Brutto breakdown (vat = gross − net).
     private BigDecimal price;
     private BigDecimal discountPrice;
+    private PriceInputMode priceInputMode;
+    private BigDecimal priceNet;
+    private BigDecimal priceGross;
+    private BigDecimal priceVat;
+    private BigDecimal discountPriceNet;
+    private BigDecimal discountPriceGross;
+    private BigDecimal discountPriceVat;
     private String currency;
     private boolean active;
     private String region;
@@ -46,6 +56,13 @@ public class ListingResponseDto {
                 .variantStockQuantity(productListing.getVariant().getStockQuantity())
                 .price(productListing.getPrice())
                 .discountPrice(productListing.getDiscountPrice())
+                .priceInputMode(productListing.getPriceInputMode())
+                .priceNet(productListing.getPriceNet())
+                .priceGross(productListing.getPrice())
+                .priceVat(vat(productListing.getPrice(), productListing.getPriceNet()))
+                .discountPriceNet(productListing.getDiscountPriceNet())
+                .discountPriceGross(productListing.getDiscountPrice())
+                .discountPriceVat(vat(productListing.getDiscountPrice(), productListing.getDiscountPriceNet()))
                 .currency(productListing.getCurrency())
                 .active(productListing.isActive())
                 .region(productListing.getRegion())
@@ -55,5 +72,10 @@ public class ListingResponseDto {
                 .createdAt(productListing.getCreatedAt())
                 .updatedAt(productListing.getUpdatedAt())
                 .build();
+    }
+
+    /** VAT = gross − net; null when either side is missing (legacy listings without a stored net). */
+    private static BigDecimal vat(BigDecimal gross, BigDecimal net) {
+        return (gross != null && net != null) ? gross.subtract(net) : null;
     }
 }

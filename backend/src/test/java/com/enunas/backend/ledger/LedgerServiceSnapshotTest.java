@@ -55,6 +55,22 @@ class LedgerServiceSnapshotTest {
         return it;
     }
 
+    /** Post-V5 item carrying the explicit net/VAT snapshot (§7 BRAND 15% case, gross 119). */
+    private OrderItem netItem() {
+        OrderItem it = mock(OrderItem.class);
+        lenient().when(it.getId()).thenReturn(10L);
+        lenient().when(it.getBrandId()).thenReturn(5L);
+        lenient().when(it.getCommissionRate()).thenReturn(new BigDecimal("0.18"));
+        lenient().when(it.getLineTotal()).thenReturn(new BigDecimal("119.00"));
+        lenient().when(it.getCommissionNet()).thenReturn(new BigDecimal("10.50"));
+        lenient().when(it.getCommissionVat()).thenReturn(new BigDecimal("2.00"));
+        lenient().when(it.getBrandNetRevenue()).thenReturn(new BigDecimal("74.50"));
+        lenient().when(it.getBrandPayout()).thenReturn(new BigDecimal("88.65"));
+        lenient().when(it.getBrandPayoutAmount()).thenReturn(new BigDecimal("88.65"));
+        lenient().when(it.getCustomerGrossAfterDiscount()).thenReturn(new BigDecimal("101.15"));
+        return it;
+    }
+
     private Order order(OrderItem item, String total) {
         Order o = mock(Order.class);
         lenient().when(o.getId()).thenReturn(1L);
@@ -70,31 +86,33 @@ class LedgerServiceSnapshotTest {
         BrandEconomics eco = BrandEconomics.builder().build(); // all balances ZERO baseline
         when(brandEconomicsRepository.findByBrandPartner_Id(5L)).thenReturn(Optional.of(eco));
 
-        // BRAND 15% on a €100 item: snapshot payout 74.50, fee 10.50, customer paid 85.00.
-        OrderItem it = item(new BigDecimal("100.00"), new BigDecimal("0.18"),
-                new BigDecimal("10.50"), new BigDecimal("74.50"));
-        Order ord = order(it, "85.00");
+        // BRAND 15% on a €119 gross item: snapshot brandPayout 88.65, commissionNet 10.50,
+        // commissionVat 2.00, customer paid 101.15.
+        OrderItem it = netItem();
+        Order ord = order(it, "101.15");
 
         when(ledgerRepository.existsByOrderIdAndEntryType(1L, LedgerEntryType.ORDER_PAYMENT)).thenReturn(false);
 
         ledgerService.recordOrderPayment(ord);
 
-        // Brand credited the discounted payout from the snapshot — NOT the gross 82.00.
-        assertThat(eco.getPendingBalance()).isEqualByComparingTo("74.50");
-        assertThat(eco.getLifetimeRevenue()).isEqualByComparingTo("74.50");
+        // Brand credited the discounted cash payout from the snapshot.
+        assertThat(eco.getPendingBalance()).isEqualByComparingTo("88.65");
+        assertThat(eco.getLifetimeRevenue()).isEqualByComparingTo("88.65");
 
         ArgumentCaptor<List<LedgerEntry>> cap = ArgumentCaptor.forClass(List.class);
         verify(ledgerRepository).saveAll(cap.capture());
         LedgerEntry entry = cap.getValue().get(0);
-        assertThat(entry.getPlatformFee()).isEqualByComparingTo("10.50");
-        assertThat(entry.getBrandPayout()).isEqualByComparingTo("74.50");
+        assertThat(entry.getPlatformFee()).isEqualByComparingTo("10.50");    // = commissionNet
+        assertThat(entry.getCommissionNet()).isEqualByComparingTo("10.50");
+        assertThat(entry.getCommissionVat()).isEqualByComparingTo("2.00");
+        assertThat(entry.getBrandPayout()).isEqualByComparingTo("88.65");
 
         // ---- Full refund of the discounted total ----
         when(ledgerRepository.existsByExternalReferenceIdAndEntryType("ref1", LedgerEntryType.REFUND_REVERSAL))
                 .thenReturn(false);
         when(ledgerRepository.findActivePaymentEntriesByOrderAndBrand(1L, 5L)).thenReturn(List.of());
 
-        ledgerService.recordRefund(ord, new BigDecimal("85.00"), "ref1");
+        ledgerService.recordRefund(ord, new BigDecimal("101.15"), "ref1");
 
         // Balance returns to EXACTLY the pre-order baseline (no penny drift).
         assertThat(eco.getPendingBalance()).isEqualByComparingTo("0.00");

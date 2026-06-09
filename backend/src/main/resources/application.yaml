@@ -55,6 +55,9 @@ enunas:
   payout:
     hold-days: 7
     release-cron: "0 0 2 * * ?"
+  vat:
+    product-rate: 0.19
+    service-rate: 0.19
 
 mollie:
   api:

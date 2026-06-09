@@ -14,6 +14,7 @@ import com.enunas.backend.order.OrderRepository;
 import com.enunas.backend.order.OrderService;
 import com.enunas.backend.product.Product;
 import com.enunas.backend.product.ProductRepository;
+import com.enunas.backend.product.productlisting.PriceInputMode;
 import com.enunas.backend.product.productlisting.ProductListing;
 import com.enunas.backend.product.productlisting.ProductListingRepository;
 import com.enunas.backend.product.productvariant.ProductColor;
@@ -116,7 +117,10 @@ abstract class AbstractDiscountIntegrationTest {
         return new BrandFixture(b, u);
     }
 
-    /** Persists Product -> ProductColor -> ProductVariant -> ProductListing; returns the listing id. */
+    /**
+     * Persists Product -> ProductColor -> ProductVariant -> ProductListing; returns the listing id.
+     * {@code priceEuros} is the GROSS price (priceInputMode = GROSS); the order flow derives net.
+     */
     protected long seedListing(BrandPartner brand, User creator, String priceEuros, int stock) {
         Product p = productRepository.save(Product.builder()
                 .name("Prod-" + UUID.randomUUID().toString().substring(0, 6))
@@ -139,6 +143,7 @@ abstract class AbstractDiscountIntegrationTest {
                 .product(p)
                 .variant(variant)
                 .price(new BigDecimal(priceEuros))
+                .priceInputMode(PriceInputMode.GROSS)
                 .currency("EUR")
                 .active(true)
                 .build());

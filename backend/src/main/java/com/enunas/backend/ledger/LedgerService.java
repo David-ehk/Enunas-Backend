@@ -55,25 +55,43 @@ public class LedgerService {
                 log.warn("LedgerService: skipping item {} with no brand (orderId={})", item.getId(), order.getId());
                 continue;
             }
-            // The OrderItem snapshot is authoritative — it already folds in any discount.
-            // Fall back to a recompute only for legacy items missing the snapshot.
-            BigDecimal lineTotal = item.getLineTotal();
-            BigDecimal rate      = item.getCommissionRate() != null
+            // The OrderItem snapshot is authoritative — it already folds in any discount and VAT.
+            // Post-V5 items carry the explicit net/VAT split; legacy items recompute on the gross.
+            BigDecimal rate = item.getCommissionRate() != null
                     ? item.getCommissionRate() : resolveBrandRate(brandId);
-            BigDecimal fee       = item.getPlatformFeeAmount() != null
-                    ? item.getPlatformFeeAmount()
-                    : lineTotal.multiply(rate).setScale(2, RoundingMode.HALF_UP);
-            BigDecimal payout    = item.getBrandPayoutAmount() != null
-                    ? item.getBrandPayoutAmount()
-                    : lineTotal.subtract(fee);
+
+            BigDecimal total, fee, payout, commissionNet, commissionVat, brandNetRevenue;
+            if (item.getCommissionNet() != null) {
+                commissionNet   = item.getCommissionNet();
+                commissionVat   = item.getCommissionVat();
+                brandNetRevenue = item.getBrandNetRevenue();
+                payout          = item.getBrandPayout();
+                total           = item.getCustomerGrossAfterDiscount() != null
+                        ? item.getCustomerGrossAfterDiscount() : item.getLineTotal();
+                fee             = commissionNet; // platformFee mirrors net commission going forward
+            } else {
+                // Legacy pre-V5 order: gross fee, no VAT split.
+                BigDecimal lineTotal = item.getLineTotal();
+                fee    = item.getPlatformFeeAmount() != null
+                        ? item.getPlatformFeeAmount()
+                        : lineTotal.multiply(rate).setScale(2, RoundingMode.HALF_UP);
+                payout = item.getBrandPayoutAmount() != null
+                        ? item.getBrandPayoutAmount()
+                        : lineTotal.subtract(fee);
+                total  = lineTotal;
+                commissionNet = null; commissionVat = null; brandNetRevenue = null;
+            }
 
             entries.add(LedgerEntry.builder()
                     .orderId(order.getId())
                     .orderItemId(item.getId())
                     .brandPartnerId(brandId)
-                    .totalAmount(lineTotal)
+                    .totalAmount(total)
                     .platformFee(fee)
                     .brandPayout(payout)
+                    .commissionNet(commissionNet)
+                    .commissionVat(commissionVat)
+                    .brandNetRevenue(brandNetRevenue)
                     .commissionRate(rate)
                     .currency(order.getCurrency())
                     .entryType(LedgerEntryType.ORDER_PAYMENT)
@@ -119,21 +137,27 @@ public class LedgerService {
         // Reverse against the immutable per-item snapshot (already discount-adjusted), not a
         // gross recompute — so a full refund nets each brand's credited payout exactly to zero.
         Map<Long, BigDecimal> brandPayouts = new HashMap<>(); // credited brand payout per brand
-        Map<Long, BigDecimal> brandFees    = new HashMap<>(); // credited platform fee per brand
+        Map<Long, BigDecimal> brandFees    = new HashMap<>(); // credited platform fee (net) per brand
+        Map<Long, BigDecimal> brandVats    = new HashMap<>(); // credited commission VAT per brand
         Map<Long, BigDecimal> brandRates   = new HashMap<>();
         for (OrderItem item : order.getItems()) {
             Long bId = item.getBrandId();
             if (bId == null) continue;
             BigDecimal rate = item.getCommissionRate() != null
                     ? item.getCommissionRate() : resolveBrandRate(bId);
-            BigDecimal fee    = item.getPlatformFeeAmount() != null
-                    ? item.getPlatformFeeAmount()
-                    : item.getLineTotal().multiply(rate).setScale(2, RoundingMode.HALF_UP);
+            // Post-V5: platform fee = commissionNet, plus a separate VAT line. Legacy: gross fee, vat 0.
+            BigDecimal fee = item.getCommissionNet() != null
+                    ? item.getCommissionNet()
+                    : (item.getPlatformFeeAmount() != null
+                        ? item.getPlatformFeeAmount()
+                        : item.getLineTotal().multiply(rate).setScale(2, RoundingMode.HALF_UP));
+            BigDecimal vat = item.getCommissionVat() != null ? item.getCommissionVat() : BigDecimal.ZERO;
             BigDecimal payout = item.getBrandPayoutAmount() != null
                     ? item.getBrandPayoutAmount()
                     : item.getLineTotal().subtract(fee);
             brandPayouts.merge(bId, payout, BigDecimal::add);
             brandFees.merge(bId, fee, BigDecimal::add);
+            brandVats.merge(bId, vat, BigDecimal::add);
             brandRates.putIfAbsent(bId, rate);
         }
 
@@ -147,6 +171,7 @@ public class LedgerService {
         for (Long brandId : brandPayouts.keySet()) {
             BigDecimal rate            = brandRates.get(brandId);
             BigDecimal platformPortion = brandFees.get(brandId).multiply(fraction).setScale(2, RoundingMode.HALF_UP);
+            BigDecimal vatPortion      = brandVats.get(brandId).multiply(fraction).setScale(2, RoundingMode.HALF_UP);
             BigDecimal brandPortion    = brandPayouts.get(brandId).multiply(fraction).setScale(2, RoundingMode.HALF_UP);
 
             List<LedgerEntry> originals = ledgerRepository
@@ -156,9 +181,11 @@ public class LedgerService {
                     .orderId(order.getId())
                     .orderItemId(originals.isEmpty() ? null : originals.get(0).getOrderItemId())
                     .brandPartnerId(brandId)
-                    .totalAmount(platformPortion.add(brandPortion).negate())
+                    .totalAmount(platformPortion.add(vatPortion).add(brandPortion).negate())
                     .platformFee(platformPortion.negate())
                     .brandPayout(brandPortion.negate())
+                    .commissionNet(platformPortion.negate())
+                    .commissionVat(vatPortion.negate())
                     .commissionRate(rate)
                     .currency(order.getCurrency())
                     .entryType(LedgerEntryType.REFUND_REVERSAL)

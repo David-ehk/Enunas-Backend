@@ -50,10 +50,14 @@ class DiscountServiceTest {
                 .build();
     }
 
-    private OrderItem mockItem(long brandId, String lineTotal, String rate) {
+    /** Stubs the NET fields the discount split now reads: lineNet and baseCommissionNet = lineNet × rate. */
+    private OrderItem mockItem(long brandId, String lineNet, String rate) {
+        BigDecimal net = new BigDecimal(lineNet);
+        BigDecimal baseCommissionNet = net.multiply(new BigDecimal(rate)).setScale(2, java.math.RoundingMode.HALF_UP);
         OrderItem item = org.mockito.Mockito.mock(OrderItem.class);
         lenient().when(item.getBrandId()).thenReturn(brandId);
-        lenient().when(item.getLineTotal()).thenReturn(new BigDecimal(lineTotal));
+        lenient().when(item.getLineNet()).thenReturn(net);
+        lenient().when(item.getBaseCommissionNet()).thenReturn(baseCommissionNet);
         lenient().when(item.getCommissionRate()).thenReturn(new BigDecimal(rate));
         lenient().when(item.getProductSnapshotName()).thenReturn("Test Product");
         return item;
@@ -71,8 +75,8 @@ class DiscountServiceTest {
         assertThat(app.discountAmount()).isEqualByComparingTo("10.00");
         assertThat(app.platformDiscountAmount()).isEqualByComparingTo("10.00");
         assertThat(app.brandDiscountAmount()).isEqualByComparingTo("0.00");
-        assertThat(app.itemShares().get(0).platformShare()).isEqualByComparingTo("10.00");
-        assertThat(app.itemShares().get(0).brandShare()).isEqualByComparingTo("0.00");
+        assertThat(app.itemShares().get(0).platformShareNet()).isEqualByComparingTo("10.00");
+        assertThat(app.itemShares().get(0).brandShareNet()).isEqualByComparingTo("0.00");
     }
 
     @Test
@@ -89,9 +93,26 @@ class DiscountServiceTest {
         assertThat(app.platformDiscountAmount()).isEqualByComparingTo("7.50");
         assertThat(app.brandDiscountAmount()).isEqualByComparingTo("7.50");
         // Own item split 7.50 / 7.50; other brand's item untouched.
-        assertThat(app.itemShares().get(0).platformShare()).isEqualByComparingTo("7.50");
-        assertThat(app.itemShares().get(0).brandShare()).isEqualByComparingTo("7.50");
+        assertThat(app.itemShares().get(0).platformShareNet()).isEqualByComparingTo("7.50");
+        assertThat(app.itemShares().get(0).brandShareNet()).isEqualByComparingTo("7.50");
         assertThat(app.itemShares().get(1).total()).isEqualByComparingTo("0.00");
+    }
+
+    @Test
+    void brandDiscount_oddCent_platformAbsorbsRemainder_noPennyLostOrCreated() {
+        when(discountCodeRepository.findByCodeIgnoreCase("SUMMER15")).thenReturn(Optional.of(brandCode));
+        when(discountCodeRepository.reserveUsage(2L)).thenReturn(1);
+
+        // lineNet 0.33 × 15% = 0.0495 → itemDiscountNet 0.05 (odd). Split must be 0.03 / 0.02.
+        OrderItem item = mockItem(5L, "0.33", "0.18");
+
+        DiscountApplication app = discountService.validateAndApply("SUMMER15", List.of(item));
+
+        BigDecimal platform = app.itemShares().get(0).platformShareNet();
+        BigDecimal brand    = app.itemShares().get(0).brandShareNet();
+        assertThat(brand).isEqualByComparingTo("0.03");    // round(0.05/2) = 0.03
+        assertThat(platform).isEqualByComparingTo("0.02"); // remainder to the platform
+        assertThat(platform.add(brand)).isEqualByComparingTo("0.05"); // no penny created or lost
     }
 
     @Test

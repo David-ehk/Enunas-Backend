@@ -2,6 +2,7 @@ package com.enunas.backend.discount;
 
 import com.enunas.backend.brandpartner.BrandPartner;
 import com.enunas.backend.brandpartner.BrandPartnerService;
+import com.enunas.backend.common.MoneyMath;
 import com.enunas.backend.discount.DiscountApplication.ItemShare;
 import com.enunas.backend.discount.dto.CreateDiscountDto;
 import com.enunas.backend.discount.dto.DiscountResponseDto;
@@ -135,30 +136,32 @@ public class DiscountService {
         BigDecimal totalBrand    = BigDecimal.ZERO;
 
         for (OrderItem item : items) {
-            BigDecimal lineTotal = item.getLineTotal();
+            BigDecimal lineNet = item.getLineNet();
             boolean applies = switch (code.getType()) {
                 case ADMIN -> true;                                  // marketplace-wide
                 case BRAND -> codeBrandId.equals(item.getBrandId()); // own products only
             };
 
-            BigDecimal platformShare = BigDecimal.ZERO;
-            BigDecimal brandShare    = BigDecimal.ZERO;
+            BigDecimal platformShareNet = BigDecimal.ZERO;
+            BigDecimal brandShareNet    = BigDecimal.ZERO;
 
-            if (applies && lineTotal != null && lineTotal.signum() > 0) {
-                BigDecimal itemDiscount = lineTotal.multiply(percent).setScale(2, RoundingMode.HALF_UP);
+            if (applies && lineNet != null && lineNet.signum() > 0) {
+                BigDecimal itemDiscountNet = MoneyMath.round2(lineNet.multiply(percent));
                 if (code.getType() == DiscountType.ADMIN) {
-                    platformShare = itemDiscount;                               // Enunas absorbs all
+                    platformShareNet = itemDiscountNet;                          // Enunas absorbs all
                 } else {
-                    platformShare = itemDiscount.divide(TWO, 2, RoundingMode.HALF_UP); // 50/50
-                    brandShare    = itemDiscount.subtract(platformShare);
+                    // Round ONE share, derive the other — never round(x/2) on both sides (that
+                    // double-rounds 0.05 → 0.06). The platform absorbs the odd-cent remainder.
+                    brandShareNet    = itemDiscountNet.divide(TWO, 2, RoundingMode.HALF_UP);
+                    platformShareNet = itemDiscountNet.subtract(brandShareNet);
                 }
-                assertNonNegativePayout(item, platformShare, brandShare);
+                assertNonNegativePayout(item, platformShareNet, brandShareNet);
             }
 
-            shares.add(new ItemShare(platformShare, brandShare));
-            totalPlatform = totalPlatform.add(platformShare);
-            totalBrand    = totalBrand.add(brandShare);
-            totalDiscount = totalDiscount.add(platformShare).add(brandShare);
+            shares.add(new ItemShare(platformShareNet, brandShareNet));
+            totalPlatform = totalPlatform.add(platformShareNet);
+            totalBrand    = totalBrand.add(brandShareNet);
+            totalDiscount = totalDiscount.add(platformShareNet).add(brandShareNet);
         }
 
         // Reserve usage atomically — only succeeds while active and below the limit.
@@ -229,22 +232,26 @@ public class DiscountService {
         }
     }
 
-    /** Guards the low-commission-rate edge: a discount must never push fee or payout negative. */
-    private void assertNonNegativePayout(OrderItem item, BigDecimal platformShare, BigDecimal brandShare) {
-        BigDecimal rate = item.getCommissionRate();
-        if (rate == null) {
-            return; // brandless item: platform absorbs, no brand payout to protect
+    /**
+     * Guards the low-commission-rate edge on the NET basis: the discount must never push the
+     * platform's net commission or the brand's net revenue below zero.
+     *   commissionNet   = baseCommissionNet − platformShareNet
+     *   brandNetRevenue = lineNet − baseCommissionNet − brandShareNet
+     */
+    private void assertNonNegativePayout(OrderItem item, BigDecimal platformShareNet, BigDecimal brandShareNet) {
+        BigDecimal baseCommissionNet = item.getBaseCommissionNet();
+        if (baseCommissionNet == null || item.getBrandId() == null) {
+            return; // brandless / pre-snapshot item: platform absorbs, nothing to protect
         }
-        BigDecimal baseFee     = item.getLineTotal().multiply(rate).setScale(2, RoundingMode.HALF_UP);
-        BigDecimal platformFee = baseFee.subtract(platformShare);
-        BigDecimal brandPayout = item.getLineTotal().subtract(baseFee).subtract(brandShare);
-        if (platformFee.signum() < 0) {
+        BigDecimal commissionNet   = baseCommissionNet.subtract(platformShareNet);
+        BigDecimal brandNetRevenue = item.getLineNet().subtract(baseCommissionNet).subtract(brandShareNet);
+        if (commissionNet.signum() < 0) {
             throw new IllegalStateException(
-                    "Discount exceeds the platform margin on item: " + item.getProductSnapshotName());
+                    "Discount exceeds the platform commission on item: " + item.getProductSnapshotName());
         }
-        if (brandPayout.signum() < 0) {
+        if (brandNetRevenue.signum() < 0) {
             throw new IllegalStateException(
-                    "Discount exceeds the brand payout on item: " + item.getProductSnapshotName());
+                    "Discount exceeds the brand net revenue on item: " + item.getProductSnapshotName());
         }
     }
 

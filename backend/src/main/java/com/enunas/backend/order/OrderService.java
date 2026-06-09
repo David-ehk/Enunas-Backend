@@ -78,6 +78,12 @@ public class OrderService {
     @Value("${enunas.platform.commission-rate:0.18}")
     private BigDecimal globalCommissionRate;
 
+    @Value("${enunas.vat.product-rate:0.19}")
+    private BigDecimal vatRateProduct;
+
+    @Value("${enunas.vat.service-rate:0.19}")
+    private BigDecimal vatRateService;
+
     // ===== Customer =====
 
     @PreAuthorize("hasRole('CUSTOMER')")
@@ -110,14 +116,17 @@ public class OrderService {
             ProductListing pl = listings.get(i);
             ProductVariant variant = pl.getVariant();
 
-            BigDecimal effectivePrice = pl.getDiscountPrice() != null ? pl.getDiscountPrice() : pl.getPrice();
-            BigDecimal lineTotal = effectivePrice.multiply(BigDecimal.valueOf(itemDto.getQuantity()));
-            subtotal = subtotal.add(lineTotal);
+            // lineGross is the customer-facing gross (sale gross if on sale, else regular gross).
+            BigDecimal effectiveGross = pl.getEffectiveGross();
+            BigDecimal lineGross = effectiveGross.multiply(BigDecimal.valueOf(itemDto.getQuantity()));
+            subtotal = subtotal.add(lineGross);
 
             BrandPartner brand = pl.getProduct().getBrand();
+            boolean domestic = (brand == null) || brand.isDomestic();
+            BigDecimal rate = brand != null ? getBrandCommissionRate(brand.getId()) : BigDecimal.ZERO;
             if (brand != null) {
                 distinctBrandIds.add(brand.getId());
-                brandSubtotals.merge(brand.getId(), lineTotal, BigDecimal::add);
+                brandSubtotals.merge(brand.getId(), lineGross, BigDecimal::add);
             }
 
             OrderItem item = OrderItem.builder()
@@ -129,29 +138,38 @@ public class OrderService {
                     .priceAtPurchase(pl.getPrice())
                     .discountPriceAtPurchase(pl.getDiscountPrice())
                     .quantity(itemDto.getQuantity())
-                    .lineTotal(lineTotal)
+                    .lineGross(lineGross)
+                    .lineTotal(lineGross)
                     .build();
-            if (brand != null) {
-                item.applyCommissionSnapshot(getBrandCommissionRate(brand.getId()));
-            }
+            // Pre-discount pass: freezes lineNet/baseCommissionNet so the discount guard can read them.
+            item.applyMoneySnapshot(rate, domestic, vatRateProduct, vatRateService);
             orderItems.add(item);
         }
 
-        // 4. Apply optional discount code (max one per order — no stacking). Folds each item's
-        //    platform/brand discount share into its commission snapshot, so the ledger (which
-        //    reads platformFeeAmount/brandPayoutAmount) stays correct per brand. Reserves usage.
+        // 4. Apply optional discount code (max one per order — no stacking). Re-runs the money
+        //    snapshot per item with the NET discount shares folded in, so the ledger (which reads
+        //    commissionNet/commissionVat/brandPayout) stays correct per brand. Reserves usage.
         DiscountApplication discount = null;
-        BigDecimal discountAmount = BigDecimal.ZERO;
         if (dto.getDiscountCode() != null && !dto.getDiscountCode().isBlank()) {
             discount = discountService.validateAndApply(dto.getDiscountCode(), orderItems);
             for (int i = 0; i < orderItems.size(); i++) {
                 OrderItem item = orderItems.get(i);
                 DiscountApplication.ItemShare share = discount.itemShares().get(i);
-                item.applyCommissionSnapshot(item.getCommissionRate(),
-                        share.platformShare(), share.brandShare());
+                // percent reduces the customer price only for items the code actually applies to
+                // (a BRAND code leaves other brands' items at full price → zero share, zero percent).
+                BigDecimal itemPercent = share.total().signum() > 0 ? discount.percent() : BigDecimal.ZERO;
+                item.applyMoneySnapshot(item.getCommissionRate(), item.isBrandIsDomestic(),
+                        vatRateProduct, vatRateService,
+                        share.platformShareNet(), share.brandShareNet(), itemPercent);
             }
-            discountAmount = discount.discountAmount();
         }
+
+        // Customer-facing reduction is GROSS (= Σ lineGross − Σ customerGrossAfterDiscount); the
+        // platform/brand discount aggregates on the Order are the NET absorption shares.
+        BigDecimal customerSubtotalAfterDiscount = orderItems.stream()
+                .map(OrderItem::getCustomerGrossAfterDiscount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal discountAmount = subtotal.subtract(customerSubtotalAfterDiscount);
 
         // !! 5. Compute shipping per brand (one charge per brand, not per item). Has to change to Order not Brand
         BigDecimal shippingTotal = BigDecimal.ZERO;
@@ -188,9 +206,9 @@ public class OrderService {
                     .discountCode(discount.code().getCode())
                     .discountType(discount.type())
                     .discountPercent(discount.percent())
-                    .discountAmount(discount.discountAmount())
-                    .platformDiscountAmount(discount.platformDiscountAmount())
-                    .brandDiscountAmount(discount.brandDiscountAmount());
+                    .discountAmount(discountAmount)                              // gross reduction
+                    .platformDiscountAmount(discount.platformDiscountAmount())  // net absorption share
+                    .brandDiscountAmount(discount.brandDiscountAmount());       // net absorption share
         }
 
         Order order = orderBuilder.build();

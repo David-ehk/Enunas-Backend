@@ -48,6 +48,15 @@ public class BrandPartner {
     /** Onboarding metadata — typically an ISO 3166-1 alpha-2 country code. */
     private String country;
 
+    /**
+     * Whether the brand is a domestic (German) VAT-registered business. Drives VAT treatment of
+     * the platform commission: domestic ⇒ commission carries 19% VAT; foreign ⇒ reverse charge
+     * (commissionVat = 0). Set explicitly during onboarding — never inferred from {@link #country}.
+     */
+    @Column(nullable = false)
+    @Builder.Default
+    private boolean domestic = true;
+
     /** Public business contact email; distinct from the User login email. */
     private String contactEmail;
 

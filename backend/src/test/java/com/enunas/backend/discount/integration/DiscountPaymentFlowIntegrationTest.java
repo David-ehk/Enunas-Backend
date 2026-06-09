@@ -40,7 +40,7 @@ class DiscountPaymentFlowIntegrationTest extends AbstractDiscountIntegrationTest
         User admin = seedAdmin();
         seedCustomer();
         BrandFixture a = seedBrand("BrandA", "brand-a", "0.18");
-        long listing = seedListing(a.brand(), a.user(), "100.00", 50);
+        long listing = seedListing(a.brand(), a.user(), "119.00", 50); // gross 119 → net 100
         String adminToken = login("admin@it.local", "Admin123!");
         String custToken = login("customer@it.local", "Customer123!");
 
@@ -51,24 +51,28 @@ class DiscountPaymentFlowIntegrationTest extends AbstractDiscountIntegrationTest
         assertThat(order.getStatusCode().value()).isEqualTo(201);
         long oid = orderId(order);
 
+        // ADMIN 10% on gross 119 (net 100, 18% commission). Customer pays 119×0.90 = 107.10;
+        // gross reduction 11.90; platform absorbs the whole 10.00 NET discount.
         Map<String, Object> o = orderRow(oid);
-        assertThat((BigDecimal) o.get("total")).isEqualByComparingTo("90.00");
-        assertThat((BigDecimal) o.get("discount_amount")).isEqualByComparingTo("10.00");
-        assertThat((BigDecimal) o.get("platform_discount_amount")).isEqualByComparingTo("10.00");
+        assertThat((BigDecimal) o.get("total")).isEqualByComparingTo("107.10");
+        assertThat((BigDecimal) o.get("discount_amount")).isEqualByComparingTo("11.90");        // gross
+        assertThat((BigDecimal) o.get("platform_discount_amount")).isEqualByComparingTo("10.00"); // net
         assertThat((BigDecimal) o.get("brand_discount_amount")).isEqualByComparingTo("0.00");
         assertThat((String) o.get("status")).isEqualTo("PENDING");
 
         Map<String, Object> oi = orderItemRows(oid).get(0);
-        assertThat((BigDecimal) oi.get("item_discount_amount")).isEqualByComparingTo("10.00");
+        assertThat((BigDecimal) oi.get("item_discount_amount")).isEqualByComparingTo("10.00");    // net shares
         assertThat((BigDecimal) oi.get("platform_discount_share")).isEqualByComparingTo("10.00");
         assertThat((BigDecimal) oi.get("brand_discount_share")).isEqualByComparingTo("0.00");
-        assertThat((BigDecimal) oi.get("brand_payout_amount")).isEqualByComparingTo("82.00");
-        assertThat((BigDecimal) oi.get("platform_fee_amount")).isEqualByComparingTo("8.00");
+        assertThat((BigDecimal) oi.get("brand_payout_amount")).isEqualByComparingTo("97.58");     // cash to brand
+        assertThat((BigDecimal) oi.get("platform_fee_amount")).isEqualByComparingTo("9.52");      // commissionGross
+        assertThat((BigDecimal) oi.get("commission_net")).isEqualByComparingTo("8.00");
+        assertThat((BigDecimal) oi.get("commission_vat")).isEqualByComparingTo("1.52");
 
         assertThat(usedCount("TESTADMIN10")).isEqualTo(1); // reserved at placement
 
         BigDecimal payAmount = jdbc.queryForObject("SELECT amount FROM payments WHERE order_id = ?", BigDecimal.class, oid);
-        assertThat(payAmount).isEqualByComparingTo("90.00");
+        assertThat(payAmount).isEqualByComparingTo("107.10");
 
         BigDecimal baseline = brandPending(a.brand().getId());
 
@@ -76,11 +80,11 @@ class DiscountPaymentFlowIntegrationTest extends AbstractDiscountIntegrationTest
 
         assertThat((String) orderRow(oid).get("status")).isEqualTo("PAID");
         assertThat(jdbc.queryForObject("SELECT status FROM payments WHERE order_id = ?", String.class, oid)).isEqualTo("PAID");
-        assertThat(brandPending(a.brand().getId())).isEqualByComparingTo("82.00");
+        assertThat(brandPending(a.brand().getId())).isEqualByComparingTo("97.58");
         BigDecimal ledgerFee = jdbc.queryForObject(
                 "SELECT platform_fee FROM ledger_entries WHERE order_id = ? AND entry_type = 'ORDER_PAYMENT'",
                 BigDecimal.class, oid);
-        assertThat(ledgerFee).isEqualByComparingTo("8.00");
+        assertThat(ledgerFee).isEqualByComparingTo("8.00"); // platform_fee = commissionNet
         assertThat(usedCount("TESTADMIN10")).isEqualTo(1); // no further increment
 
         asAdmin(admin, () -> orderService.updateOrderStatus(oid, OrderStatus.CANCELLED));
@@ -94,8 +98,8 @@ class DiscountPaymentFlowIntegrationTest extends AbstractDiscountIntegrationTest
         seedCustomer();
         BrandFixture a = seedBrand("BrandA", "brand-a", "0.18");
         BrandFixture b = seedBrand("BrandB", "brand-b", "0.18");
-        long listingA = seedListing(a.brand(), a.user(), "100.00", 50);
-        long listingB = seedListing(b.brand(), b.user(), "50.00", 50);
+        long listingA = seedListing(a.brand(), a.user(), "119.00", 50); // net 100
+        long listingB = seedListing(b.brand(), b.user(), "59.50", 50);  // net 50
         String custToken = login("customer@it.local", "Customer123!");
         String brandAToken = login("brand-a@it.local", "Brand123!");
 
@@ -107,30 +111,32 @@ class DiscountPaymentFlowIntegrationTest extends AbstractDiscountIntegrationTest
         assertThat(order.getStatusCode().value()).isEqualTo(201);
         long oid = orderId(order);
 
+        // BRAND15 applies only to A (net 100 → net discount 15.00, split 7.50/7.50). A's customer
+        // gross = 101.15; B untouched at 59.50. Order total 160.65; gross reduction 17.85.
         Map<String, Object> o = orderRow(oid);
-        assertThat((BigDecimal) o.get("total")).isEqualByComparingTo("135.00");
-        assertThat((BigDecimal) o.get("discount_amount")).isEqualByComparingTo("15.00");
-        assertThat((BigDecimal) o.get("platform_discount_amount")).isEqualByComparingTo("7.50");
+        assertThat((BigDecimal) o.get("total")).isEqualByComparingTo("160.65");
+        assertThat((BigDecimal) o.get("discount_amount")).isEqualByComparingTo("17.85");        // gross
+        assertThat((BigDecimal) o.get("platform_discount_amount")).isEqualByComparingTo("7.50"); // net
         assertThat((BigDecimal) o.get("brand_discount_amount")).isEqualByComparingTo("7.50");
 
         Map<String, Object> rowA = orderItemForBrand(oid, a.brand().getId());
         assertThat((BigDecimal) rowA.get("item_discount_amount")).isEqualByComparingTo("15.00");
         assertThat((BigDecimal) rowA.get("platform_discount_share")).isEqualByComparingTo("7.50");
         assertThat((BigDecimal) rowA.get("brand_discount_share")).isEqualByComparingTo("7.50");
-        assertThat((BigDecimal) rowA.get("brand_payout_amount")).isEqualByComparingTo("74.50");
-        assertThat((BigDecimal) rowA.get("platform_fee_amount")).isEqualByComparingTo("10.50");
+        assertThat((BigDecimal) rowA.get("brand_payout_amount")).isEqualByComparingTo("88.65");
+        assertThat((BigDecimal) rowA.get("platform_fee_amount")).isEqualByComparingTo("12.50"); // commissionGross
 
         Map<String, Object> rowB = orderItemForBrand(oid, b.brand().getId());
         assertThat((BigDecimal) rowB.get("item_discount_amount")).isEqualByComparingTo("0.00");
-        assertThat((BigDecimal) rowB.get("brand_payout_amount")).isEqualByComparingTo("41.00");
-        assertThat((BigDecimal) rowB.get("platform_fee_amount")).isEqualByComparingTo("9.00");
+        assertThat((BigDecimal) rowB.get("brand_payout_amount")).isEqualByComparingTo("48.79");
+        assertThat((BigDecimal) rowB.get("platform_fee_amount")).isEqualByComparingTo("10.71"); // commissionGross
 
         BigDecimal baseA = brandPending(a.brand().getId());
         BigDecimal baseB = brandPending(b.brand().getId());
 
         confirmPaid(oid);
-        assertThat(brandPending(a.brand().getId())).isEqualByComparingTo("74.50");
-        assertThat(brandPending(b.brand().getId())).isEqualByComparingTo("41.00");
+        assertThat(brandPending(a.brand().getId())).isEqualByComparingTo("88.65");
+        assertThat(brandPending(b.brand().getId())).isEqualByComparingTo("48.79");
 
         asAdmin(admin, () -> orderService.updateOrderStatus(oid, OrderStatus.CANCELLED));
         assertThat(brandPending(a.brand().getId())).isEqualByComparingTo(baseA);
@@ -198,16 +204,17 @@ class DiscountPaymentFlowIntegrationTest extends AbstractDiscountIntegrationTest
         seedAdmin();
         seedCustomer();
         BrandFixture low = seedBrand("BrandLow", "brand-low", "0.08"); // 8% commission
-        long listing = seedListing(low.brand(), low.user(), "100.00", 50);
+        long listing = seedListing(low.brand(), low.user(), "119.00", 50); // net 100, base commission 8.00
         String adminToken = login("admin@it.local", "Admin123!");
         String custToken = login("customer@it.local", "Customer123!");
 
         assertThat(createAdminDiscount(adminToken, Map.of("code", "MARGIN10", "percent", 0.10))
                 .getStatusCode().value()).isEqualTo(201);
 
+        // 10% of net 100 = 10.00 platform share, but base commission is only 8.00 → commissionNet < 0.
         ResponseEntity<Map> order = postOrder(custToken, "MARGIN10", List.of(item(listing, 1)));
         assertThat(order.getStatusCode().value()).isEqualTo(HttpStatus.CONFLICT.value()); // 409
-        assertThat((String) order.getBody().get("message")).containsIgnoringCase("platform margin");
+        assertThat((String) order.getBody().get("message")).containsIgnoringCase("platform commission");
         assertThat(totalOrders()).isZero();
         assertThat(usedCount("MARGIN10")).isEqualTo(0); // never reserved
     }
@@ -258,9 +265,10 @@ class DiscountPaymentFlowIntegrationTest extends AbstractDiscountIntegrationTest
         assertThat(order.getStatusCode().value()).isEqualTo(201);
         long oid = orderId(order);
 
-        // Simulate a pre-discount-era order: wipe the per-item money snapshot.
+        // Simulate a pre-V5 order: wipe the per-item money snapshot. commission_net = NULL is the
+        // trigger that routes the ledger to the legacy gross recompute (lineTotal × rate).
         jdbc.update("UPDATE order_items SET platform_fee_amount = NULL, brand_payout_amount = NULL, " +
-                "commission_rate = NULL WHERE order_id = ?", oid);
+                "commission_net = NULL, commission_rate = NULL WHERE order_id = ?", oid);
 
         confirmPaid(oid); // recordOrderPayment must fall back to lineTotal x rate
 
@@ -280,7 +288,7 @@ class DiscountPaymentFlowIntegrationTest extends AbstractDiscountIntegrationTest
     void partialRefundPreservesDiscountProportions() {
         seedCustomer();
         BrandFixture a = seedBrand("BrandA", "brand-a", "0.18");
-        long listing = seedListing(a.brand(), a.user(), "100.00", 50);
+        long listing = seedListing(a.brand(), a.user(), "119.00", 50); // net 100
         String custToken = login("customer@it.local", "Customer123!");
         String brandAToken = login("brand-a@it.local", "Brand123!");
 
@@ -289,16 +297,16 @@ class DiscountPaymentFlowIntegrationTest extends AbstractDiscountIntegrationTest
 
         long oid = orderId(postOrder(custToken, "BRAND15", List.of(item(listing, 1))));
         confirmPaid(oid);
-        assertThat(brandPending(a.brand().getId())).isEqualByComparingTo("74.50");
+        assertThat(brandPending(a.brand().getId())).isEqualByComparingTo("88.65"); // BRAND15 cash payout
 
-        // Refund €42.50 = exactly half of the €85.00 order total -> half the net payout reversed.
+        // Refund €40.46 = exactly 40% of the €101.15 order total -> 40% of the net payout reversed.
         TransactionTemplate tx = new TransactionTemplate(txManager);
         tx.executeWithoutResult(s ->
                 ledgerService.recordRefund(orderRepository.findById(oid).orElseThrow(),
-                        new BigDecimal("42.50"), "ref-partial"));
+                        new BigDecimal("40.46"), "ref-partial"));
 
-        // 74.50 - (74.50 * 42.50/85.00) = 74.50 - 37.25 = 37.25
-        assertThat(brandPending(a.brand().getId())).isEqualByComparingTo("37.25");
+        // 88.65 - (88.65 * 40.46/101.15) = 88.65 - 35.46 = 53.19
+        assertThat(brandPending(a.brand().getId())).isEqualByComparingTo("53.19");
     }
 
     // ===== helpers =====
