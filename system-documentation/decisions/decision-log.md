@@ -434,3 +434,67 @@ The frontend product catalog pages (`/bekleidung`, product detail pages, brand p
 - **Positive:** SEO-friendly server-rendered pages (Next.js App Router RSC)
 - **Negative:** Frontend makes API calls using a "public" or unauthenticated fetch path — backend must accommodate this. **Currently, backend requires JWT for GET /products — this creates a tension with the frontend's public browsing goal.**
 - **Gap / TODO:** The backend `GET /products` endpoint requires authentication but the frontend wants to serve it publicly. Resolution options: (1) move catalog endpoints to `/public/**` prefix, (2) issue a guest token, (3) use Next.js server-side fetch with a service account token. See `decisions/architecture-gaps.md` → GAP-015.
+
+---
+
+## ADR-018 — Commission VAT Tax Point = Ledger Entry `created_at`
+
+**Date:** 2026 (net-based commission/VAT layer, pre-production hardening)
+**Status:** Accepted
+
+### Decision
+The **Leistungsdatum** (tax point) for the platform's commission VAT is
+`ledger_entries.created_at` of the `ORDER_PAYMENT` entry. This timestamp equals the
+payment-confirmation moment: Mollie fires the `paid` webhook only after a successful
+payment, and the ledger entry is written inside `confirmPaymentByWebhook`.
+
+### Reason
+- The intermediary (Vermittlung) service is rendered when the sale completes, i.e. at payment confirmation.
+- A single, unambiguous timestamp already exists on every commission line and is immutable.
+
+### Consequences
+- **Positive:** No separate "service date" field to maintain; the USt period derives directly from `created_at`.
+- **Constraint:** Commission VAT is `commissionNet × 0.19` for **domestic** brands only; **foreign** brands are reverse-charge (`commissionVat = 0`). See the net-based money model (V5).
+- **Revisit when the commission Gutschrift (credit note) is built:** at that point the statement/invoice date may drive the USt period instead of the per-entry `created_at`. The brand `vatId` / `taxNumber` captured on `BrandPartner` (V6) is the input for that document and the §22f/§25e UStG marketplace recording duty.
+
+### Related
+- Free shipping: the platform never collects/splits/reports shipping (brand bears its own carrier cost off-platform, reclaims that input VAT in its own books). Order total is goods-only (`subtotal − discount`).
+- Out of scope: Gutschrift/invoice generation, OSS, reduced/multiple VAT rates, per-country logic, VAT-ID validation.
+
+---
+
+## ADR-019 — §22f UStG Recording Data + 10-Year Retention (No Hard Delete on Core Tables)
+
+**Date:** 2026 (§22f recording completion, V8)
+**Status:** Accepted
+
+### Decision
+The marketplace fulfils its §22f-UStG recording duty (Inland: DE brands, DE customers) from its own
+data. Supplier legal name + business address are stored on `brand_partners` (V8: `legal_name`,
+`address_*`); the business address doubles as the shipment origin (Versandursprung) under the
+assumption that the brand ships from its business address. USt-IdNr (`vat_id`) and Steuernummer
+(`tax_number`) already exist (V6). A read-only admin export
+(`GET /admin/brands/{brandId}/22f-export?period=YYYY-MM&format=csv|json`) joins all 9 Pflichtangaben
+per sale across `brand_partners` + `brand_payout_profiles` + `orders`/`order_items`/`payments`.
+
+**Retention rule:** the four core record tables — `orders`, `order_items`, `ledger_entries`,
+`brand_partners` — must **never be hard-deleted** (10-year `Aufbewahrungspflicht`). Audit confirmed
+no `DELETE` runs against them today; keep it that way (enforce via a DB role without DELETE grant on
+these tables if needed). Use status flags / soft-delete instead.
+
+### Consequences
+- **Positive:** §22f export is self-contained (no lexoffice lookup for the audit).
+- **Catalog deletes stay allowed:** `Product`/`ProductVariant`/`ProductListing`/media hard-deletes
+  (`ProductService`, `AdminService`, `ProductVariantService`, `MediaService`) are **uncritical**,
+  because `OrderItem` snapshots the goods description immutably (`productSnapshotName`,
+  `variantSnapshot*`, NOT NULL) and the `order_items.variant_id` FK is RESTRICT — historical sales
+  keep their full §22f record even if the catalog row is removed.
+
+### Explicitly NOT built (deliberate MVP scope)
+- **No automatic USt-IdNr validation** (Pflichtangabe 3): no format/checksum check, no
+  `vat_id_validated`/`checked_at`/`method` fields, no hard reject. Correctness is checked manually
+  via the export. `enunas.brand.vat-id-required` (default false) is a plain presence toggle only.
+- **No domestic-only onboarding guard:** all brands (incl. EU) remain onboardable; the
+  domestic/foreign distinction stays on `BrandPartner.domestic` + reverse-charge on the commission.
+- **No EU-specific VAT handling** (number formats etc.) — a separate later step.
+- A distinct 3PL/fulfilment shipment origin (≠ business address) is deferred.

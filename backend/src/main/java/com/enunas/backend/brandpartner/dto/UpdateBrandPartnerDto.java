@@ -22,4 +22,24 @@ public class UpdateBrandPartnerDto {
 
     @Email
     private String contactEmail;
+
+    private String vatId;
+
+    private String taxNumber;
+
+    // §22f supplier legal name + address — optional on update (null = keep current).
+    @Size(max = 255)
+    private String legalName;
+
+    @Size(max = 255)
+    private String addressStreet;
+
+    @Size(max = 16)
+    private String addressPostalCode;
+
+    @Size(max = 128)
+    private String addressCity;
+
+    @Size(min = 2, max = 2)
+    private String addressCountry;
 }

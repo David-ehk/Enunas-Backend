@@ -1,9 +1,11 @@
 package com.enunas.backend.order;
 
 import com.enunas.backend.user.User;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -16,6 +18,15 @@ import java.util.Optional;
 public interface OrderRepository extends JpaRepository<Order, Long> {
 
     Page<Order> findByBuyerOrderByCreatedAtDesc(User buyer, Pageable pageable);
+
+    /**
+     * Pessimistic row lock used by the payment webhook to serialize the PENDING→PAID transition.
+     * Concurrent duplicate webhooks block here until the winner commits, then see status = PAID and
+     * no-op — preventing a double booking / double payout.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT o FROM Order o WHERE o.id = :id")
+    Optional<Order> findByIdForUpdate(@Param("id") Long id);
 
     Optional<Order> findByOrderNumber(String orderNumber);
 

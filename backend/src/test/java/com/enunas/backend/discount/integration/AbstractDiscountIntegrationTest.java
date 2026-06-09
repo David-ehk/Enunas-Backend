@@ -76,7 +76,7 @@ abstract class AbstractDiscountIntegrationTest {
     @AfterEach
     void cleanDatabase() {
         // CASCADE truncates child/element-collection tables (analytics, catalogue categories, etc.).
-        jdbc.execute("TRUNCATE TABLE ledger_entries, payments, order_items, orders, listings, " +
+        jdbc.execute("TRUNCATE TABLE settlement_runs, ledger_entries, payments, order_items, orders, listings, " +
                 "product_variants, product_colors, products, discount_codes, brand_economics, " +
                 "brand_partners, customers, users RESTART IDENTITY CASCADE");
     }

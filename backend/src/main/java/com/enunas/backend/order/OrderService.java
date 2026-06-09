@@ -3,8 +3,6 @@ package com.enunas.backend.order;
 import com.enunas.backend.brandpartner.BrandPartner;
 import com.enunas.backend.brandpartner.brandeconomics.BrandEconomics;
 import com.enunas.backend.brandpartner.brandeconomics.BrandEconomicsRepository;
-import com.enunas.backend.brandpartner.brandshippingprofile.BrandShippingProfile;
-import com.enunas.backend.brandpartner.brandshippingprofile.BrandShippingProfileRepository;
 import com.enunas.backend.exception.OrderNotFoundException;
 import com.enunas.backend.order.dto.CancelOrderDto;
 import com.enunas.backend.order.dto.CreateOrderDto;
@@ -62,7 +60,6 @@ public class OrderService {
     private final OrderItemRepository orderItemRepository;
     private final ProductListingRepository productListingRepository;
     private final ProductVariantRepository productVariantRepository;
-    private final BrandShippingProfileRepository brandShippingProfileRepository;
     private final PaymentRepository paymentRepository;
     private final BrandEconomicsRepository brandEconomicsRepository;
     private final ReturnOrderRepository returnOrderRepository;
@@ -158,7 +155,7 @@ public class OrderService {
                 // percent reduces the customer price only for items the code actually applies to
                 // (a BRAND code leaves other brands' items at full price → zero share, zero percent).
                 BigDecimal itemPercent = share.total().signum() > 0 ? discount.percent() : BigDecimal.ZERO;
-                item.applyMoneySnapshot(item.getCommissionRate(), item.isBrandIsDomestic(),
+                item.applyMoneySnapshot(item.getCommissionRate(), Boolean.TRUE.equals(item.getBrandIsDomestic()),
                         vatRateProduct, vatRateService,
                         share.platformShareNet(), share.brandShareNet(), itemPercent);
             }
@@ -171,11 +168,9 @@ public class OrderService {
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal discountAmount = subtotal.subtract(customerSubtotalAfterDiscount);
 
-        // !! 5. Compute shipping per brand (one charge per brand, not per item). Has to change to Order not Brand
+        // 5. Free shipping — the platform never charges, collects, or splits shipping. The brand
+        //    bears its own carrier cost off-platform. shippingTotal is always 0 (column retained).
         BigDecimal shippingTotal = BigDecimal.ZERO;
-        for (Long brandId : distinctBrandIds) {
-            shippingTotal = shippingTotal.add(shippingCostForBrand(brandId));
-        }
 
         // 6. Build & persist order.
         ShippingAddress address = ShippingAddress.builder()
@@ -195,9 +190,9 @@ public class OrderService {
                 .status(OrderStatus.PENDING)
                 .shippingAddress(address)
                 .subtotal(subtotal)
-                .shippingTotal(shippingTotal)
-                // Discounted total — this is what Mollie charges and the webhook verifies.
-                .total(subtotal.subtract(discountAmount).add(shippingTotal))
+                .shippingTotal(shippingTotal) // always 0 — free shipping
+                // Goods-only discounted total — this is what Mollie charges and the webhook verifies.
+                .total(subtotal.subtract(discountAmount))
                 .currency(listings.get(0).getCurrency())
                 .notes(dto.getNotes());
 
@@ -373,7 +368,11 @@ public class OrderService {
 
     @Transactional
     public void confirmPaymentByWebhook(Long orderId) {
-        Order order = findById(orderId);
+        // Pessimistic lock serializes concurrent duplicate webhooks: the second caller blocks here
+        // until the first commits, then reads status = PAID and no-ops below. Without this, two
+        // webhooks could both read PENDING and both book the ledger → double payout.
+        Order order = orderRepository.findByIdForUpdate(orderId)
+                .orElseThrow(() -> new OrderNotFoundException("Order not found with id: " + orderId));
         OrderStatus current = order.getStatus();
 
         if (current == OrderStatus.PAID) return; // idempotent
@@ -663,15 +662,6 @@ public class OrderService {
         for (OrderItem item : order.getItems()) {
             productVariantRepository.restoreStock(item.getVariant().getId(), item.getQuantity());
         }
-    }
-
-    private BigDecimal shippingCostForBrand(Long brandId) {
-        return brandShippingProfileRepository.findAll().stream()
-                .filter(p -> p.getBrandPartner() != null && brandId.equals(p.getBrandPartner().getId()))
-                .findFirst()
-                .map(BrandShippingProfile::getShippingCost)
-                .filter(c -> c != null)
-                .orElse(BigDecimal.ZERO);
     }
 
     private BigDecimal getBrandCommissionRate(Long brandId) {

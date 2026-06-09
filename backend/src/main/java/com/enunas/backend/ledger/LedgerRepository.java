@@ -20,6 +20,40 @@ public interface LedgerRepository extends JpaRepository<LedgerEntry, Long> {
         BigDecimal getTotal();
     }
 
+    /** Per-brand period aggregate for the monthly settlement report. */
+    interface PeriodAggregate {
+        Long getBrandId();
+        BigDecimal getCommissionNet();
+        BigDecimal getCommissionVat();
+        BigDecimal getPayoutAmount();
+        BigDecimal getTotalAmount();
+        Long getOrderCount();
+        Long getRefundCount();
+    }
+
+    /**
+     * Sums each brand's ledger figures over a period (UTC bounds, end-exclusive), counting
+     * ORDER_PAYMENT and REFUND_REVERSAL entries by their own created_at. REFUND_REVERSAL rows are
+     * stored negative, so a plain period-filtered SUM nets refunds against sales automatically.
+     */
+    @Query("""
+           SELECT le.brandPartnerId AS brandId,
+                  COALESCE(SUM(le.commissionNet), 0) AS commissionNet,
+                  COALESCE(SUM(le.commissionVat), 0) AS commissionVat,
+                  COALESCE(SUM(le.brandPayout), 0)   AS payoutAmount,
+                  COALESCE(SUM(le.totalAmount), 0)   AS totalAmount,
+                  SUM(CASE WHEN le.entryType = com.enunas.backend.ledger.LedgerEntryType.ORDER_PAYMENT   THEN 1 ELSE 0 END) AS orderCount,
+                  SUM(CASE WHEN le.entryType = com.enunas.backend.ledger.LedgerEntryType.REFUND_REVERSAL THEN 1 ELSE 0 END) AS refundCount
+           FROM LedgerEntry le
+           WHERE le.createdAt >= :startUtc AND le.createdAt < :endUtc
+             AND le.entryType IN (com.enunas.backend.ledger.LedgerEntryType.ORDER_PAYMENT,
+                                  com.enunas.backend.ledger.LedgerEntryType.REFUND_REVERSAL)
+           GROUP BY le.brandPartnerId
+           """)
+    List<PeriodAggregate> aggregateByBrandForPeriod(
+            @Param("startUtc") LocalDateTime startUtc,
+            @Param("endUtc") LocalDateTime endUtc);
+
     boolean existsByOrderIdAndEntryType(Long orderId, LedgerEntryType entryType);
 
     boolean existsByExternalReferenceIdAndEntryType(String externalReferenceId, LedgerEntryType entryType);

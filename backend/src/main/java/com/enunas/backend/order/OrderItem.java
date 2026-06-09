@@ -113,9 +113,11 @@ public class OrderItem {
     @Column(precision = 10, scale = 2)
     private BigDecimal brandNetRevenue;       // brand economic margin (reporting)
 
-    private boolean brandIsDomestic;
+    // Boolean wrappers (not primitive): pre-V5 rows hold NULL here, and a primitive would throw
+    // when Hibernate materializes such a legacy row.
+    private Boolean brandIsDomestic;
 
-    private boolean reverseCharge;
+    private Boolean reverseCharge;
 
     // --- Discount snapshot (set at order creation; zero when no code applied) — NET shares ---
     @Column(precision = 10, scale = 2)

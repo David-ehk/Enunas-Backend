@@ -2,10 +2,12 @@ package com.enunas.backend.brandpartner;
 
 import com.enunas.backend.brandpartner.brandeconomics.BrandEconomics;
 import com.enunas.backend.brandpartner.brandeconomics.BrandEconomicsRepository;
+import com.enunas.backend.brandpartner.dto.AdminBrandMasterDataDto;
 import com.enunas.backend.brandpartner.dto.BrandPartnerResponseDto;
 import com.enunas.backend.brandpartner.dto.RegisterBrandPartnerDto;
 import com.enunas.backend.brandpartner.dto.UpdateBrandPartnerDto;
 import com.enunas.backend.exception.BrandNotFoundException;
+import org.springframework.context.ApplicationEventPublisher;
 import com.enunas.backend.user.EmailService;
 import com.enunas.backend.user.Role;
 import com.enunas.backend.user.User;
@@ -34,12 +36,20 @@ public class BrandPartnerService {
     private final UserRepository userRepository;
     private final BCryptPasswordEncoder passwordEncoder;
     private final EmailService emailService;
+    private final ApplicationEventPublisher applicationEventPublisher;
 
     @Value("${enunas.platform.commission-rate:0.18}")
     private BigDecimal platformCommissionRate;
 
     @Value("${admin.email}")
     private String adminEmail;
+
+    /**
+     * When true, USt-IdNr (vatId) is a hard onboarding requirement (simple @NotBlank-style check —
+     * NEVER a format/correctness validation). Default false: completeness is verified manually.
+     */
+    @Value("${enunas.brand.vat-id-required:false}")
+    private boolean vatIdRequired;
 
     /**
      * Brand-partner application: creates the User account AND BrandPartner record
@@ -63,11 +73,17 @@ public class BrandPartnerService {
             throw new IllegalArgumentException("Brand name produces an invalid or already-taken URL slug. Please choose a different brand name.");
         }
 
+        if (vatIdRequired && (dto.getVatId() == null || dto.getVatId().isBlank())) {
+            throw new IllegalArgumentException("USt-IdNr (vatId) is required");
+        }
+
+        // enabled=true: login is gated by the operator (adminApproved), NOT by email verification.
+        // The verification token still travels (best-effort email below), but nothing gates on it.
         User user = User.builder()
                 .email(dto.getEmail())
                 .password(passwordEncoder.encode(dto.getPassword()))
                 .role(Role.BRAND_PARTNER)
-                .enabled(false)
+                .enabled(true)
                 .adminApproved(false)
                 .verificationCode(generateVerificationCode())
                 .verificationCodeExpiresAt(LocalDateTime.now().plusMinutes(15))
@@ -88,6 +104,9 @@ public class BrandPartnerService {
                 .status(BrandStatus.PENDING_REVIEW)
                 .approved(false)
                 .build();
+        // §22f master data via the shared helper (identical to what the admin update writes).
+        applyMasterData(brand, dto.getLegalName(), dto.getAddressStreet(), dto.getAddressPostalCode(),
+                dto.getAddressCity(), dto.getAddressCountry(), dto.getVatId(), dto.getTaxNumber());
         BrandPartner saved = brandPartnerRepository.save(brand);
 
         brandEconomicsRepository.save(BrandEconomics.builder()
@@ -95,7 +114,9 @@ public class BrandPartnerService {
                 .defaultCommissionRate(platformCommissionRate)
                 .build());
 
-        emailService.sendVerificationEmail(user.getEmail(), user.getVerificationCode());
+        // Best-effort verification email, dispatched AFTER_COMMIT — never blocks/rolls back the apply.
+        applicationEventPublisher.publishEvent(
+                new BrandApplicationSubmittedEvent(user.getEmail(), user.getVerificationCode()));
         log.info("Brand application submitted: {} ({})", dto.getBrandName(), user.getEmail());
 
         return BrandPartnerResponseDto.from(saved);
@@ -172,8 +193,51 @@ public class BrandPartnerService {
         if (dto.getTiktokHandle() != null) brand.setTiktokHandle(dto.getTiktokHandle());
         if (dto.getCountry() != null) brand.setCountry(dto.getCountry());
         if (dto.getContactEmail() != null) brand.setContactEmail(dto.getContactEmail());
+        if (dto.getVatId() != null) brand.setVatId(dto.getVatId());
+        if (dto.getTaxNumber() != null) brand.setTaxNumber(dto.getTaxNumber());
+        if (dto.getLegalName() != null) brand.setLegalName(dto.getLegalName());
+        if (dto.getAddressStreet() != null) brand.setAddressStreet(dto.getAddressStreet());
+        if (dto.getAddressPostalCode() != null) brand.setAddressPostalCode(dto.getAddressPostalCode());
+        if (dto.getAddressCity() != null) brand.setAddressCity(dto.getAddressCity());
+        if (dto.getAddressCountry() != null) brand.setAddressCountry(dto.getAddressCountry());
 
         return BrandPartnerResponseDto.from(brandPartnerRepository.save(brand));
+    }
+
+    /**
+     * Admin-only update of a brand's §22f master data — legal name + address (mandatory) and the
+     * tax identifiers. Scoped strictly to these fields: no financial/snapshot fields, no payout
+     * profile, no {@code domestic} flag. Reuses {@link #applyMasterData} so the admin and vendor/
+     * onboarding paths can never drift.
+     */
+    @Transactional
+    public BrandPartnerResponseDto updateBrandMasterData(Long brandId, AdminBrandMasterDataDto dto) {
+        BrandPartner brand = brandPartnerRepository.findById(brandId)
+                .orElseThrow(() -> new BrandNotFoundException("Brand not found with id: " + brandId));
+        applyMasterData(brand, dto.getLegalName(), dto.getAddressStreet(), dto.getAddressPostalCode(),
+                dto.getAddressCity(), dto.getAddressCountry(), dto.getVatId(), dto.getTaxNumber());
+        return BrandPartnerResponseDto.from(brandPartnerRepository.save(brand));
+    }
+
+    /**
+     * Single place that writes the §22f master-data fields onto a brand (DRY across apply + admin
+     * update). {@code addressCountry} is the ONLY country source: it is normalized to upper-case and
+     * {@code domestic} is DERIVED from it (DE ⇒ domestic). {@code domestic} is never set
+     * independently — this keeps the reverse-charge input correct without touching the downstream
+     * commission/VAT logic.
+     */
+    private void applyMasterData(BrandPartner brand, String legalName, String addressStreet,
+                                 String addressPostalCode, String addressCity, String addressCountry,
+                                 String vatId, String taxNumber) {
+        String normalizedCountry = addressCountry != null ? addressCountry.trim().toUpperCase() : null;
+        brand.setLegalName(legalName);
+        brand.setAddressStreet(addressStreet);
+        brand.setAddressPostalCode(addressPostalCode);
+        brand.setAddressCity(addressCity);
+        brand.setAddressCountry(normalizedCountry);
+        brand.setDomestic("DE".equals(normalizedCountry)); // derived — single source of truth
+        brand.setVatId(vatId);
+        brand.setTaxNumber(taxNumber);
     }
 
     @Transactional(readOnly = true)

@@ -11,6 +11,8 @@ import com.enunas.backend.payout.dto.PayoutDashboardDto;
 import com.enunas.backend.payout.dto.PayoutResponseDto;
 
 import java.util.List;
+import com.enunas.backend.brandpartner.BrandPartnerService;
+import com.enunas.backend.brandpartner.dto.AdminBrandMasterDataDto;
 import com.enunas.backend.brandpartner.dto.BrandPartnerResponseDto;
 import com.enunas.backend.customer.CustomerService;
 import com.enunas.backend.customer.dto.CustomerResponseDto;
@@ -47,6 +49,7 @@ public class AdminController {
     private final AdminService adminService;
     private final CustomerService customerService;
     private final OrderService orderService;
+    private final BrandPartnerService brandPartnerService;
 
     // ===== Brand-partner moderation =====
 
@@ -76,6 +79,14 @@ public class AdminController {
             @PathVariable Long brandId,
             @Valid @RequestBody SetPayoutProfileDto dto) {
         return ResponseEntity.ok(adminService.setBrandPayoutProfile(brandId, dto.getIban(), dto.getBankAccountHolder()));
+    }
+
+    /** Admin edit of a brand's §22f master data (legal name + address + tax IDs only). */
+    @PatchMapping("/brands/{brandId}")
+    public ResponseEntity<BrandPartnerResponseDto> updateBrandMasterData(
+            @PathVariable Long brandId,
+            @Valid @RequestBody AdminBrandMasterDataDto dto) {
+        return ResponseEntity.ok(brandPartnerService.updateBrandMasterData(brandId, dto));
     }
 
     // ===== Payouts =====

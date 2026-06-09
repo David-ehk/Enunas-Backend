@@ -71,6 +71,9 @@ public class AdminService {
         brand.setStatus(BrandStatus.ACTIVE);
 
         user.setAdminApproved(true);
+        // Operator approval is the sole gate: ensure the account is enabled regardless of whether
+        // email verification ever happened (onboarding no longer depends on it).
+        user.setEnabled(true);
         if (user.getRole() != Role.BRAND_PARTNER) {
             user.setRole(Role.BRAND_PARTNER);
         }

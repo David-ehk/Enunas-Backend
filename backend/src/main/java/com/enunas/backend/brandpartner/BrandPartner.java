@@ -57,6 +57,28 @@ public class BrandPartner {
     @Builder.Default
     private boolean domestic = true;
 
+    /** USt-IdNr (VAT identification number). Nullable; feeds the future commission Gutschrift. */
+    private String vatId;
+
+    /** Steuernummer (German tax number). Nullable; optional alongside {@link #vatId}. */
+    private String taxNumber;
+
+    // ===== §22f UStG: supplier legal name + postal address (Pflichtangabe 1; also serves as the
+    // shipment-origin / Versandursprung, Pflichtangabe 4, assuming the brand ships from its business
+    // address). Nullable in DB; required at onboarding via the DTO. =====
+    // TODO: a distinct 3PL/fulfilment shipment origin is deferred — would be a separate optional field set.
+
+    private String legalName;
+
+    private String addressStreet;
+
+    private String addressPostalCode;
+
+    private String addressCity;
+
+    /** ISO 3166-1 alpha-2 country code of the business address. */
+    private String addressCountry;
+
     /** Public business contact email; distinct from the User login email. */
     private String contactEmail;
 

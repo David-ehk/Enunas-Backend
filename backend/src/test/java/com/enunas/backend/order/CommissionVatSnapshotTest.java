@@ -40,7 +40,7 @@ class CommissionVatSnapshotTest {
         assertThat(it.getCustomerGrossAfterDiscount()).isEqualByComparingTo("119.00");
         assertThat(it.getBrandPayout()).isEqualByComparingTo("97.58");
         assertThat(it.getBrandNetRevenue()).isEqualByComparingTo("82.00");
-        assertThat(it.isReverseCharge()).isFalse();
+        assertThat(it.getReverseCharge()).isFalse();
         assertHardInvariant(it);
         // Soft invariant: brandPayout − productVatAfterDiscount + commissionVat == brandNetRevenue.
         assertThat(it.getBrandPayout().subtract(new BigDecimal("19.00")).add(it.getCommissionVat()))
@@ -58,7 +58,7 @@ class CommissionVatSnapshotTest {
         assertThat(it.getCustomerGrossAfterDiscount()).isEqualByComparingTo("119.00");
         assertThat(it.getBrandPayout()).isEqualByComparingTo("101.00");
         assertThat(it.getBrandNetRevenue()).isEqualByComparingTo("82.00");
-        assertThat(it.isReverseCharge()).isTrue();
+        assertThat(it.getReverseCharge()).isTrue();
         assertHardInvariant(it);
     }
 

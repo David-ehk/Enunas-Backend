@@ -21,6 +21,15 @@ public class BrandPartnerResponseDto {
     private String tiktokHandle;
     private String country;
     private String contactEmail;
+    private String vatId;
+    private String taxNumber;
+    /** Derived from addressCountry (DE ⇒ true). Drives the Inland/Ausland badge + reverse charge. */
+    private boolean domestic;
+    private String legalName;
+    private String addressStreet;
+    private String addressPostalCode;
+    private String addressCity;
+    private String addressCountry;
     private BrandStatus status;
     private boolean approved;
     private Long userId;
@@ -40,6 +49,14 @@ public class BrandPartnerResponseDto {
                 .tiktokHandle(brand.getTiktokHandle())
                 .country(brand.getCountry())
                 .contactEmail(brand.getContactEmail())
+                .vatId(brand.getVatId())
+                .taxNumber(brand.getTaxNumber())
+                .domestic(brand.isDomestic())
+                .legalName(brand.getLegalName())
+                .addressStreet(brand.getAddressStreet())
+                .addressPostalCode(brand.getAddressPostalCode())
+                .addressCity(brand.getAddressCity())
+                .addressCountry(brand.getAddressCountry())
                 .status(brand.getStatus())
                 .approved(brand.isApproved())
                 .userId(brand.getUser() != null ? brand.getUser().getId() : null)

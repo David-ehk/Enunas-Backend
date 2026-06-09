@@ -58,6 +58,9 @@ enunas:
   vat:
     product-rate: 0.19
     service-rate: 0.19
+  brand:
+    # When true, USt-IdNr is a hard onboarding requirement (@NotBlank-style; never format-validated).
+    vat-id-required: false
 
 mollie:
   api:
