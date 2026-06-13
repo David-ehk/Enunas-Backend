@@ -29,5 +29,9 @@
       "Bash(./mvnw.cmd test *)",
       "Bash(./mvnw clean *)"
     ]
-  }
+  },
+  "enabledMcpjsonServers": [
+    "Mollie"
+  ],
+  "enableAllProjectMcpServers": true
 }

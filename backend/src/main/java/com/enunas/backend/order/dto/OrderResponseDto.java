@@ -3,6 +3,7 @@ package com.enunas.backend.order.dto;
 import com.enunas.backend.discount.DiscountType;
 import com.enunas.backend.order.Order;
 import com.enunas.backend.order.OrderStatus;
+import com.enunas.backend.order.ReturnOrder;
 import com.enunas.backend.order.ShippingAddress;
 import lombok.Builder;
 import lombok.Getter;
@@ -35,6 +36,15 @@ public class OrderResponseDto {
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
+    // Return fields — populated only when a ReturnOrder exists for this order.
+    private String returnNumber;
+    private String returnReason;
+    private String returnDescription;
+    private LocalDateTime returnRequestedAt;
+    // Pre-built return ship-to address (brand's business address). Present when a return exists
+    // so customers can find it in-app without depending on email delivery.
+    private String returnShipToAddress;
+
     public static OrderResponseDto from(Order order) {
         return OrderResponseDto.builder()
                 .id(order.getId())
@@ -62,5 +72,15 @@ public class OrderResponseDto {
 
     public static OrderResponseDto from(Order order, String checkoutUrl) {
         return from(order).toBuilder().checkoutUrl(checkoutUrl).build();
+    }
+
+    public static OrderResponseDto withReturn(Order order, ReturnOrder ret, String returnShipToAddress) {
+        return from(order).toBuilder()
+                .returnNumber(ret.getReturnNumber())
+                .returnReason(ret.getReason() != null ? ret.getReason().name() : null)
+                .returnDescription(ret.getDescription())
+                .returnRequestedAt(ret.getRequestedAt())
+                .returnShipToAddress(returnShipToAddress)
+                .build();
     }
 }

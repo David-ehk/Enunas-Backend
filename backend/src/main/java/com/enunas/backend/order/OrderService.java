@@ -31,6 +31,7 @@ import com.enunas.backend.user.User;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -68,6 +69,7 @@ public class OrderService {
     private final LedgerService ledgerService;
     private final RefundPersistenceHelper refundPersistenceHelper;
     private final DiscountService discountService;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Value("${app.frontend.base-url}")
     private String frontendBaseUrl;
@@ -245,15 +247,14 @@ public class OrderService {
     @Transactional(readOnly = true)
     @PreAuthorize("hasRole('CUSTOMER')")
     public Page<OrderResponseDto> getMyOrders(User buyer, Pageable pageable) {
-        return orderRepository.findByBuyerOrderByCreatedAtDesc(buyer, pageable)
-                .map(OrderResponseDto::from);
+        return orderRepository.findByBuyerOrderByCreatedAtDesc(buyer, pageable).map(this::toDto);
     }
 
     @PreAuthorize("hasRole('CUSTOMER')")
     public OrderResponseDto getMyOrderById(Long orderId, User buyer) {
         Order order = findById(orderId);
         assertOwnership(order, buyer);
-        return OrderResponseDto.from(order);
+        return toDto(order);
     }
 
     @PreAuthorize("hasRole('CUSTOMER')")
@@ -312,7 +313,7 @@ public class OrderService {
     @PreAuthorize("hasRole('BRAND_PARTNER')")
     public Page<OrderResponseDto> getMyBrandOrders(User brandPartner, Pageable pageable) {
         return orderRepository.findByBrandPartnerCreatorId(brandPartner.getId(), pageable)
-                .map(OrderResponseDto::from);
+                .map(this::toDto);
     }
 
     @PreAuthorize("hasRole('BRAND_PARTNER')")
@@ -433,12 +434,12 @@ public class OrderService {
 
     @PreAuthorize("hasRole('ADMIN')")
     public Page<OrderResponseDto> getAllOrders(Pageable pageable) {
-        return orderRepository.findAllByOrderByCreatedAtDesc(pageable).map(OrderResponseDto::from);
+        return orderRepository.findAllByOrderByCreatedAtDesc(pageable).map(this::toDto);
     }
 
     @PreAuthorize("hasRole('ADMIN')")
     public Page<OrderResponseDto> getOrdersByStatus(OrderStatus status, Pageable pageable) {
-        return orderRepository.findByStatus(status, pageable).map(OrderResponseDto::from);
+        return orderRepository.findByStatus(status, pageable).map(this::toDto);
     }
 
     /**
@@ -559,8 +560,18 @@ public class OrderService {
         returnOrderRepository.save(returnOrder);
 
         order.setStatus(OrderStatus.RETURN_APPROVED);
+        Order saved = orderRepository.save(order);
+
+        // Publish AFTER_COMMIT so the mail failure can never roll back this approval.
+        // The address is pre-built here (inside the transaction) so the listener needs no DB access.
+        eventPublisher.publishEvent(new ReturnApprovedEvent(
+                order.getBuyer().getEmail(),
+                order.getOrderNumber(),
+                returnOrder.getReturnNumber(),
+                buildReturnAddress(order)));
+
         log.info("Return approved for order {}", order.getOrderNumber());
-        return OrderResponseDto.from(orderRepository.save(order));
+        return toDto(saved);
     }
 
     @PreAuthorize("hasRole('ADMIN')")
@@ -586,7 +597,7 @@ public class OrderService {
 
         order.setStatus(OrderStatus.RETURN_RECEIVED);
         log.info("Return received for order {} — variant stock restored", order.getOrderNumber());
-        return OrderResponseDto.from(orderRepository.save(order));
+        return toDto(orderRepository.save(order));
     }
 
     @PreAuthorize("hasRole('ADMIN')")
@@ -718,8 +729,7 @@ public class OrderService {
 
     @Transactional(readOnly = true)
     public OrderResponseDto getOrderById(Long orderId) {
-        Order order = findById(orderId);
-        return OrderResponseDto.from(order);
+        return toDto(findById(orderId));
     }
 
     private String generateOrderNumber() {
@@ -744,5 +754,45 @@ public class OrderService {
         return returnOrderRepository.findByReturnNumber(candidate).isPresent()
                 ? generateReturnNumber()
                 : candidate;
+    }
+
+    /**
+     * Maps an Order to its DTO. For orders in a return state, joins the associated
+     * ReturnOrder so reason/description/returnNumber are always included — even on
+     * admin-side list queries that previously used the bare OrderResponseDto.from(Order).
+     */
+    private OrderResponseDto toDto(Order order) {
+        if (order.getStatus() == OrderStatus.RETURN_REQUESTED
+                || order.getStatus() == OrderStatus.RETURN_APPROVED
+                || order.getStatus() == OrderStatus.RETURN_RECEIVED
+                || order.getStatus() == OrderStatus.REFUNDED) {
+            return returnOrderRepository.findByOrder(order)
+                    .map(ret -> OrderResponseDto.withReturn(order, ret, buildReturnAddress(order)))
+                    .orElseGet(() -> OrderResponseDto.from(order));
+        }
+        return OrderResponseDto.from(order);
+    }
+
+    /**
+     * Builds a plain-text return address from the brand linked to the first order item.
+     * Used in the return-approval email sent to the customer.
+     */
+    private String buildReturnAddress(Order order) {
+        if (order.getItems().isEmpty()) return "Bitte kontaktiere den Verkäufer für die Retourenadresse.";
+        var brand = order.getItems().get(0).getVariant().getProduct().getBrand();
+        if (brand == null) return "Bitte kontaktiere den Verkäufer für die Retourenadresse.";
+        StringBuilder addr = new StringBuilder();
+        if (brand.getLegalName() != null && !brand.getLegalName().isBlank())
+            addr.append(brand.getLegalName()).append("\n");
+        if (brand.getAddressStreet() != null && !brand.getAddressStreet().isBlank())
+            addr.append(brand.getAddressStreet()).append("\n");
+        String plz  = brand.getAddressPostalCode();
+        String city = brand.getAddressCity();
+        if (plz != null || city != null)
+            addr.append(plz != null ? plz + " " : "").append(city != null ? city : "").append("\n");
+        if (brand.getAddressCountry() != null && !brand.getAddressCountry().isBlank())
+            addr.append(brand.getAddressCountry());
+        String result = addr.toString().trim();
+        return result.isEmpty() ? "Bitte kontaktiere den Verkäufer für die Retourenadresse." : result;
     }
 }
