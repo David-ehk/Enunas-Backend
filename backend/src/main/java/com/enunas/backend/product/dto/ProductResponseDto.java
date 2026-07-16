@@ -18,6 +18,9 @@ public class ProductResponseDto {
 
     private Long id;
     private String name;
+    private String slug;
+    /** Lowest currently-active listing price; null when the product has no active listing. */
+    private BigDecimal price;
     private Long brandId;
     private String brandName;
     private String description;
@@ -44,20 +47,27 @@ public class ProductResponseDto {
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
-    /** Maps product to DTO without CTL prices (price = null). */
+    /** Maps product to DTO without own/CTL prices (price = null). */
     public static ProductResponseDto from(Product product) {
-        return from(product, id -> null);
+        return from(product, null, id -> null);
+    }
+
+    /** Back-compat overload: CTL prices only, own price = null. */
+    public static ProductResponseDto from(Product product, Function<Long, BigDecimal> ctlPriceProvider) {
+        return from(product, null, ctlPriceProvider);
     }
 
     /**
-     * Maps product to DTO with CTL card prices supplied by {@code ctlPriceProvider}.
-     * The provider receives the related product's id and returns its lowest active price,
-     * or null when no active listing exists.
+     * Maps product to DTO with the product's own lowest active listing {@code price} and
+     * CTL card prices supplied by {@code ctlPriceProvider}. The provider receives the related
+     * product's id and returns its lowest active price, or null when no active listing exists.
      */
-    public static ProductResponseDto from(Product product, Function<Long, BigDecimal> ctlPriceProvider) {
+    public static ProductResponseDto from(Product product, BigDecimal price, Function<Long, BigDecimal> ctlPriceProvider) {
         return ProductResponseDto.builder()
                 .id(product.getId())
                 .name(product.getName())
+                .slug(product.getSlug())
+                .price(price)
                 .brandId(product.getBrand() != null ? product.getBrand().getId() : null)
                 .brandName(product.getBrand() != null ? product.getBrand().getBrandName() : null)
                 .description(product.getDescription())

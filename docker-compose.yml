@@ -30,6 +30,9 @@ services:
       - .env
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/Enunas
+      # Uncomment the next line to activate mock-payments for local E2E testing (no real Mollie key needed).
+      # MockPaymentService fires the paid webhook synchronously — POST /orders immediately returns PAID.
+      # SPRING_PROFILES_ACTIVE: mock-payments
     ports:
       - "8080:8080"
 

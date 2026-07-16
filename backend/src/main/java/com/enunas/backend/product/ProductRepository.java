@@ -16,6 +16,10 @@ public interface ProductRepository extends JpaRepository<Product, Long> {
 
     List<Product> findByCreator(User creator);
 
+    java.util.Optional<Product> findBySlug(String slug);
+
+    boolean existsBySlug(String slug);
+
     Page<Product> findByCategory(ProductCategory category, Pageable pageable);
 
     Page<Product> findByStatus(ProductStatus status, Pageable pageable);

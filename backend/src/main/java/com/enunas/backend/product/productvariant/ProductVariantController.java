@@ -31,8 +31,8 @@ ProductVariantController {
         return ResponseEntity.status(HttpStatus.CREATED).body(variantService.addVariant(productId, dto, creator));
     }
 
+    // Public storefront read (no auth — see SecurityConfiguration GET /products/**)
     @GetMapping
-    @PreAuthorize("hasAnyRole('CUSTOMER', 'BRAND_PARTNER')")
     public ResponseEntity<List<ProductVariantResponseDto>> getVariants(@PathVariable Long productId) {
         return ResponseEntity.ok(variantService.getVariants(productId));
     }

@@ -28,8 +28,8 @@ public class MediaController {
         return ResponseEntity.status(HttpStatus.CREATED).body(mediaService.addImage(productId, dto, owner));
     }
 
+    // Public storefront read (no auth — see SecurityConfiguration GET /products/**)
     @GetMapping("/images")
-    @PreAuthorize("hasAnyRole('CUSTOMER', 'BRAND_PARTNER')")
     public ResponseEntity<List<ProductImageResponseDto>> getImages(@PathVariable Long productId) {
         return ResponseEntity.ok(mediaService.getImages(productId));
     }
@@ -54,7 +54,6 @@ public class MediaController {
     }
 
     @GetMapping("/videos")
-    @PreAuthorize("hasAnyRole('CUSTOMER', 'BRAND_PARTNER')")
     public ResponseEntity<List<ProductVideoResponseDto>> getVideos(@PathVariable Long productId) {
         return ResponseEntity.ok(mediaService.getVideos(productId));
     }

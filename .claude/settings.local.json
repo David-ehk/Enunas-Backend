@@ -27,11 +27,22 @@
       "Bash(./mvnw.cmd clean *)",
       "Bash(./mvnw.cmd compile *)",
       "Bash(./mvnw.cmd test *)",
-      "Bash(./mvnw clean *)"
+      "Bash(./mvnw clean *)",
+      "Bash(curl -s -o /dev/null -w \"actuator/health: %{http_code}\\\\n\" http://localhost:8080/actuator/health)",
+      "Bash(curl -s http://localhost:8080/actuator/health)",
+      "Bash(curl -s -o /dev/null -w \"root: %{http_code}\\\\n\" http://localhost:8080/)",
+      "Bash(netstat -ano)",
+      "Bash(docker exec *)",
+      "Bash(sed -E 's#\\(https?://[^/]+\\).*#\\\\1#')",
+      "mcp__chrome-devtools__click",
+      "mcp__chrome-devtools__take_snapshot",
+      "mcp__chrome-devtools__fill",
+      "Bash(curl -s -w 'HTTP %{http_code}\\\\n' -X POST http://localhost:8080/webhooks/mollie -H 'Content-Type: application/x-www-form-urlencoded' -d id=tr_VuELEQTRSbKLtR2PBRPTJ)",
+      "Bash(docker exec enunas-postgres psql -U postgres -d Enunas -x -c ' *)"
     ]
   },
+  "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": [
     "Mollie"
-  ],
-  "enableAllProjectMcpServers": true
+  ]
 }

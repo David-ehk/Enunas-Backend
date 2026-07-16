@@ -71,6 +71,44 @@ public class EmailService {
         }
     }
 
+    public void sendPasswordResetEmail(String to, String code) {
+        sendHtmlEmail(to, "Enunas – Password Reset Code", buildPasswordResetHtml(code));
+    }
+
+    private String buildPasswordResetHtml(String code) {
+        return """
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <meta charset="UTF-8">
+                    <style>
+                        body { font-family: Arial, sans-serif; background-color: #f4f4f4; margin: 0; padding: 0; }
+                        .container { max-width: 600px; margin: 40px auto; background: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+                        .header { background-color: #1a1a2e; color: white; padding: 30px; text-align: center; }
+                        .header h1 { margin: 0; font-size: 28px; letter-spacing: 2px; }
+                        .body { padding: 40px 30px; text-align: center; }
+                        .body p { color: #555; font-size: 16px; line-height: 1.6; }
+                        .code { display: inline-block; background-color: #f0f0f0; border: 2px dashed #1a1a2e; border-radius: 8px; padding: 16px 40px; font-size: 36px; font-weight: bold; letter-spacing: 8px; color: #1a1a2e; margin: 24px 0; }
+                        .expiry { color: #999; font-size: 13px; margin-top: 16px; }
+                        .footer { background-color: #f4f4f4; text-align: center; padding: 16px; color: #aaa; font-size: 12px; }
+                    </style>
+                </head>
+                <body>
+                    <div class="container">
+                        <div class="header"><h1>ENUNAS</h1></div>
+                        <div class="body">
+                            <p>We received a request to reset your password. Use the code below:</p>
+                            <div class="code">%s</div>
+                            <p class="expiry">This code expires in <strong>15 minutes</strong>.</p>
+                            <p>If you did not request a password reset, you can safely ignore this email.</p>
+                        </div>
+                        <div class="footer">&copy; 2025 Enunas. All rights reserved.</div>
+                    </div>
+                </body>
+                </html>
+                """.formatted(code);
+    }
+
     private String buildVerificationHtml(String verificationCode) {
         return """
                 <!DOCTYPE html>

@@ -69,9 +69,10 @@ public class SecurityConfiguration {
                         .requestMatchers(HttpMethod.PATCH,  "/listings/**").hasRole("BRAND_PARTNER")
                         .requestMatchers(HttpMethod.DELETE, "/listings/**").hasRole("BRAND_PARTNER")
 
-                        // Product and listing reads — any authenticated user
-                        .requestMatchers("/products/**").authenticated()
-                        .requestMatchers("/listings/**").authenticated()
+                        // Public storefront reads — catalog is browsable without a login.
+                        // (Brand-only GET /products/my keeps its own @PreAuthorize.)
+                        .requestMatchers(HttpMethod.GET, "/products/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/listings/**").permitAll()
 
                         // Customer-only routes
                         .requestMatchers("/customer/**", "/profile/**", "/orders/**", "/checkout/**", "/wardrobe/**").hasRole("CUSTOMER")

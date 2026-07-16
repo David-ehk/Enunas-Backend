@@ -1,8 +1,11 @@
 package com.enunas.backend.user;
 
 import com.enunas.backend.customer.CustomerService;
+import com.enunas.backend.user.dto.ChangePasswordDto;
+import com.enunas.backend.user.dto.ForgotPasswordRequestDto;
 import com.enunas.backend.user.dto.LoginUserDto;
 import com.enunas.backend.user.dto.RegisterUserDto;
+import com.enunas.backend.user.dto.ResetPasswordDto;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.authentication.AuthenticationManager;
@@ -10,6 +13,9 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.security.SecureRandom;
+import java.time.LocalDateTime;
 
 @Slf4j
 @Service
@@ -73,5 +79,41 @@ public class AuthenticationService {
 
         log.info("User logged in: {} with role: {}", user.getEmail(), user.getRole());
         return user;
+    }
+
+    @Transactional
+    public void changePassword(User currentUser, ChangePasswordDto dto) {
+        if (!passwordEncoder.matches(dto.getCurrentPassword(), currentUser.getPassword())) {
+            throw new IllegalArgumentException("Current password is incorrect");
+        }
+        currentUser.setPassword(passwordEncoder.encode(dto.getNewPassword()));
+        userRepository.save(currentUser);
+        log.info("Password changed for user: {}", currentUser.getEmail());
+    }
+
+    @Transactional
+    public void forgotPassword(ForgotPasswordRequestDto dto) {
+        userRepository.findByEmail(dto.getEmail()).ifPresent(user -> {
+            String code = String.format("%06d", new SecureRandom().nextInt(1_000_000));
+            user.setPasswordResetToken(code);
+            user.setPasswordResetExpiresAt(LocalDateTime.now().plusMinutes(15));
+            userRepository.save(user);
+            emailService.sendPasswordResetEmail(user.getEmail(), code);
+            log.info("Password reset code sent to: {}", user.getEmail());
+        });
+    }
+
+    @Transactional
+    public void resetPassword(ResetPasswordDto dto) {
+        User user = userRepository.findByPasswordResetToken(dto.getToken())
+                .orElseThrow(() -> new IllegalArgumentException("Invalid or expired reset token"));
+        if (user.getPasswordResetExpiresAt().isBefore(LocalDateTime.now())) {
+            throw new IllegalStateException("Reset token has expired");
+        }
+        user.setPassword(passwordEncoder.encode(dto.getNewPassword()));
+        user.setPasswordResetToken(null);
+        user.setPasswordResetExpiresAt(null);
+        userRepository.save(user);
+        log.info("Password reset successfully for user: {}", user.getEmail());
     }
 }

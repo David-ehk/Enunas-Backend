@@ -33,27 +33,30 @@ public class ProductController {
         return ResponseEntity.status(HttpStatus.CREATED).body(productService.createProduct(dto, creator));
     }
 
+    // ── Public storefront reads (no auth — see SecurityConfiguration GET /products/**) ──
+
     @GetMapping("/{id}")
-    @PreAuthorize("hasAnyRole('CUSTOMER', 'BRAND_PARTNER')")
     public ResponseEntity<ProductResponseDto> getProduct(@PathVariable Long id) {
         return ResponseEntity.ok(productService.getProductById(id));
     }
 
     @GetMapping("/sku/{sku}")
-    @PreAuthorize("hasAnyRole('CUSTOMER', 'BRAND_PARTNER')")
     public ResponseEntity<ProductResponseDto> getProductBySku(@PathVariable String sku) {
         return ResponseEntity.ok(productService.getProductBySku(sku));
     }
 
+    @GetMapping("/slug/{slug}")
+    public ResponseEntity<ProductResponseDto> getProductBySlug(@PathVariable String slug) {
+        return ResponseEntity.ok(productService.getProductBySlug(slug));
+    }
+
     @GetMapping
-    @PreAuthorize("hasAnyRole('CUSTOMER', 'BRAND_PARTNER')")
     public ResponseEntity<Page<ProductResponseDto>> getAllProducts(
             @PageableDefault(size = 20) Pageable pageable) {
         return ResponseEntity.ok(productService.getActiveProducts(pageable));
     }
 
     @GetMapping("/search")
-    @PreAuthorize("hasAnyRole('CUSTOMER', 'BRAND_PARTNER')")
     public ResponseEntity<Page<ProductResponseDto>> search(
             @RequestParam String keyword,
             @PageableDefault(size = 20) Pageable pageable) {
@@ -61,7 +64,6 @@ public class ProductController {
     }
 
     @GetMapping("/category/{category}")
-    @PreAuthorize("hasAnyRole('CUSTOMER', 'BRAND_PARTNER')")
     public ResponseEntity<Page<ProductResponseDto>> getByCategory(
             @PathVariable ProductCategory category,
             @PageableDefault(size = 20) Pageable pageable) {
@@ -69,7 +71,6 @@ public class ProductController {
     }
 
     @GetMapping("/color-family/{colorFamily}")
-    @PreAuthorize("hasAnyRole('CUSTOMER', 'BRAND_PARTNER')")
     public ResponseEntity<Page<ProductResponseDto>> getByColorFamily(
             @PathVariable ColorFamily colorFamily,
             @PageableDefault(size = 20) Pageable pageable) {

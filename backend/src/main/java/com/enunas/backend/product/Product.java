@@ -30,6 +30,10 @@ public class Product {
     @Column(nullable = false)
     private String name;
 
+    /** Stable, unique URL slug. Populated by ProductService on create/update. */
+    @Column(nullable = false, unique = true)
+    private String slug;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "brand_id", nullable = false)
     private BrandPartner brand;

@@ -64,6 +64,8 @@ public class ProductService {
             product.getCatalogueCategory().addAll(dto.getCatalogueCategory());
         }
 
+        product.setSlug(generateUniqueSlug(dto.getName()));
+
         Product saved = productRepository.save(product);
 
         createVariantsGroupedByColor(saved, dto.getVariants());
@@ -85,6 +87,13 @@ public class ProductService {
         ProductColor color = productColorRepository.findBySku(sku)
                 .orElseThrow(() -> new ProductNotFoundException("No product found with SKU: " + sku));
         return toResponse(color.getProduct());
+    }
+
+    @Transactional(readOnly = true)
+    public ProductResponseDto getProductBySlug(String slug) {
+        Product product = productRepository.findBySlug(slug)
+                .orElseThrow(() -> new ProductNotFoundException("No product found with slug: " + slug));
+        return toResponse(product);
     }
 
     @Transactional(readOnly = true)
@@ -265,12 +274,29 @@ public class ProductService {
      * Each CTL product gets its lowest currently-active listing price (null if no active listing).
      */
     private ProductResponseDto toResponse(Product product) {
+        BigDecimal price = listingRepository.findLowestActivePriceByProductId(product.getId()).orElse(null);
         Map<Long, BigDecimal> ctlPrices = product.getCompleteTheLookProducts().stream()
                 .collect(Collectors.toMap(
                     Product::getId,
                     p -> listingRepository.findLowestActivePriceByProductId(p.getId()).orElse(null),
                     (a, b) -> a));
-        return ProductResponseDto.from(product, ctlPrices::get);
+        return ProductResponseDto.from(product, price, ctlPrices::get);
+    }
+
+    /**
+     * Builds a unique, stable slug from the product name. The base mirrors the frontend
+     * generateSlug(); on collision we append -2, -3, ... so links stay unambiguous. Slugs are
+     * assigned once at creation and intentionally not changed on rename (URL stability / SEO).
+     */
+    private String generateUniqueSlug(String name) {
+        String base = SlugUtil.baseSlug(name);
+        if (base.isEmpty()) base = "produkt";
+        String candidate = base;
+        int n = 2;
+        while (productRepository.existsBySlug(candidate)) {
+            candidate = base + "-" + n++;
+        }
+        return candidate;
     }
 
     private void verifyOwnership(Product product, User creator) {

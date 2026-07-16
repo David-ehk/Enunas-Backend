@@ -46,6 +46,9 @@ public class User implements UserDetails {
 
     private LocalDateTime verificationCodeExpiresAt;
 
+    private String passwordResetToken;
+
+    private LocalDateTime passwordResetExpiresAt;
 
     @Column(updatable = false)
     private LocalDateTime createdAt;

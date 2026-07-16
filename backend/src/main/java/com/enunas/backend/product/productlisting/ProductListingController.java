@@ -30,20 +30,19 @@ public class ProductListingController {
                 .body(productListingService.createListing(productId, dto, creator));
     }
 
+    // Public storefront reads (no auth — see SecurityConfiguration GET /products|listings/**)
+
     @GetMapping("/products/{productId}/listings")
-    @PreAuthorize("hasAnyRole('CUSTOMER', 'BRAND_PARTNER')")
     public ResponseEntity<List<ListingResponseDto>> getListingsByProduct(@PathVariable Long productId) {
         return ResponseEntity.ok(productListingService.getActiveListingsByProduct(productId));
     }
 
     @GetMapping("/listings/{listingId}")
-    @PreAuthorize("hasAnyRole('CUSTOMER', 'BRAND_PARTNER')")
     public ResponseEntity<ListingResponseDto> getListing(@PathVariable Long listingId) {
         return ResponseEntity.ok(productListingService.getListingById(listingId));
     }
 
     @GetMapping("/listings")
-    @PreAuthorize("hasAnyRole('CUSTOMER', 'BRAND_PARTNER')")
     public ResponseEntity<List<ListingResponseDto>> getListingsByRegion(
             @RequestParam(required = false) String region) {
         return ResponseEntity.ok(productListingService.getActiveListingsByRegion(region));
