@@ -1,5 +1,6 @@
 package com.enunas.backend.order;
 
+import com.enunas.backend.discount.DiscountService;
 import com.enunas.backend.user.EmailService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -19,6 +20,7 @@ public class OrderExpiryService {
 
     private final OrderRepository orderRepository;
     private final EmailService emailService;
+    private final DiscountService discountService;
 
     /**
      * Runs every 5 minutes. Cancels PENDING orders older than 30 minutes.
@@ -36,6 +38,12 @@ public class OrderExpiryService {
         for (Order order : expired) {
             order.setStatus(OrderStatus.CANCELLED);
             order.setCancellationNote("Order expired — payment not confirmed within 30 minutes.");
+            // Reserved at checkout, before payment — an expired order never completes, so give the
+            // usage back. Guarded the same way OrderService does: at most once per order.
+            if (order.getDiscountCode() != null && !order.isDiscountUsageReleased()) {
+                discountService.releaseUsage(order.getDiscountCode());
+                order.setDiscountUsageReleased(true);
+            }
             orderRepository.save(order);
 
             try {

@@ -23,16 +23,20 @@ public class ReturnApprovedEmailListener {
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onReturnApproved(ReturnApprovedEvent event) {
         try {
+            String brand = event.brandName() != null ? event.brandName() : "dem Verkäufer";
             emailService.sendPlainTextEmail(
                     event.buyerEmail(),
-                    "Rückgabe für Bestellung " + event.orderNumber() + " genehmigt",
+                    "Rückgabe an " + brand + " für Bestellung " + event.orderNumber() + " genehmigt",
                     "Deine Rückgabe wurde genehmigt!\n\n" +
-                    "Retourennummer: " + event.returnNumber() + "\n\n" +
-                    "Bitte sende das Paket an folgende Adresse:\n" +
+                    "Retourennummer: " + event.returnNumber() + "\n" +
+                    "Marke: " + brand + "\n\n" +
+                    "Bitte sende die Artikel dieser Marke an folgende Adresse:\n" +
                     event.returnShipToAddress() + "\n\n" +
                     "Vermerke bitte die Retourennummer (" + event.returnNumber() +
                     ") gut sichtbar auf dem Paket.\n\n" +
-                    "Den aktuellen Status und die Retourenadresse findest du jederzeit " +
+                    "Enthält deine Bestellung Artikel mehrerer Marken, erhältst du pro Marke eine " +
+                    "eigene Retourennummer und Adresse — bitte sende die Pakete getrennt.\n\n" +
+                    "Den aktuellen Status und alle Retourenadressen findest du jederzeit " +
                     "in deinem Konto unter Meine Bestellungen."
             );
         } catch (Exception ex) {

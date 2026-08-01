@@ -34,6 +34,14 @@ public class BrandPartner {
     @Column(nullable = false, unique = true)
     private String slug;
 
+    /**
+     * Contact person behind the brand. Nullable in DB (brands onboarded before V12 have none);
+     * required at onboarding via @NotBlank in RegisterBrandPartnerDto.
+     */
+    private String firstName;
+
+    private String lastName;
+
     @Column(columnDefinition = "TEXT")
     private String description;
 
@@ -66,7 +74,7 @@ public class BrandPartner {
     // ===== §22f UStG: supplier legal name + postal address (Pflichtangabe 1; also serves as the
     // shipment-origin / Versandursprung, Pflichtangabe 4, assuming the brand ships from its business
     // address). Nullable in DB; required at onboarding via the DTO. =====
-    // TODO: a distinct 3PL/fulfilment shipment origin is deferred — would be a separate optional field set.
+    // This is TAX master data. Where customers send RETURNS is the separate return* block below.
 
     private String legalName;
 
@@ -78,6 +86,30 @@ public class BrandPartner {
 
     /** ISO 3166-1 alpha-2 country code of the business address. */
     private String addressCountry;
+
+    // ===== Returns destination — where customers physically ship goods back to. =====
+    // Deliberately separate from the §22f block above: that address identifies the supplier for
+    // tax purposes, this one routes parcels. A brand fulfilling through a 3PL or a dedicated
+    // returns warehouse sets these; everything is nullable and a brand that sets nothing falls
+    // back to its §22f address (see BrandReturnAddress.of — the single fallback rule).
+    //
+    // NEVER feed these into `domestic`. That flag is derived from addressCountry alone
+    // (BrandPartnerService.applyMasterData) and a warehouse abroad must not flip VAT treatment.
+
+    private String returnRecipient;
+
+    private String returnStreet;
+
+    private String returnPostalCode;
+
+    private String returnCity;
+
+    /** ISO 3166-1 alpha-2 country code of the returns destination. */
+    private String returnCountry;
+
+    /** Free-text handling notes shown to the customer alongside the address (e.g. gate code). */
+    @Column(columnDefinition = "TEXT")
+    private String returnInstructions;
 
     /** Public business contact email; distinct from the User login email. */
     private String contactEmail;

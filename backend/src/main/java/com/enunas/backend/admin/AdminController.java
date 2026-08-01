@@ -21,6 +21,7 @@ import com.enunas.backend.order.OrderService;
 import com.enunas.backend.order.OrderStatus;
 import com.enunas.backend.order.dto.CancelOrderDto;
 import com.enunas.backend.order.dto.OrderResponseDto;
+import com.enunas.backend.order.dto.ReturnRequestDto;
 import com.enunas.backend.product.dto.UpdateProductDto;
 import com.enunas.backend.user.User;
 import jakarta.validation.Valid;
@@ -254,20 +255,61 @@ public class AdminController {
         return ResponseEntity.ok(orderService.cancelOrder(orderId, dto, admin));
     }
 
-    @PostMapping("/orders/{orderId}/return/approve")
-    public ResponseEntity<OrderResponseDto> approveReturn(@PathVariable Long orderId) {
-        return ResponseEntity.ok(orderService.approveReturn(orderId));
-    }
+    // ===== Returns — addressed per brand. An order spanning several brands has one return per
+    // brand, each with its own destination, stock restore and refund. =====
 
-    @PostMapping("/orders/{orderId}/return/receive")
-    public ResponseEntity<OrderResponseDto> receiveReturn(@PathVariable Long orderId) {
-        return ResponseEntity.ok(orderService.receiveReturn(orderId));
-    }
-
-    @PostMapping("/orders/{orderId}/return/refund")
-    public ResponseEntity<OrderResponseDto> processRefund(
+    /**
+     * Goodwill return, initiated by an admin rather than the customer — bypasses the 14-day
+     * Widerruf window that {@code POST /orders/{orderId}/return} enforces. Same split/merge
+     * behaviour otherwise.
+     */
+    @PostMapping("/orders/{orderId}/return")
+    public ResponseEntity<OrderResponseDto> adminRequestReturn(
             @PathVariable Long orderId,
-            @RequestParam BigDecimal refundAmount) {
-        return ResponseEntity.ok(orderService.processRefund(orderId, refundAmount));
+            @Valid @RequestBody ReturnRequestDto dto,
+            @AuthenticationPrincipal User admin) {
+        return ResponseEntity.ok(orderService.adminRequestReturn(orderId, dto, admin));
+    }
+
+    @PostMapping("/returns/{returnNumber}/approve")
+    public ResponseEntity<OrderResponseDto> approveReturn(@PathVariable String returnNumber) {
+        return ResponseEntity.ok(orderService.approveReturn(returnNumber));
+    }
+
+    @PostMapping("/returns/{returnNumber}/receive")
+    public ResponseEntity<OrderResponseDto> receiveReturn(@PathVariable String returnNumber) {
+        return ResponseEntity.ok(orderService.receiveReturn(returnNumber));
+    }
+
+    /** {@code refundAmount} is optional — omit it to refund this brand's full returned value. */
+    @PostMapping("/returns/{returnNumber}/refund")
+    public ResponseEntity<OrderResponseDto> processRefund(
+            @PathVariable String returnNumber,
+            @RequestParam(required = false) BigDecimal refundAmount) {
+        return ResponseEntity.ok(orderService.processRefund(returnNumber, refundAmount));
+    }
+
+    // ===== Deprecated order-scoped aliases. Kept so existing callers keep working while they move
+    // to /admin/returns/{returnNumber}. They resolve only when the order has exactly ONE return;
+    // on a multi-brand order they return 409 rather than guess which brand the admin meant. =====
+
+    @Deprecated
+    @PostMapping("/orders/{orderId}/return/approve")
+    public ResponseEntity<OrderResponseDto> approveReturnByOrder(@PathVariable Long orderId) {
+        return ResponseEntity.ok(orderService.approveReturnByOrder(orderId));
+    }
+
+    @Deprecated
+    @PostMapping("/orders/{orderId}/return/receive")
+    public ResponseEntity<OrderResponseDto> receiveReturnByOrder(@PathVariable Long orderId) {
+        return ResponseEntity.ok(orderService.receiveReturnByOrder(orderId));
+    }
+
+    @Deprecated
+    @PostMapping("/orders/{orderId}/return/refund")
+    public ResponseEntity<OrderResponseDto> processRefundByOrder(
+            @PathVariable Long orderId,
+            @RequestParam(required = false) BigDecimal refundAmount) {
+        return ResponseEntity.ok(orderService.processRefundByOrder(orderId, refundAmount));
     }
 }

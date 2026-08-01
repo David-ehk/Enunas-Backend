@@ -42,4 +42,24 @@ public class UpdateBrandPartnerDto {
 
     @Size(min = 2, max = 2)
     private String addressCountry;
+
+    // Returns destination — optional on update (null = keep current). Brands self-serve this via
+    // PATCH /brandpartner/me: moving warehouses must not require an admin. Returns already in
+    // flight are unaffected, because they snapshot the address at request time.
+    @Size(max = 255)
+    private String returnRecipient;
+
+    @Size(max = 255)
+    private String returnStreet;
+
+    @Size(max = 16)
+    private String returnPostalCode;
+
+    @Size(max = 128)
+    private String returnCity;
+
+    @Size(min = 2, max = 2)
+    private String returnCountry;
+
+    private String returnInstructions;
 }

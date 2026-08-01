@@ -176,6 +176,28 @@ public class DiscountService {
                 totalDiscount, totalPlatform, totalBrand);
     }
 
+    /**
+     * Releases one reserved usage for an order whose discount no longer applies — a full
+     * cancellation, or a return that ends up covering the entire order. Mirrors
+     * {@code reserveUsage} in {@link #validateAndApply}; callers are responsible for their own
+     * idempotency (see {@code Order.discountUsageReleased}) since this repository call is itself
+     * a safe no-op on a repeat but a repeat would still under-count a code that legitimately gets
+     * reused by a different order in the meantime.
+     */
+    @Transactional
+    public void releaseUsage(String rawCode) {
+        if (rawCode == null || rawCode.isBlank()) return;
+        discountCodeRepository.findByCodeIgnoreCase(rawCode.trim()).ifPresentOrElse(
+                code -> {
+                    if (discountCodeRepository.releaseUsage(code.getId()) == 0) {
+                        log.warn("DiscountService: releaseUsage no-op for {} (usedCount already 0)", rawCode);
+                    } else {
+                        log.info("DiscountService: released one usage of {}", rawCode);
+                    }
+                },
+                () -> log.warn("DiscountService: releaseUsage found no code for {}", rawCode));
+    }
+
     // ===== Private helpers =====
 
     private DiscountCode buildNew(CreateDiscountDto dto, DiscountType type,

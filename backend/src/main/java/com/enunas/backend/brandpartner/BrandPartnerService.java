@@ -94,6 +94,8 @@ public class BrandPartnerService {
                 .user(user)
                 .brandName(dto.getBrandName())
                 .slug(slug)
+                .firstName(dto.getFirstName())
+                .lastName(dto.getLastName())
                 .description(dto.getDescription())
                 .logoUrl(dto.getLogoUrl())
                 .websiteUrl(dto.getWebsiteUrl())
@@ -101,6 +103,14 @@ public class BrandPartnerService {
                 .tiktokHandle(dto.getTiktokHandle())
                 .country(dto.getCountry())
                 .contactEmail(dto.getContactEmail() != null ? dto.getContactEmail() : dto.getEmail())
+                // Returns destination — optional; null here means returns fall back to the §22f
+                // address. Set outside applyMasterData on purpose: it must not touch `domestic`.
+                .returnRecipient(dto.getReturnRecipient())
+                .returnStreet(dto.getReturnStreet())
+                .returnPostalCode(dto.getReturnPostalCode())
+                .returnCity(dto.getReturnCity())
+                .returnCountry(normalizeCountry(dto.getReturnCountry()))
+                .returnInstructions(dto.getReturnInstructions())
                 .status(BrandStatus.PENDING_REVIEW)
                 .approved(false)
                 .build();
@@ -201,6 +211,16 @@ public class BrandPartnerService {
         if (dto.getAddressCity() != null) brand.setAddressCity(dto.getAddressCity());
         if (dto.getAddressCountry() != null) brand.setAddressCountry(dto.getAddressCountry());
 
+        // Returns destination. Logistics only — deliberately NOT routed through applyMasterData,
+        // because `domestic` must stay derived from addressCountry: a warehouse in another country
+        // changes where parcels go, never how commission is taxed.
+        if (dto.getReturnRecipient() != null) brand.setReturnRecipient(dto.getReturnRecipient());
+        if (dto.getReturnStreet() != null) brand.setReturnStreet(dto.getReturnStreet());
+        if (dto.getReturnPostalCode() != null) brand.setReturnPostalCode(dto.getReturnPostalCode());
+        if (dto.getReturnCity() != null) brand.setReturnCity(dto.getReturnCity());
+        if (dto.getReturnCountry() != null) brand.setReturnCountry(normalizeCountry(dto.getReturnCountry()));
+        if (dto.getReturnInstructions() != null) brand.setReturnInstructions(dto.getReturnInstructions());
+
         return BrandPartnerResponseDto.from(brandPartnerRepository.save(brand));
     }
 
@@ -229,7 +249,7 @@ public class BrandPartnerService {
     private void applyMasterData(BrandPartner brand, String legalName, String addressStreet,
                                  String addressPostalCode, String addressCity, String addressCountry,
                                  String vatId, String taxNumber) {
-        String normalizedCountry = addressCountry != null ? addressCountry.trim().toUpperCase() : null;
+        String normalizedCountry = normalizeCountry(addressCountry);
         brand.setLegalName(legalName);
         brand.setAddressStreet(addressStreet);
         brand.setAddressPostalCode(addressPostalCode);
@@ -238,6 +258,11 @@ public class BrandPartnerService {
         brand.setDomestic("DE".equals(normalizedCountry)); // derived — single source of truth
         brand.setVatId(vatId);
         brand.setTaxNumber(taxNumber);
+    }
+
+    /** ISO 3166-1 alpha-2 normalization, shared by the §22f and returns-address paths. */
+    private String normalizeCountry(String country) {
+        return country != null ? country.trim().toUpperCase() : null;
     }
 
     @Transactional(readOnly = true)

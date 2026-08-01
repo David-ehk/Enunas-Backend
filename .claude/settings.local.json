@@ -38,7 +38,11 @@
       "mcp__chrome-devtools__take_snapshot",
       "mcp__chrome-devtools__fill",
       "Bash(curl -s -w 'HTTP %{http_code}\\\\n' -X POST http://localhost:8080/webhooks/mollie -H 'Content-Type: application/x-www-form-urlencoded' -d id=tr_VuELEQTRSbKLtR2PBRPTJ)",
-      "Bash(docker exec enunas-postgres psql -U postgres -d Enunas -x -c ' *)"
+      "Bash(docker exec enunas-postgres psql -U postgres -d Enunas -x -c ' *)",
+      "PowerShell(Select-String -Path \"C:\\\\Users\\\\david\\\\OneDrive\\\\Desktop\\\\EnunasBackend\\\\backend\\\\target\\\\surefire-reports\\\\com.enunas.backend.discount.integration.Vat22fComplianceTest.txt\" -Pattern \"<<< ERROR|<<< FAILURE\" | ForEach-Object { $_.Line })",
+      "PowerShell(git stash list; \"--- DTO firstName present? ---\"; Select-String -Path \"C:\\\\Users\\\\david\\\\OneDrive\\\\Desktop\\\\EnunasBackend\\\\backend\\\\src\\\\main\\\\java\\\\com\\\\enunas\\\\backend\\\\brandpartner\\\\dto\\\\RegisterBrandPartnerDto.java\" -Pattern \"firstName|lastName\" | ForEach-Object { $_.Line })",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "PowerShell(claude plugin *)"
     ]
   },
   "enableAllProjectMcpServers": true,

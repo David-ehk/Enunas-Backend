@@ -39,6 +39,15 @@ public class Order {
     @Setter(AccessLevel.NONE)
     private List<OrderItem> items = new ArrayList<>();
 
+    /**
+     * Coarse lifecycle status. Pre-dates per-brand returns and still mixes two concerns: payment/
+     * shipping progress (PENDING…DELIVERED, CANCELLED) and return progress (RETURN_REQUESTED…
+     * REFUNDED). For an order with returns, this field is synced by
+     * {@link OrderService#syncOrderStatus} to the LEAST-advanced open brand return — it answers
+     * "is everything on this order settled yet", not "what state is any specific brand's return in".
+     * For that, read {@code OrderResponseDto.returns} (one entry per brand) — never infer a
+     * per-brand state from this single field on a multi-brand order.
+     */
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     @Builder.Default
@@ -96,6 +105,23 @@ public class Order {
     private String shippingCarrier;
     private String trackingNumber;
     private LocalDateTime shippedAt;
+
+    /**
+     * Set once, the moment this order first reaches DELIVERED (the only path in:
+     * SHIPPED → DELIVERED via {@code OrderService.updateOrderStatus}). Anchors the 14-day Widerruf
+     * window in {@code OrderService.requestReturn} — NOT carrier delivery confirmation, since
+     * DELIVERED itself is admin-set, not carrier-fed.
+     */
+    private LocalDateTime deliveredAt;
+
+    /**
+     * Guards {@code DiscountService.releaseUsage} against being called twice for the same order —
+     * the repository-level decrement is conditional but not keyed to an order, so without this an
+     * order touched twice on the cancel/full-refund path could under-count a code's usedCount.
+     */
+    @Column(nullable = false)
+    @Builder.Default
+    private boolean discountUsageReleased = false;
 
     // ===== Shipping problem (set by BrandPartner on reportShippingProblem) =====
 

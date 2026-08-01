@@ -52,7 +52,7 @@ import java.util.UUID;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @AutoConfigureTestRestTemplate
 @ActiveProfiles({"test", "mock-payments"})
-abstract class AbstractDiscountIntegrationTest {
+public abstract class AbstractDiscountIntegrationTest {
 
     @Autowired protected TestRestTemplate rest;
     @Autowired protected JdbcTemplate jdbc;
@@ -122,8 +122,11 @@ abstract class AbstractDiscountIntegrationTest {
      * {@code priceEuros} is the GROSS price (priceInputMode = GROSS); the order flow derives net.
      */
     protected long seedListing(BrandPartner brand, User creator, String priceEuros, int stock) {
+        String name = "Prod-" + UUID.randomUUID().toString().substring(0, 6);
         Product p = productRepository.save(Product.builder()
-                .name("Prod-" + UUID.randomUUID().toString().substring(0, 6))
+                .name(name)
+                // products.slug is NOT NULL + UNIQUE since V11; the random name keeps it unique.
+                .slug(name.toLowerCase())
                 .brand(brand)
                 .creator(creator)
                 .build());

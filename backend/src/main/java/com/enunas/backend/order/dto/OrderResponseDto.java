@@ -36,14 +36,20 @@ public class OrderResponseDto {
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
-    // Return fields — populated only when a ReturnOrder exists for this order.
-    private String returnNumber;
-    private String returnReason;
-    private String returnDescription;
-    private LocalDateTime returnRequestedAt;
-    // Pre-built return ship-to address (brand's business address). Present when a return exists
-    // so customers can find it in-app without depending on email delivery.
-    private String returnShipToAddress;
+    /**
+     * Every return on this order — one per brand. Present as soon as a return is requested, so the
+     * customer never has to wait for admin approval (or an email) to learn where to ship goods.
+     */
+    private List<ReturnSummaryDto> returns;
+
+    // Legacy single-return fields. Populated ONLY when the order has exactly one return, so
+    // existing single-brand clients keep working; null on a multi-brand return, where no single
+    // value can be correct. Read `returns` instead.
+    @Deprecated private String returnNumber;
+    @Deprecated private String returnReason;
+    @Deprecated private String returnDescription;
+    @Deprecated private LocalDateTime returnRequestedAt;
+    @Deprecated private String returnShipToAddress;
 
     public static OrderResponseDto from(Order order) {
         return OrderResponseDto.builder()
@@ -74,13 +80,21 @@ public class OrderResponseDto {
         return from(order).toBuilder().checkoutUrl(checkoutUrl).build();
     }
 
-    public static OrderResponseDto withReturn(Order order, ReturnOrder ret, String returnShipToAddress) {
-        return from(order).toBuilder()
-                .returnNumber(ret.getReturnNumber())
-                .returnReason(ret.getReason() != null ? ret.getReason().name() : null)
-                .returnDescription(ret.getDescription())
-                .returnRequestedAt(ret.getRequestedAt())
-                .returnShipToAddress(returnShipToAddress)
-                .build();
+    public static OrderResponseDto withReturns(Order order, List<ReturnOrder> returns) {
+        var builder = from(order).toBuilder()
+                .returns(returns.stream().map(ReturnSummaryDto::from).toList());
+
+        // Back-compat: only fill the legacy scalars when there is exactly one return. On a
+        // multi-brand order any single address would be wrong for at least one brand — leaving
+        // them null forces callers onto `returns` rather than quietly misdirecting a parcel.
+        if (returns.size() == 1) {
+            ReturnOrder ret = returns.get(0);
+            builder.returnNumber(ret.getReturnNumber())
+                    .returnReason(ret.getReason() != null ? ret.getReason().name() : null)
+                    .returnDescription(ret.getDescription())
+                    .returnRequestedAt(ret.getRequestedAt())
+                    .returnShipToAddress(ret.getShipToFormatted());
+        }
+        return builder.build();
     }
 }

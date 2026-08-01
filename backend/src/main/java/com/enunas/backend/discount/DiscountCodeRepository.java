@@ -30,4 +30,14 @@ public interface DiscountCodeRepository extends JpaRepository<DiscountCode, Long
            "WHERE d.id = :id AND d.active = true " +
            "AND (d.maxUses IS NULL OR d.usedCount < d.maxUses)")
     int reserveUsage(@Param("id") Long id);
+
+    /**
+     * Mirror of {@link #reserveUsage} for a fully cancelled/refunded order. Conditional decrement
+     * so a duplicate call (or a code whose usage was already released) is a no-op rather than
+     * going negative — same idempotency shape as the reservation side.
+     */
+    @Modifying
+    @Query("UPDATE DiscountCode d SET d.usedCount = d.usedCount - 1 " +
+           "WHERE d.id = :id AND d.usedCount > 0")
+    int releaseUsage(@Param("id") Long id);
 }

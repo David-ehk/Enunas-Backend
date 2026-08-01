@@ -1,6 +1,7 @@
 package com.enunas.backend.brandpartner.dto;
 
 import com.enunas.backend.brandpartner.BrandPartner;
+import com.enunas.backend.brandpartner.BrandReturnAddress;
 import com.enunas.backend.brandpartner.BrandStatus;
 import lombok.Builder;
 import lombok.Getter;
@@ -14,6 +15,9 @@ public class BrandPartnerResponseDto {
     private Long id;
     private String brandName;
     private String slug;
+    /** Contact person behind the brand — null for brands onboarded before V12. */
+    private String firstName;
+    private String lastName;
     private String description;
     private String logoUrl;
     private String websiteUrl;
@@ -30,6 +34,18 @@ public class BrandPartnerResponseDto {
     private String addressPostalCode;
     private String addressCity;
     private String addressCountry;
+    /** Nominated returns destination — null when the brand falls back to its §22f address. */
+    private String returnRecipient;
+    private String returnStreet;
+    private String returnPostalCode;
+    private String returnCity;
+    private String returnCountry;
+    private String returnInstructions;
+    /**
+     * The address returns are actually routed to, with the fallback already applied — what the
+     * brand dashboard should display, so a brand can see the consequence of leaving it unset.
+     */
+    private String effectiveReturnAddress;
     private BrandStatus status;
     private boolean approved;
     private Long userId;
@@ -42,6 +58,8 @@ public class BrandPartnerResponseDto {
                 .id(brand.getId())
                 .brandName(brand.getBrandName())
                 .slug(brand.getSlug())
+                .firstName(brand.getFirstName())
+                .lastName(brand.getLastName())
                 .description(brand.getDescription())
                 .logoUrl(brand.getLogoUrl())
                 .websiteUrl(brand.getWebsiteUrl())
@@ -57,6 +75,13 @@ public class BrandPartnerResponseDto {
                 .addressPostalCode(brand.getAddressPostalCode())
                 .addressCity(brand.getAddressCity())
                 .addressCountry(brand.getAddressCountry())
+                .returnRecipient(brand.getReturnRecipient())
+                .returnStreet(brand.getReturnStreet())
+                .returnPostalCode(brand.getReturnPostalCode())
+                .returnCity(brand.getReturnCity())
+                .returnCountry(brand.getReturnCountry())
+                .returnInstructions(brand.getReturnInstructions())
+                .effectiveReturnAddress(BrandReturnAddress.of(brand).formatted())
                 .status(brand.getStatus())
                 .approved(brand.isApproved())
                 .userId(brand.getUser() != null ? brand.getUser().getId() : null)

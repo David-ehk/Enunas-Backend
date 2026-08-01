@@ -20,6 +20,16 @@ public class RegisterBrandPartnerDto {
     @Size(max = 100)
     private String brandName;
 
+    /** Contact person behind the brand — first name. */
+    @NotBlank
+    @Size(max = 100)
+    private String firstName;
+
+    /** Contact person behind the brand — last name. */
+    @NotBlank
+    @Size(max = 100)
+    private String lastName;
+
     private String description;
 
     private String logoUrl;
@@ -70,4 +80,26 @@ public class RegisterBrandPartnerDto {
     @NotBlank
     @Size(min = 2, max = 2)
     private String addressCountry;
+
+    // ===== Returns destination — OPTIONAL. Omit the whole block and returns fall back to the
+    // §22f address above. Set it when the brand ships/receives through a 3PL or a separate
+    // warehouse. Purely logistics: never feeds the `domestic` VAT flag. =====
+
+    @Size(max = 255)
+    private String returnRecipient;
+
+    @Size(max = 255)
+    private String returnStreet;
+
+    @Size(max = 16)
+    private String returnPostalCode;
+
+    @Size(max = 128)
+    private String returnCity;
+
+    /** ISO 3166-1 alpha-2 country code of the returns destination. */
+    @Size(min = 2, max = 2)
+    private String returnCountry;
+
+    private String returnInstructions;
 }

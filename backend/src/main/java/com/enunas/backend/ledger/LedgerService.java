@@ -119,20 +119,36 @@ public class LedgerService {
     }
 
     /**
-     * Creates REFUND_REVERSAL entries and deducts from brand balances.
-     * Pro-rates the refund amount across brands by their share of orderTotal.
-     * Deduction order: pendingBalance → payoutBalance → outstandingDebt.
-     * Idempotent when externalRefundId is provided — safe to call on duplicate webhooks.
+     * Order-wide reversal: pro-rates the refund across EVERY brand on the order by their share of
+     * orderTotal. Correct only when the whole order is being reversed — an admin cancel, or a
+     * chargeback against the entire payment.
+     *
+     * <p>For a return, use {@link #recordRefund(Order, Long, BigDecimal, String)} instead. Reversing
+     * a single brand's return through this method deducts from brands whose goods never came back
+     * and can push them into {@code outstandingDebt}.
      */
     @Transactional
     public void recordRefund(Order order, BigDecimal refundAmount, String externalRefundId) {
+        recordRefund(order, null, refundAmount, externalRefundId);
+    }
+
+    /**
+     * Creates REFUND_REVERSAL entries and deducts from brand balances.
+     * Deduction order: pendingBalance → payoutBalance → outstandingDebt.
+     * Idempotent when externalRefundId is provided — safe to call on duplicate webhooks.
+     *
+     * @param brandId when non-null, restricts the reversal to that brand and pro-rates against
+     *                THAT BRAND's gross share rather than the order total — so refunding one
+     *                brand's return leaves every other brand's ledger untouched. When null, the
+     *                whole order is reversed (see the 3-arg overload).
+     */
+    @Transactional
+    public void recordRefund(Order order, Long brandId, BigDecimal refundAmount, String externalRefundId) {
         if (externalRefundId != null &&
                 ledgerRepository.existsByExternalReferenceIdAndEntryType(externalRefundId, LedgerEntryType.REFUND_REVERSAL)) {
             log.warn("LedgerService: REFUND_REVERSAL already recorded for externalRefundId={}; skipping", externalRefundId);
             return;
         }
-
-        BigDecimal orderTotal = order.getTotal();
 
         // Reverse against the immutable per-item snapshot (already discount-adjusted), not a
         // gross recompute — so a full refund nets each brand's credited payout exactly to zero.
@@ -140,9 +156,12 @@ public class LedgerService {
         Map<Long, BigDecimal> brandFees    = new HashMap<>(); // credited platform fee (net) per brand
         Map<Long, BigDecimal> brandVats    = new HashMap<>(); // credited commission VAT per brand
         Map<Long, BigDecimal> brandRates   = new HashMap<>();
+        Map<Long, BigDecimal> brandGross   = new HashMap<>(); // gross basis the fraction is taken against
         for (OrderItem item : order.getItems()) {
             Long bId = item.getBrandId();
             if (bId == null) continue;
+            // Brand-scoped reversal: ignore every other brand's lines outright.
+            if (brandId != null && !brandId.equals(bId)) continue;
             BigDecimal rate = item.getCommissionRate() != null
                     ? item.getCommissionRate() : resolveBrandRate(bId);
             // Post-V5: platform fee = commissionNet, plus a separate VAT line. Legacy: gross fee, vat 0.
@@ -155,32 +174,50 @@ public class LedgerService {
             BigDecimal payout = item.getBrandPayoutAmount() != null
                     ? item.getBrandPayoutAmount()
                     : item.getLineTotal().subtract(fee);
+            BigDecimal gross = item.getLineGross() != null ? item.getLineGross() : item.getLineTotal();
             brandPayouts.merge(bId, payout, BigDecimal::add);
             brandFees.merge(bId, fee, BigDecimal::add);
             brandVats.merge(bId, vat, BigDecimal::add);
+            brandGross.merge(bId, gross, BigDecimal::add);
             brandRates.putIfAbsent(bId, rate);
         }
 
-        // Fraction of the order being refunded (1.0 for a full refund / cancel).
-        BigDecimal fraction = orderTotal.signum() == 0
+        if (brandId != null && brandPayouts.isEmpty()) {
+            log.warn("LedgerService: no order items for brand {} on order {} — nothing to reverse",
+                     brandId, order.getId());
+            return;
+        }
+
+        // Basis the refund fraction is taken against: that brand's gross for a brand-scoped
+        // reversal, the whole order for an order-wide one. Using orderTotal for a single brand's
+        // return would under-reverse that brand and wrongly hit the others.
+        BigDecimal basis = brandId != null
+                ? brandGross.getOrDefault(brandId, BigDecimal.ZERO)
+                : order.getTotal();
+        BigDecimal fraction = basis.signum() == 0
                 ? BigDecimal.ZERO
-                : refundAmount.divide(orderTotal, 6, RoundingMode.HALF_UP);
+                : refundAmount.divide(basis, 6, RoundingMode.HALF_UP);
+        if (fraction.compareTo(BigDecimal.ONE) > 0) {
+            log.warn("LedgerService: refund {} exceeds basis {} for order {} brand {} — capping at 1.0",
+                     refundAmount, basis, order.getId(), brandId);
+            fraction = BigDecimal.ONE;
+        }
 
         List<LedgerEntry> reversals = new ArrayList<>();
 
-        for (Long brandId : brandPayouts.keySet()) {
-            BigDecimal rate            = brandRates.get(brandId);
-            BigDecimal platformPortion = brandFees.get(brandId).multiply(fraction).setScale(2, RoundingMode.HALF_UP);
-            BigDecimal vatPortion      = brandVats.get(brandId).multiply(fraction).setScale(2, RoundingMode.HALF_UP);
-            BigDecimal brandPortion    = brandPayouts.get(brandId).multiply(fraction).setScale(2, RoundingMode.HALF_UP);
+        for (Long reversedBrandId : brandPayouts.keySet()) {
+            BigDecimal rate            = brandRates.get(reversedBrandId);
+            BigDecimal platformPortion = brandFees.get(reversedBrandId).multiply(fraction).setScale(2, RoundingMode.HALF_UP);
+            BigDecimal vatPortion      = brandVats.get(reversedBrandId).multiply(fraction).setScale(2, RoundingMode.HALF_UP);
+            BigDecimal brandPortion    = brandPayouts.get(reversedBrandId).multiply(fraction).setScale(2, RoundingMode.HALF_UP);
 
             List<LedgerEntry> originals = ledgerRepository
-                    .findActivePaymentEntriesByOrderAndBrand(order.getId(), brandId);
+                    .findActivePaymentEntriesByOrderAndBrand(order.getId(), reversedBrandId);
 
             reversals.add(LedgerEntry.builder()
                     .orderId(order.getId())
                     .orderItemId(originals.isEmpty() ? null : originals.get(0).getOrderItemId())
-                    .brandPartnerId(brandId)
+                    .brandPartnerId(reversedBrandId)
                     .totalAmount(platformPortion.add(vatPortion).add(brandPortion).negate())
                     .platformFee(platformPortion.negate())
                     .brandPayout(brandPortion.negate())
@@ -196,9 +233,9 @@ public class LedgerService {
                     .externalReferenceId(externalRefundId)
                     .build());
 
-            BrandEconomics eco = brandEconomicsRepository.findByBrandPartner_Id(brandId)
+            BrandEconomics eco = brandEconomicsRepository.findByBrandPartner_Id(reversedBrandId)
                     .orElseThrow(() -> new IllegalStateException(
-                            "BrandEconomics missing for brand " + brandId + " — cannot record REFUND_REVERSAL"));
+                            "BrandEconomics missing for brand " + reversedBrandId + " — cannot record REFUND_REVERSAL"));
             BigDecimal remaining = brandPortion;
 
             if (eco.getPendingBalance().compareTo(BigDecimal.ZERO) > 0) {
@@ -217,7 +254,7 @@ public class LedgerService {
             if (remaining.compareTo(BigDecimal.ZERO) > 0) {
                 eco.setOutstandingDebt(eco.getOutstandingDebt().add(remaining));
                 log.warn("LedgerService: brand {} incurred debt of {} after refund on order {}",
-                         brandId, remaining, order.getId());
+                         reversedBrandId, remaining, order.getId());
             }
 
             brandEconomicsRepository.save(eco);

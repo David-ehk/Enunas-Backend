@@ -11,6 +11,7 @@ import com.enunas.backend.order.dto.OrderResponseDto;
 import com.enunas.backend.order.dto.ReturnRequestDto;
 import com.enunas.backend.order.dto.ShipmentConfirmationDto;
 import com.enunas.backend.order.dto.ShippingProblemDto;
+import com.enunas.backend.order.dto.UploadReturnLabelDto;
 import com.enunas.backend.exception.PaymentException;
 import com.enunas.backend.payment.CreatePaymentCommand;
 import com.enunas.backend.payment.Payment;
@@ -43,10 +44,13 @@ import java.math.RoundingMode;
 import java.security.SecureRandom;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 @Slf4j
@@ -70,6 +74,7 @@ public class OrderService {
     private final RefundPersistenceHelper refundPersistenceHelper;
     private final DiscountService discountService;
     private final ApplicationEventPublisher eventPublisher;
+    private final ReturnAddressSnapshotFactory returnAddressSnapshotFactory;
 
     @Value("${app.frontend.base-url}")
     private String frontendBaseUrl;
@@ -262,50 +267,150 @@ public class OrderService {
     public OrderResponseDto requestReturn(Long orderId, ReturnRequestDto dto, User buyer) {
         Order order = findById(orderId);
         assertOwnership(order, buyer);
+        return doRequestReturn(order, dto, true);
+    }
 
-        if (order.getStatus() != OrderStatus.DELIVERED) {
+    /**
+     * Admin-initiated goodwill return: same split/merge logic as the customer path, but bypasses
+     * the 14-day Widerruf window. There is no ownership check — an admin can act on any order — and
+     * the {@link ReturnOrder#getUser()} on whatever is created is still the order's buyer, since the
+     * return is on their behalf, not the admin's.
+     */
+    @PreAuthorize("hasRole('ADMIN')")
+    @Transactional
+    public OrderResponseDto adminRequestReturn(Long orderId, ReturnRequestDto dto, User admin) {
+        Order order = findById(orderId);
+        log.info("Admin {} initiating a goodwill return (bypassing the 14-day window) for order {}",
+                admin.getEmail(), order.getOrderNumber());
+        return doRequestReturn(order, dto, false);
+    }
+
+    private OrderResponseDto doRequestReturn(Order order, ReturnRequestDto dto, boolean enforceReturnWindow) {
+        User buyer = order.getBuyer();
+        Long orderId = order.getId();
+
+        // DELIVERED is the entry point, but an order already carrying a return must stay open to
+        // further ones: returning brand A's item flips the order to RETURN_REQUESTED, and a
+        // DELIVERED-only guard would then make brand B's item unreturnable forever. Which items
+        // may still go back is decided per item below, not by the order-level status.
+        if (order.getStatus() != OrderStatus.DELIVERED
+                && order.getStatus() != OrderStatus.RETURN_REQUESTED
+                && order.getStatus() != OrderStatus.RETURN_APPROVED
+                && order.getStatus() != OrderStatus.RETURN_RECEIVED) {
             throw new IllegalStateException(
                     "Return can only be requested for DELIVERED orders. Current status: " + order.getStatus());
         }
 
-        if (returnOrderRepository.existsByOrder(order)) {
-            throw new IllegalStateException(
-                    "A return has already been requested for order " + order.getOrderNumber());
+        // 14-day Widerruf window (§355 BGB), anchored on delivered_at — NOT order creation date and
+        // NOT carrier delivery, since delivered_at itself is admin-set (see Order.deliveredAt). This
+        // is a simplified gate on the return REQUEST, not a full compliance calculation (e.g. it
+        // does not special-case weekends/holidays) — confirm the edge cases with counsel before
+        // relying on it as the sole enforcement. A null deliveredAt (should not happen going
+        // forward; defensive only) is treated as no time limit rather than blocking everyone.
+        if (enforceReturnWindow && order.getDeliveredAt() != null) {
+            LocalDateTime deadline = order.getDeliveredAt().plusDays(14);
+            if (LocalDateTime.now().isAfter(deadline)) {
+                throw new IllegalStateException(
+                        "The 14-day Widerruf window for this order expired on " + deadline
+                                + ". Contact support about a goodwill return.");
+            }
         }
 
-        ReturnOrder returnOrder = ReturnOrder.builder()
-                .returnNumber(generateReturnNumber())
-                .order(order)
-                .user(buyer)
-                .reason(dto.reason())
-                .description(dto.description())
-                .build();
-
-        ReturnOrder savedReturn = returnOrderRepository.save(returnOrder);
-
+        // Which items is the customer returning? (null orderItemId = the whole order.)
+        List<OrderItem> requested;
         if (dto.orderItemId() == null) {
-            for (OrderItem item : order.getItems()) {
-                savedReturn.addItem(ReturnItem.builder()
+            requested = new ArrayList<>(order.getItems());
+        } else {
+            requested = List.of(order.getItems().stream()
+                    .filter(i -> i.getId().equals(dto.orderItemId()))
+                    .findFirst()
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            "OrderItem " + dto.orderItemId() + " does not belong to this order")));
+        }
+
+        // Guard per ITEM, not per order. The old order-wide guard meant returning one brand's item
+        // permanently blocked returning another brand's item from the same order.
+        Set<Long> alreadyReturned = new HashSet<>(returnOrderRepository.findReturnedOrderItemIds(orderId));
+        List<OrderItem> toReturn = requested.stream()
+                .filter(i -> !alreadyReturned.contains(i.getId()))
+                .toList();
+        if (toReturn.isEmpty()) {
+            throw new IllegalStateException(
+                    "All requested items on order " + order.getOrderNumber() + " have already been returned");
+        }
+
+        // Split by brand: goods physically travel to different places, so each brand gets its own
+        // return with its own number, address snapshot, approval and refund.
+        Map<Long, List<OrderItem>> itemsByBrand = new LinkedHashMap<>();
+        for (OrderItem item : toReturn) {
+            Long brandId = item.getBrandId();
+            if (brandId == null) {
+                throw new IllegalStateException(
+                        "OrderItem " + item.getId() + " has no brand — cannot route a return for it");
+            }
+            itemsByBrand.computeIfAbsent(brandId, k -> new ArrayList<>()).add(item);
+        }
+
+        // At most one ACTIVE (non-REFUNDED) return may exist per (order, brand) — enforced here and
+        // backed by the partial unique index in V15. A brand's items join its existing open return
+        // while that return is still REQUESTED (the customer is still assembling what they're
+        // sending back); once it has moved past REQUESTED, the physical/refund lifecycle for what
+        // was already requested has started, so a new item for that brand must wait.
+        List<ReturnOrder> touched = new ArrayList<>();
+        List<String> blockedBrandNames = new ArrayList<>();
+
+        for (Map.Entry<Long, List<OrderItem>> entry : itemsByBrand.entrySet()) {
+            Long brandId = entry.getKey();
+            List<OrderItem> brandItems = entry.getValue();
+            BrandPartner brand = brandItems.get(0).getVariant().getProduct().getBrand();
+
+            Optional<ReturnOrder> active = returnOrderRepository
+                    .findFirstByOrder_IdAndBrand_IdAndStatusNot(orderId, brandId, ReturnStatus.REFUNDED);
+
+            if (active.isPresent() && active.get().getStatus() != ReturnStatus.REQUESTED) {
+                blockedBrandNames.add(brand != null ? brand.getBrandName() : ("brand " + brandId));
+                log.warn("Return request for order {} skips brand {} — its existing return {} is already {}",
+                        order.getOrderNumber(), brandId, active.get().getReturnNumber(), active.get().getStatus());
+                continue;
+            }
+
+            ReturnOrder returnOrder;
+            if (active.isPresent()) {
+                // Merge into the existing REQUESTED return — same brand, same destination, one
+                // return number. Snapshot/status/timestamps are untouched; only items are added.
+                returnOrder = active.get();
+            } else {
+                returnOrder = returnOrderRepository.save(ReturnOrder.create(
+                        generateReturnNumber(), order, buyer, brand, dto.reason(), dto.description()));
+                // Snapshot the address NOW, so the customer sees it immediately (rather than only
+                // after admin approval) and it stays fixed if the brand later moves warehouses.
+                returnOrder.applyShipToSnapshot(
+                        returnAddressSnapshotFactory.create(brand, returnOrder.getReturnNumber()));
+            }
+
+            for (OrderItem item : brandItems) {
+                returnOrder.addItem(ReturnItem.builder()
                         .orderItem(item)
                         .quantityReturned(item.getQuantity())
                         .build());
             }
-        } else {
-            OrderItem target = order.getItems().stream()
-                    .filter(i -> i.getId().equals(dto.orderItemId()))
-                    .findFirst()
-                    .orElseThrow(() -> new IllegalArgumentException(
-                            "OrderItem " + dto.orderItemId() + " does not belong to this order"));
-            savedReturn.addItem(ReturnItem.builder()
-                    .orderItem(target)
-                    .quantityReturned(target.getQuantity())
-                    .build());
+            touched.add(returnOrderRepository.save(returnOrder));
         }
 
-        returnOrderRepository.save(savedReturn);
-        order.setStatus(OrderStatus.RETURN_REQUESTED);
-        log.info("Return requested for order {} by {}", order.getOrderNumber(), buyer.getEmail());
-        return OrderResponseDto.from(orderRepository.save(order));
+        if (touched.isEmpty()) {
+            throw new IllegalStateException(
+                    "Cannot request this return: " + String.join(", ", blockedBrandNames)
+                            + " already have a return in progress for this order. Wait until it completes.");
+        }
+
+        // Same rule as every other transition: the order tracks its least-advanced return, which a
+        // brand-new REQUESTED one now is.
+        Order saved = orderRepository.save(syncOrderStatus(order));
+        log.info("Return requested for order {} by {} — {} brand return(s) touched: {}{}",
+                order.getOrderNumber(), buyer.getEmail(), touched.size(),
+                touched.stream().map(ReturnOrder::getReturnNumber).toList(),
+                blockedBrandNames.isEmpty() ? "" : " (blocked: " + blockedBrandNames + ")");
+        return toDto(saved);
     }
 
     // ===== BrandPartner =====
@@ -493,6 +598,11 @@ public class OrderService {
             restoreVariantStock(order);
         }
 
+        // First (and only) time this order reaches DELIVERED — anchors the 14-day Widerruf window.
+        if (newStatus == OrderStatus.DELIVERED && order.getDeliveredAt() == null) {
+            order.setDeliveredAt(LocalDateTime.now());
+        }
+
         order.setStatus(newStatus);
         log.info("Order {} status: {} → {}", order.getOrderNumber(), current, newStatus);
         Order saved = orderRepository.save(order);
@@ -502,12 +612,27 @@ public class OrderService {
             ledgerService.recordOrderPayment(saved);
         }
 
-        // Reverse brand ledger entries when a post-payment order is cancelled.
+        // Reverse brand ledger entries when a post-payment order is cancelled. The discount code
+        // (if any) is released here too — a cancelled order no longer has a discounted sale to its
+        // name, so the usage it reserved at checkout must go back.
         if (postPaymentCancel) {
             ledgerService.recordRefund(saved, saved.getTotal(), "ADMIN_CANCEL_" + saved.getId());
+            releaseDiscountUsageOnce(saved);
         }
 
         return OrderResponseDto.from(saved);
+    }
+
+    /**
+     * Releases this order's reserved discount-code usage, guarded so it only ever happens once per
+     * order — called from every path that ends an order's life without a discounted sale to show
+     * for it (cancel, auto-expiry, full refund).
+     */
+    private void releaseDiscountUsageOnce(Order order) {
+        if (order.getDiscountCode() == null || order.isDiscountUsageReleased()) return;
+        discountService.releaseUsage(order.getDiscountCode());
+        order.setDiscountUsageReleased(true);
+        orderRepository.save(order);
     }
 
     @PreAuthorize("hasRole('ADMIN')")
@@ -527,6 +652,9 @@ public class OrderService {
         order.setCancelledByAdminEmail(admin.getEmail());
         order.setStatus(OrderStatus.CANCELLED);
         orderRepository.save(order);
+        // Reserved at checkout (validateAndApply), before payment — release it now the order never
+        // completes.
+        releaseDiscountUsageOnce(order);
 
         String body = "Deine Bestellung " + order.getOrderNumber() + " wurde storniert.\n" +
                 "Grund: " + dto.getReason() +
@@ -545,46 +673,48 @@ public class OrderService {
 
     @PreAuthorize("hasRole('ADMIN')")
     @Transactional
-    public OrderResponseDto approveReturn(Long orderId) {
-        Order order = findById(orderId);
+    public OrderResponseDto approveReturn(String returnNumber) {
+        ReturnOrder returnOrder = findReturnByNumber(returnNumber);
+        Order order = returnOrder.getOrder();
 
-        if (order.getStatus() != OrderStatus.RETURN_REQUESTED) {
-            throw new IllegalStateException(
-                    "Can only approve returns in RETURN_REQUESTED status. Current: " + order.getStatus());
+        if (returnOrder.getStatus() != ReturnStatus.REQUESTED) {
+            throw new IllegalStateException("Can only approve a return in REQUESTED status. Current: "
+                    + returnOrder.getStatus());
         }
 
-        ReturnOrder returnOrder = findReturnOrder(order);
         returnOrder.setStatus(ReturnStatus.APPROVED);
         returnOrder.setApprovedAt(LocalDateTime.now());
-        returnOrder.setReturnLabel("PENDING");
+        // labelStatus is already PENDING from creation — approval just makes uploading one valid
+        // (see ReturnOrder.applyBrandUploadedLabel's state guard).
         returnOrderRepository.save(returnOrder);
 
-        order.setStatus(OrderStatus.RETURN_APPROVED);
-        Order saved = orderRepository.save(order);
+        Order saved = orderRepository.save(syncOrderStatus(order));
 
-        // Publish AFTER_COMMIT so the mail failure can never roll back this approval.
-        // The address is pre-built here (inside the transaction) so the listener needs no DB access.
+        // Publish AFTER_COMMIT so a mail failure can never roll back this approval. The address is
+        // read from the return's own snapshot, so the listener needs no DB access — and each brand
+        // return produces its own email naming that brand and its own destination.
         eventPublisher.publishEvent(new ReturnApprovedEvent(
                 order.getBuyer().getEmail(),
                 order.getOrderNumber(),
                 returnOrder.getReturnNumber(),
-                buildReturnAddress(order)));
+                returnOrder.getBrand() != null ? returnOrder.getBrand().getBrandName() : null,
+                returnOrder.getShipToFormatted()));
 
-        log.info("Return approved for order {}", order.getOrderNumber());
+        log.info("Return {} approved for order {} (brand {})", returnNumber, order.getOrderNumber(),
+                returnOrder.getBrand() != null ? returnOrder.getBrand().getId() : null);
         return toDto(saved);
     }
 
     @PreAuthorize("hasRole('ADMIN')")
     @Transactional
-    public OrderResponseDto receiveReturn(Long orderId) {
-        Order order = findById(orderId);
+    public OrderResponseDto receiveReturn(String returnNumber) {
+        ReturnOrder returnOrder = findReturnByNumber(returnNumber);
+        Order order = returnOrder.getOrder();
 
-        if (order.getStatus() != OrderStatus.RETURN_APPROVED) {
-            throw new IllegalStateException(
-                    "Can only receive returns in RETURN_APPROVED status. Current: " + order.getStatus());
+        if (returnOrder.getStatus() != ReturnStatus.APPROVED) {
+            throw new IllegalStateException("Can only receive a return in APPROVED status. Current: "
+                    + returnOrder.getStatus());
         }
-
-        ReturnOrder returnOrder = findReturnOrder(order);
 
         for (ReturnItem item : returnOrder.getItems()) {
             ProductVariant variant = item.getOrderItem().getVariant();
@@ -595,34 +725,42 @@ public class OrderService {
         returnOrder.setReceivedAt(LocalDateTime.now());
         returnOrderRepository.save(returnOrder);
 
-        order.setStatus(OrderStatus.RETURN_RECEIVED);
-        log.info("Return received for order {} — variant stock restored", order.getOrderNumber());
-        return toDto(orderRepository.save(order));
+        log.info("Return {} received for order {} — variant stock restored", returnNumber,
+                order.getOrderNumber());
+        return toDto(orderRepository.save(syncOrderStatus(order)));
     }
 
+    /**
+     * Refunds a single brand's return. The amount defaults to that brand's refundable share when
+     * null, and is capped by it — refunding "the order total" against one brand's return would
+     * reverse ledger entries for brands whose goods never came back.
+     */
     @PreAuthorize("hasRole('ADMIN')")
-    public OrderResponseDto processRefund(Long orderId, BigDecimal refundAmount) {
+    public OrderResponseDto processRefund(String returnNumber, BigDecimal refundAmount) {
         // Validate state before touching Mollie or the DB.
-        Order order = findById(orderId);
-        if (order.getStatus() != OrderStatus.RETURN_RECEIVED) {
-            throw new IllegalStateException(
-                    "Can only process refund after return is received. Current: " + order.getStatus());
+        ReturnOrder returnOrder = findReturnByNumber(returnNumber);
+        Order order = returnOrder.getOrder();
+
+        if (returnOrder.getStatus() != ReturnStatus.RECEIVED) {
+            throw new IllegalStateException("Can only refund after the return is received. Current: "
+                    + returnOrder.getStatus());
         }
-        if (refundAmount == null || refundAmount.compareTo(BigDecimal.ZERO) <= 0) {
+        if (returnOrder.getBrand() == null) {
+            throw new IllegalStateException("Return " + returnNumber + " has no brand — cannot scope the refund");
+        }
+
+        BigDecimal refundable = refundableTotal(returnOrder);
+        BigDecimal amount = refundAmount != null ? refundAmount : refundable;
+        if (amount.compareTo(BigDecimal.ZERO) <= 0) {
             throw new IllegalArgumentException("Refund amount must be positive");
         }
-        if (refundAmount.compareTo(order.getTotal()) > 0) {
-            throw new IllegalArgumentException(
-                    "Refund amount " + refundAmount + " exceeds order total " + order.getTotal());
+        if (amount.compareTo(refundable) > 0) {
+            throw new IllegalArgumentException("Refund amount " + amount
+                    + " exceeds the refundable total " + refundable + " for return " + returnNumber);
         }
 
-        Payment payment = paymentRepository.findByOrderId(orderId)
-                .orElseThrow(() -> new IllegalStateException("No payment record for order " + orderId));
-
-        // Guard: ensure ReturnOrder exists before touching Mollie — an orphaned Mollie
-        // refund cannot be rolled back, so we fail fast here instead of inside persist().
-        returnOrderRepository.findByOrder_Id(orderId)
-                .orElseThrow(() -> new IllegalStateException("No return found for order: " + order.getOrderNumber()));
+        Payment payment = paymentRepository.findByOrderId(order.getId())
+                .orElseThrow(() -> new IllegalStateException("No payment record for order " + order.getId()));
 
         // 1. Call the payment provider OUTSIDE any transaction — avoids holding a DB connection
         //    during an HTTP call and separates the external side-effect from the atomic DB commit.
@@ -630,16 +768,135 @@ public class OrderService {
         try {
             refundId = paymentProvider.refundPayment(new RefundCommand(
                     payment.getTransactionId(),
-                    refundAmount,
-                    "Refund for order " + order.getOrderNumber())).refundId();
+                    amount,
+                    "Refund for return " + returnNumber + " (order " + order.getOrderNumber() + ")")).refundId();
         } catch (Exception e) {
-            log.error("Refund failed for order {}: {}", order.getOrderNumber(), e.getMessage());
+            log.error("Refund failed for return {}: {}", returnNumber, e.getMessage());
             throw new PaymentException("Could not process refund: " + e.getMessage(), e);
         }
 
         // 2. Persist all DB changes atomically in a single @Transactional block.
         //    The refund ID is the idempotency key — duplicate calls are safe.
-        return refundPersistenceHelper.persist(orderId, refundAmount, refundId);
+        return refundPersistenceHelper.persist(returnOrder.getId(), amount, refundId);
+    }
+
+    /**
+     * Brand uploads a label it obtained itself for its own return. Ownership is checked against
+     * the return's brand — not against order-item creators — since a return already carries the
+     * specific brand it belongs to.
+     */
+    @PreAuthorize("hasRole('BRAND_PARTNER')")
+    @Transactional
+    public OrderResponseDto uploadReturnLabel(String returnNumber, UploadReturnLabelDto dto, User brandPartner) {
+        ReturnOrder returnOrder = findReturnByNumber(returnNumber);
+        if (returnOrder.getBrand() == null
+                || returnOrder.getBrand().getUser() == null
+                || !returnOrder.getBrand().getUser().getId().equals(brandPartner.getId())) {
+            throw new SecurityException("This return does not belong to your brand");
+        }
+
+        returnOrder.applyBrandUploadedLabel(dto.getCarrier(), dto.getTrackingNumber(), dto.getLabelUrl());
+        returnOrderRepository.save(returnOrder);
+
+        log.info("BrandPartner {} uploaded return label for {} (carrier={}, tracking={})",
+                brandPartner.getEmail(), returnNumber, dto.getCarrier(), dto.getTrackingNumber());
+        return toDto(returnOrder.getOrder());
+    }
+
+    /** Gross value of the items on this return — the ceiling for refunding it. */
+    private BigDecimal refundableTotal(ReturnOrder returnOrder) {
+        return returnOrder.getItems().stream()
+                .map(ri -> {
+                    OrderItem oi = ri.getOrderItem();
+                    BigDecimal lineGross = oi.getLineGross() != null ? oi.getLineGross() : oi.getLineTotal();
+                    if (oi.getQuantity() == null || oi.getQuantity() == 0) return BigDecimal.ZERO;
+                    // Pro-rate when only part of a line came back.
+                    return lineGross
+                            .multiply(BigDecimal.valueOf(ri.getQuantityReturned()))
+                            .divide(BigDecimal.valueOf(oi.getQuantity()), 2, RoundingMode.HALF_UP);
+                })
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    private ReturnOrder findReturnByNumber(String returnNumber) {
+        return returnOrderRepository.findByReturnNumber(returnNumber)
+                .orElseThrow(() -> new IllegalArgumentException("Return not found: " + returnNumber));
+    }
+
+    /**
+     * Resolves the single return on an order, for the deprecated order-scoped admin endpoints.
+     * Rejects multi-brand orders rather than guessing — silently acting on the first brand is the
+     * class of bug this whole change exists to remove.
+     */
+    // ===== Deprecated order-scoped entry points, for callers still addressing returns by order.
+    // They resolve the order's single return and delegate; a multi-brand order raises 409. =====
+
+    @Deprecated
+    @PreAuthorize("hasRole('ADMIN')")
+    public OrderResponseDto approveReturnByOrder(Long orderId) {
+        return approveReturn(resolveSoleReturn(orderId).getReturnNumber());
+    }
+
+    @Deprecated
+    @PreAuthorize("hasRole('ADMIN')")
+    public OrderResponseDto receiveReturnByOrder(Long orderId) {
+        return receiveReturn(resolveSoleReturn(orderId).getReturnNumber());
+    }
+
+    @Deprecated
+    @PreAuthorize("hasRole('ADMIN')")
+    public OrderResponseDto processRefundByOrder(Long orderId, BigDecimal refundAmount) {
+        return processRefund(resolveSoleReturn(orderId).getReturnNumber(), refundAmount);
+    }
+
+    private ReturnOrder resolveSoleReturn(Long orderId) {
+        List<ReturnOrder> returns = returnOrderRepository.findByOrder_IdOrderByIdAsc(orderId);
+        if (returns.isEmpty()) {
+            throw new IllegalStateException("No return found for order id: " + orderId);
+        }
+        if (returns.size() > 1) {
+            throw new MultipleReturnsException(orderId,
+                    returns.stream().map(ReturnOrder::getReturnNumber).toList());
+        }
+        return returns.get(0);
+    }
+
+    /**
+     * Recomputes the order-level status from its returns. {@link Order#status} is a single field
+     * and cannot express "brand A received, brand B still requested", so it tracks the LEAST
+     * advanced open return — the order is only as far along as its slowest brand. REFUNDED requires
+     * every return to be refunded AND every item to be covered, so a partial return never makes a
+     * whole order look refunded.
+     */
+    private Order syncOrderStatus(Order order) {
+        List<ReturnOrder> returns = returnOrderRepository.findByOrder_IdOrderByIdAsc(order.getId());
+        if (returns.isEmpty()) return order;
+
+        boolean allRefunded = returns.stream().allMatch(r -> r.getStatus() == ReturnStatus.REFUNDED);
+        if (allRefunded && allItemsReturned(order, returns)) {
+            order.setStatus(OrderStatus.REFUNDED);
+            return order;
+        }
+
+        ReturnStatus least = returns.stream()
+                .map(ReturnOrder::getStatus)
+                .min(Comparator.comparingInt(ReturnStatus::ordinal))
+                .orElse(ReturnStatus.REQUESTED);
+        order.setStatus(switch (least) {
+            case REQUESTED -> OrderStatus.RETURN_REQUESTED;
+            case APPROVED  -> OrderStatus.RETURN_APPROVED;
+            case RECEIVED  -> OrderStatus.RETURN_RECEIVED;
+            case REFUNDED  -> OrderStatus.RETURN_RECEIVED; // refunded but not all items covered
+        });
+        return order;
+    }
+
+    private boolean allItemsReturned(Order order, List<ReturnOrder> returns) {
+        Set<Long> returned = returns.stream()
+                .flatMap(r -> r.getItems().stream())
+                .map(ri -> ri.getOrderItem().getId())
+                .collect(java.util.stream.Collectors.toSet());
+        return order.getItems().stream().allMatch(i -> returned.contains(i.getId()));
     }
 
     // ===== Private helpers =====
@@ -716,12 +973,6 @@ public class OrderService {
         }
     }
 
-    private ReturnOrder findReturnOrder(Order order) {
-        return returnOrderRepository.findByOrder(order)
-                .orElseThrow(() -> new IllegalStateException(
-                        "No return found for order: " + order.getOrderNumber()));
-    }
-
     private Order findById(Long id) {
         return orderRepository.findById(id)
                 .orElseThrow(() -> new OrderNotFoundException("Order not found with id: " + id));
@@ -757,42 +1008,20 @@ public class OrderService {
     }
 
     /**
-     * Maps an Order to its DTO. For orders in a return state, joins the associated
-     * ReturnOrder so reason/description/returnNumber are always included — even on
-     * admin-side list queries that previously used the bare OrderResponseDto.from(Order).
+     * Maps an Order to its DTO, attaching every return on the order — one per brand — so the
+     * customer sees which items go where. Each return carries its own snapshotted ship-to address;
+     * nothing is re-derived from the order's items here.
      */
     private OrderResponseDto toDto(Order order) {
         if (order.getStatus() == OrderStatus.RETURN_REQUESTED
                 || order.getStatus() == OrderStatus.RETURN_APPROVED
                 || order.getStatus() == OrderStatus.RETURN_RECEIVED
                 || order.getStatus() == OrderStatus.REFUNDED) {
-            return returnOrderRepository.findByOrder(order)
-                    .map(ret -> OrderResponseDto.withReturn(order, ret, buildReturnAddress(order)))
-                    .orElseGet(() -> OrderResponseDto.from(order));
+            List<ReturnOrder> returns = returnOrderRepository.findByOrder_IdOrderByIdAsc(order.getId());
+            if (!returns.isEmpty()) {
+                return OrderResponseDto.withReturns(order, returns);
+            }
         }
         return OrderResponseDto.from(order);
-    }
-
-    /**
-     * Builds a plain-text return address from the brand linked to the first order item.
-     * Used in the return-approval email sent to the customer.
-     */
-    private String buildReturnAddress(Order order) {
-        if (order.getItems().isEmpty()) return "Bitte kontaktiere den Verkäufer für die Retourenadresse.";
-        var brand = order.getItems().get(0).getVariant().getProduct().getBrand();
-        if (brand == null) return "Bitte kontaktiere den Verkäufer für die Retourenadresse.";
-        StringBuilder addr = new StringBuilder();
-        if (brand.getLegalName() != null && !brand.getLegalName().isBlank())
-            addr.append(brand.getLegalName()).append("\n");
-        if (brand.getAddressStreet() != null && !brand.getAddressStreet().isBlank())
-            addr.append(brand.getAddressStreet()).append("\n");
-        String plz  = brand.getAddressPostalCode();
-        String city = brand.getAddressCity();
-        if (plz != null || city != null)
-            addr.append(plz != null ? plz + " " : "").append(city != null ? city : "").append("\n");
-        if (brand.getAddressCountry() != null && !brand.getAddressCountry().isBlank())
-            addr.append(brand.getAddressCountry());
-        String result = addr.toString().trim();
-        return result.isEmpty() ? "Bitte kontaktiere den Verkäufer für die Retourenadresse." : result;
     }
 }

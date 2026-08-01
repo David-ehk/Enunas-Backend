@@ -311,6 +311,8 @@ class Vat22fComplianceTest extends AbstractDiscountIntegrationTest {
         body.put("email", "brand-" + unique + "@apply.local");
         body.put("password", "Brand123!");
         body.put("brandName", "Acme " + unique);
+        body.put("firstName", "Erika");
+        body.put("lastName", "Mustermann");
         body.put("legalName", "Acme Fashion GmbH");
         body.put("addressStreet", "Friedrichstr. 1");
         body.put("addressPostalCode", "10115");
