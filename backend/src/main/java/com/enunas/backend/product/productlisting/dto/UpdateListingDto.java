@@ -1,6 +1,7 @@
 package com.enunas.backend.product.productlisting.dto;
 
 import com.enunas.backend.product.productlisting.PriceInputMode;
+import com.enunas.backend.validation.NoHtml;
 import jakarta.validation.constraints.*;
 import lombok.Data;
 
@@ -21,6 +22,8 @@ public class UpdateListingDto {
 
     private Boolean active;
 
+    @Size(max = 100)
+    @NoHtml
     private String region;
 
     private LocalDateTime dropDate;
