@@ -1,5 +1,6 @@
 package com.enunas.backend.admin.dto;
 
+import com.enunas.backend.validation.NoHtml;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 
@@ -8,5 +9,6 @@ import lombok.Data;
 public class RejectionDto {
 
     @Size(max = 1000)
+    @NoHtml
     private String reason;
 }

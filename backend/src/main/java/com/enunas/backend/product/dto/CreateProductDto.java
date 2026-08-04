@@ -6,6 +6,7 @@ import com.enunas.backend.product.ProductCategory;
 import com.enunas.backend.product.ProductType;
 import com.enunas.backend.product.validation.CatalogueCategoryAware;
 import com.enunas.backend.product.validation.ValidCatalogueCategory;
+import com.enunas.backend.validation.NoHtml;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
 import lombok.Data;
@@ -19,10 +20,16 @@ import java.util.Set;
 public class CreateProductDto implements CatalogueCategoryAware {
 
     @NotBlank
+    @Size(max = 255)
+    @NoHtml
     private String name;
 
+    @Size(max = 5000)
+    @NoHtml
     private String description;
 
+    @Size(max = 5000)
+    @NoHtml
     private String inspirationStory;
 
     @NotNull
@@ -40,12 +47,20 @@ public class CreateProductDto implements CatalogueCategoryAware {
     @NotNull
     private Gender gender;
 
+    @Size(max = 255)
+    @NoHtml
     private String material;
 
+    @Size(max = 100)
+    @NoHtml
     private String originCountry;
 
+    @Size(max = 2000)
+    @NoHtml
     private String careInstructions;
 
+    @Size(max = 255)
+    @NoHtml
     private String collectionName;
 
     private LocalDate releaseDate;

@@ -148,6 +148,48 @@ class CreateProductDtoValidationTest {
         assertThat(violations).isEmpty();
     }
 
+    // ===== @Size / @NoHtml on free-text fields =====
+
+    @Test
+    void name_exceedsMaxLength_isInvalid() {
+        CreateProductDto dto = validClothingDto();
+        dto.setName("A".repeat(256));
+
+        Set<ConstraintViolation<CreateProductDto>> violations = validator.validate(dto);
+
+        assertThat(violations).anyMatch(v -> "name".equals(v.getPropertyPath().toString()));
+    }
+
+    @Test
+    void description_containingHtml_isInvalid() {
+        CreateProductDto dto = validClothingDto();
+        dto.setDescription("<script>alert(1)</script>");
+
+        Set<ConstraintViolation<CreateProductDto>> violations = validator.validate(dto);
+
+        assertThat(violations).anyMatch(v -> "description".equals(v.getPropertyPath().toString()));
+    }
+
+    @Test
+    void careInstructions_exceedsMaxLength_isInvalid() {
+        CreateProductDto dto = validClothingDto();
+        dto.setCareInstructions("A".repeat(2001));
+
+        Set<ConstraintViolation<CreateProductDto>> violations = validator.validate(dto);
+
+        assertThat(violations).anyMatch(v -> "careInstructions".equals(v.getPropertyPath().toString()));
+    }
+
+    @Test
+    void variantColor_containingHtml_isInvalid() {
+        CreateProductDto dto = validClothingDto();
+        dto.getVariants().get(0).setColor("<img src=x onerror=alert(1)>");
+
+        Set<ConstraintViolation<CreateProductDto>> violations = validator.validate(dto);
+
+        assertThat(violations).anyMatch(v -> v.getPropertyPath().toString().contains("color"));
+    }
+
     // ===== Helper =====
 
     private CreateProductDto validClothingDto() {
