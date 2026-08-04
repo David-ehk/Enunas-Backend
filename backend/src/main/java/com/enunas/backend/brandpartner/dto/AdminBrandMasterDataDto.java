@@ -1,5 +1,6 @@
 package com.enunas.backend.brandpartner.dto;
 
+import com.enunas.backend.validation.NoHtml;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
@@ -15,25 +16,31 @@ public class AdminBrandMasterDataDto {
 
     @NotBlank
     @Size(max = 255)
+    @NoHtml
     private String legalName;
 
     @NotBlank
     @Size(max = 255)
+    @NoHtml
     private String addressStreet;
 
     @NotBlank
     @Size(max = 16)
+    @NoHtml
     private String addressPostalCode;
 
     @NotBlank
     @Size(max = 128)
+    @NoHtml
     private String addressCity;
 
     @NotBlank
     @Size(min = 2, max = 2)
     private String addressCountry;
 
+    @Size(max = 32)
     private String vatId;
 
+    @Size(max = 32)
     private String taxNumber;
 }
