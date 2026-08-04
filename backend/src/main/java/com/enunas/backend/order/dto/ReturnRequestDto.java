@@ -8,5 +8,5 @@ import jakarta.validation.constraints.Size;
 public record ReturnRequestDto(
         Long orderItemId,   // null = full order return; set = single-item return
         @NotNull ReturnReason reason,
-        @Size(max = 1000) @NoHtml String description
+        @Size(max = 500) @NoHtml String description
 ) {}

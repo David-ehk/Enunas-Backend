@@ -19,7 +19,7 @@ import org.hibernate.validator.constraints.URL;
 public class UploadReturnLabelDto {
 
     @NotBlank
-    @Size(max = 100)
+    @Size(max = 64)
     @NoHtml
     private String carrier; // "DHL", "UPS", "Hermes" — free text, same convention as ShipmentConfirmationDto
 
@@ -29,7 +29,7 @@ public class UploadReturnLabelDto {
     private String trackingNumber;
 
     @NotBlank
-    @Size(max = 2048)
+    @Size(max = 500)
     @URL
     private String labelUrl;
 }
