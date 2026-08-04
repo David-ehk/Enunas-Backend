@@ -1,5 +1,6 @@
 package com.enunas.backend.order.dto;
 
+import com.enunas.backend.validation.NoHtml;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import lombok.Getter;
@@ -13,5 +14,6 @@ public class ShippingProblemDto {
 
     @NotBlank
     @Size(max = 1000)
+    @NoHtml
     private String description;
 }
