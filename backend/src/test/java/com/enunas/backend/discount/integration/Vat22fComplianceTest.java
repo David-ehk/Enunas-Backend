@@ -115,7 +115,7 @@ class Vat22fComplianceTest extends AbstractDiscountIntegrationTest {
         assertThat(r.get("shipmentOrigin")).asString().contains("Berlin");          // (4)
         assertThat(r.get("supplierEmail")).isNotNull();                             // (7)
         assertThat(r.get("supplierIban")).isEqualTo("DE89370400440532013000");      // (8)
-        assertThat(r.get("destinationCity")).isEqualTo("Amsterdam");                // (5)
+        assertThat(r.get("destinationCity")).isEqualTo("Berlin");                   // (5)
         assertThat(r.get("saleAmountGross")).isNotNull();                           // (6)
         assertThat((String) r.get("itemDescription")).contains("Black");            // (9)
         assertThat(r.get("orderNumber")).isEqualTo(orderNumber);                    // (9)

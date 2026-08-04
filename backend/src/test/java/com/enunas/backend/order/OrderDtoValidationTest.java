@@ -88,11 +88,13 @@ class OrderDtoValidationTest {
         dto.setItems(List.of(item));
 
         ShippingAddressDto address = new ShippingAddressDto();
-        address.setFullName("Jane Doe");
-        address.setStreet("Hauptstrasse 1");
+        address.setFirstName("Jane");
+        address.setLastName("Doe");
+        address.setStreet("Hauptstrasse");
+        address.setHouseNumber("1");
         address.setCity("Berlin");
         address.setPostalCode("10115");
-        address.setCountry("Germany");
+        address.setCountry("DE");
         dto.setShippingAddress(address);
 
         return dto;

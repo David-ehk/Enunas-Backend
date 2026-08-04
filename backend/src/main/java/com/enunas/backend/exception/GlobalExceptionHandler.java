@@ -34,7 +34,7 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler({OrderNotFoundException.class, BrandNotFoundException.class,
-            ProductNotFoundException.class, CustomerNotFoundException.class})
+            ProductNotFoundException.class, CustomerNotFoundException.class, AddressNotFoundException.class})
     public ResponseEntity<Map<String, Object>> handleNotFound(RuntimeException ex) {
         log.warn("NotFoundException: {}", ex.getMessage());
         return buildResponse(HttpStatus.NOT_FOUND, ex.getMessage());

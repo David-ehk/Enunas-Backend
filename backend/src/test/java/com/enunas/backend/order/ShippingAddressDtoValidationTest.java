@@ -33,13 +33,13 @@ class ShippingAddressDtoValidationTest {
     }
 
     @Test
-    void fullName_containingHtml_isInvalid() {
+    void firstName_containingHtml_isInvalid() {
         ShippingAddressDto dto = validAddress();
-        dto.setFullName("<script>alert(1)</script>");
+        dto.setFirstName("<script>alert(1)</script>");
 
         Set<ConstraintViolation<ShippingAddressDto>> violations = validator.validate(dto);
 
-        assertThat(violations).anyMatch(v -> "fullName".equals(v.getPropertyPath().toString()));
+        assertThat(violations).anyMatch(v -> "firstName".equals(v.getPropertyPath().toString()));
     }
 
     @Test
@@ -50,6 +50,56 @@ class ShippingAddressDtoValidationTest {
         Set<ConstraintViolation<ShippingAddressDto>> violations = validator.validate(dto);
 
         assertThat(violations).anyMatch(v -> "street".equals(v.getPropertyPath().toString()));
+    }
+
+    @Test
+    void houseNumber_withLetterSuffix_isValid() {
+        ShippingAddressDto dto = validAddress();
+        dto.setHouseNumber("12a");
+
+        Set<ConstraintViolation<ShippingAddressDto>> violations = validator.validate(dto);
+
+        assertThat(violations).isEmpty();
+    }
+
+    @Test
+    void houseNumber_withDisallowedCharacter_isInvalid() {
+        ShippingAddressDto dto = validAddress();
+        dto.setHouseNumber("12<b>");
+
+        Set<ConstraintViolation<ShippingAddressDto>> violations = validator.validate(dto);
+
+        assertThat(violations).anyMatch(v -> "houseNumber".equals(v.getPropertyPath().toString()));
+    }
+
+    @Test
+    void postalCode_fourDigits_isInvalid() {
+        ShippingAddressDto dto = validAddress();
+        dto.setPostalCode("1234");
+
+        Set<ConstraintViolation<ShippingAddressDto>> violations = validator.validate(dto);
+
+        assertThat(violations).anyMatch(v -> "postalCode".equals(v.getPropertyPath().toString()));
+    }
+
+    @Test
+    void postalCode_withLetters_isInvalid() {
+        ShippingAddressDto dto = validAddress();
+        dto.setPostalCode("1012AB");
+
+        Set<ConstraintViolation<ShippingAddressDto>> violations = validator.validate(dto);
+
+        assertThat(violations).anyMatch(v -> "postalCode".equals(v.getPropertyPath().toString()));
+    }
+
+    @Test
+    void country_notDE_isInvalid() {
+        ShippingAddressDto dto = validAddress();
+        dto.setCountry("NL");
+
+        Set<ConstraintViolation<ShippingAddressDto>> violations = validator.validate(dto);
+
+        assertThat(violations).anyMatch(v -> "country".equals(v.getPropertyPath().toString()));
     }
 
     @Test
@@ -74,11 +124,13 @@ class ShippingAddressDtoValidationTest {
 
     private ShippingAddressDto validAddress() {
         ShippingAddressDto dto = new ShippingAddressDto();
-        dto.setFullName("Jane Doe");
-        dto.setStreet("Hauptstrasse 1");
+        dto.setFirstName("Jane");
+        dto.setLastName("Doe");
+        dto.setStreet("Hauptstrasse");
+        dto.setHouseNumber("1");
         dto.setCity("Berlin");
         dto.setPostalCode("10115");
-        dto.setCountry("Germany");
+        dto.setCountry("DE");
         return dto;
     }
 }

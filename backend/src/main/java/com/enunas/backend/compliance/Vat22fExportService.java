@@ -88,8 +88,8 @@ public class Vat22fExportService {
                 // (8)
                 .supplierIban(iban)
                 // (5)
-                .destinationName(dest != null ? dest.getFullName() : null)
-                .destinationStreet(dest != null ? dest.getStreet() : null)
+                .destinationName(dest != null ? formatDestinationName(dest.getFirstName(), dest.getLastName()) : null)
+                .destinationStreet(dest != null ? formatDestinationStreet(dest.getStreet(), dest.getHouseNumber()) : null)
                 .destinationPostalCode(dest != null ? dest.getPostalCode() : null)
                 .destinationCity(dest != null ? dest.getCity() : null)
                 .destinationCountry(dest != null ? dest.getCountry() : null)
@@ -118,6 +118,16 @@ public class Vat22fExportService {
 
     private static String n(String s) {
         return s != null ? s : "";
+    }
+
+    private static String formatDestinationName(String firstName, String lastName) {
+        if (firstName == null && lastName == null) return null;
+        return (n(firstName) + " " + n(lastName)).trim();
+    }
+
+    private static String formatDestinationStreet(String street, String houseNumber) {
+        if (street == null && houseNumber == null) return null;
+        return (n(street) + " " + n(houseNumber)).trim();
     }
 
     private YearMonth parsePeriod(String period) {

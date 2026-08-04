@@ -78,7 +78,7 @@ public abstract class AbstractDiscountIntegrationTest {
         // CASCADE truncates child/element-collection tables (analytics, catalogue categories, etc.).
         jdbc.execute("TRUNCATE TABLE settlement_runs, ledger_entries, payments, order_items, orders, listings, " +
                 "product_variants, product_colors, products, discount_codes, brand_economics, " +
-                "brand_partners, customers, users RESTART IDENTITY CASCADE");
+                "brand_partners, user_addresses, customers, users RESTART IDENTITY CASCADE");
     }
 
     // ===== Seeding =====
@@ -177,8 +177,9 @@ public abstract class AbstractDiscountIntegrationTest {
     protected org.springframework.http.ResponseEntity<Map> postOrder(
             String token, String discountCode, List<Map<String, Object>> items) {
         Map<String, Object> address = Map.of(
-                "fullName", "John Doe", "street", "1 Main St",
-                "city", "Amsterdam", "postalCode", "1012AB", "country", "NL");
+                "firstName", "John", "lastName", "Doe",
+                "street", "Hauptstrasse", "houseNumber", "1",
+                "city", "Berlin", "postalCode", "10115", "country", "DE");
         Map<String, Object> body = new HashMap<>();
         body.put("items", items);
         body.put("shippingAddress", address);

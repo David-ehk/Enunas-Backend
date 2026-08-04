@@ -3,6 +3,9 @@ package com.enunas.backend.order;
 import com.enunas.backend.brandpartner.BrandPartner;
 import com.enunas.backend.brandpartner.brandeconomics.BrandEconomics;
 import com.enunas.backend.brandpartner.brandeconomics.BrandEconomicsRepository;
+import com.enunas.backend.customer.UserAddress;
+import com.enunas.backend.customer.UserAddressRepository;
+import com.enunas.backend.exception.AddressNotFoundException;
 import com.enunas.backend.exception.OrderNotFoundException;
 import com.enunas.backend.order.dto.CancelOrderDto;
 import com.enunas.backend.order.dto.CreateOrderDto;
@@ -10,8 +13,10 @@ import com.enunas.backend.order.dto.OrderItemRequestDto;
 import com.enunas.backend.order.dto.OrderResponseDto;
 import com.enunas.backend.order.dto.ReturnRequestDto;
 import com.enunas.backend.order.dto.ShipmentConfirmationDto;
+import com.enunas.backend.order.dto.ShippingAddressDto;
 import com.enunas.backend.order.dto.ShippingProblemDto;
 import com.enunas.backend.order.dto.UploadReturnLabelDto;
+import com.enunas.backend.order.validation.AllowedShippingCountries;
 import com.enunas.backend.exception.PaymentException;
 import com.enunas.backend.payment.CreatePaymentCommand;
 import com.enunas.backend.payment.Payment;
@@ -75,6 +80,7 @@ public class OrderService {
     private final DiscountService discountService;
     private final ApplicationEventPublisher eventPublisher;
     private final ReturnAddressSnapshotFactory returnAddressSnapshotFactory;
+    private final UserAddressRepository userAddressRepository;
 
     @Value("${app.frontend.base-url}")
     private String frontendBaseUrl;
@@ -180,15 +186,18 @@ public class OrderService {
         BigDecimal shippingTotal = BigDecimal.ZERO;
 
         // 6. Build & persist order.
+        ShippingAddressDto resolvedAddress = resolveShippingAddress(dto, buyer);
+
         ShippingAddress address = ShippingAddress.builder()
-                .fullName(dto.getShippingAddress().getFullName())
-                .street(dto.getShippingAddress().getStreet())
-                .street2(dto.getShippingAddress().getStreet2())
-                .city(dto.getShippingAddress().getCity())
-                .postalCode(dto.getShippingAddress().getPostalCode())
-                .country(dto.getShippingAddress().getCountry())
-                .state(dto.getShippingAddress().getState())
-                .phone(dto.getShippingAddress().getPhone())
+                .firstName(resolvedAddress.getFirstName())
+                .lastName(resolvedAddress.getLastName())
+                .street(resolvedAddress.getStreet())
+                .houseNumber(resolvedAddress.getHouseNumber())
+                .addressLine2(resolvedAddress.getAddressLine2())
+                .city(resolvedAddress.getCity())
+                .postalCode(resolvedAddress.getPostalCode())
+                .country(resolvedAddress.getCountry())
+                .phone(resolvedAddress.getPhone())
                 .build();
 
         Order.OrderBuilder orderBuilder = Order.builder()
@@ -862,7 +871,7 @@ public class OrderService {
     }
 
     /**
-     * Recomputes the order-level status from its returns. {@link Order#status} is a single field
+     * Recomputes the order-level status from its returns. {@link #} is a single field
      * and cannot express "brand A received, brand B still requested", so it tracks the LEAST
      * advanced open return — the order is only as far along as its slowest brand. REFUNDED requires
      * every return to be refunded AND every item to be covered, so a partial return never makes a
@@ -981,6 +990,27 @@ public class OrderService {
     @Transactional(readOnly = true)
     public OrderResponseDto getOrderById(Long orderId) {
         return toDto(findById(orderId));
+    }
+
+    /**
+     * Resolves whichever address source the caller supplied (exactly one, enforced by
+     * {@code @ExactlyOneAddressSource} at the DTO level) into a common {@link ShippingAddressDto}
+     * shape. A saved address is loaded with an ownership check — a customer can never use another
+     * customer's saved address — and re-checked against {@link AllowedShippingCountries}, since a
+     * saved address's country was never restricted at save time (see {@code UserAddress} javadoc).
+     */
+    private ShippingAddressDto resolveShippingAddress(CreateOrderDto dto, User buyer) {
+        if (dto.getSavedAddressId() != null) {
+            UserAddress saved = userAddressRepository.findByIdAndUser(dto.getSavedAddressId(), buyer)
+                    .orElseThrow(() -> new AddressNotFoundException(
+                            "Saved address not found: " + dto.getSavedAddressId()));
+            if (!AllowedShippingCountries.isAllowed(saved.getCountry())) {
+                throw new IllegalArgumentException(
+                        "Shipping to " + saved.getCountry() + " is not currently available");
+            }
+            return ShippingAddressDto.from(saved);
+        }
+        return dto.getShippingAddress();
     }
 
     private String generateOrderNumber() {

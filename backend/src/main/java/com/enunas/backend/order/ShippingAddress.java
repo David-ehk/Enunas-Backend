@@ -1,5 +1,6 @@
 package com.enunas.backend.order;
 
+import jakarta.persistence.Column;
 import jakarta.persistence.Embeddable;
 import jakarta.validation.constraints.NotBlank;
 import lombok.AllArgsConstructor;
@@ -17,23 +18,29 @@ import lombok.Setter;
 public class ShippingAddress {
 
     @NotBlank
-    private String fullName;
+    private String firstName;
+
+    @NotBlank
+    private String lastName;
 
     @NotBlank
     private String street;
 
-    private String street2;
-
     @NotBlank
-    private String city;
+    @Column(name = "house_number")
+    private String houseNumber;
+
+    @Column(name = "street2")
+    private String addressLine2;
 
     @NotBlank
     private String postalCode;
 
     @NotBlank
-    private String country;
+    private String city;
 
-    private String state;
+    @NotBlank
+    private String country;
 
     private String phone;
 }
