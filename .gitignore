@@ -7,3 +7,6 @@
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Superpowers subagent-driven-development scratch workspace
+.superpowers/
