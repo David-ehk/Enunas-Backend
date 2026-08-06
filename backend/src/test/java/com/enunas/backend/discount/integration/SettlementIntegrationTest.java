@@ -7,6 +7,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 
 import java.math.BigDecimal;
+import java.time.YearMonth;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
 
@@ -18,6 +20,14 @@ import static org.assertj.core.api.Assertions.assertThat;
  * the real clock — closed-period tests use months ≤ the last closed month.
  */
 class SettlementIntegrationTest extends AbstractDiscountIntegrationTest {
+
+    // Mirrors SettlementService's own zone: a period is closed once real time passes the 1st of
+    // the FOLLOWING month, Berlin. Tests 2's "current"/"future"/"closed" months are computed from
+    // this against the real clock, not hardcoded literals — a hardcoded month becomes a past
+    // (permanently closed) month the moment real time passes it, silently flipping the "not yet
+    // closed → 422" assertions to fail against the now-closed month. See git history for the bug
+    // this replaced.
+    private static final ZoneId BERLIN = ZoneId.of("Europe/Berlin");
 
     // ===== 1. Refund-period rule + hard invariant + credit-note =====
     @Test
@@ -65,16 +75,20 @@ class SettlementIntegrationTest extends AbstractDiscountIntegrationTest {
         BrandFixture a = seedBrand("BrandA", "brand-a", "0.18");
         long bid = a.brand().getId();
         String admin = login("admin@it.local", "Admin123!");
-        insertLedger(bid, "ORDER_PAYMENT", "2026-05-10 12:00:00", "18.00", "3.42", "97.58", "119.00");
 
-        // Current month (2026-06) — not yet closed → 422.
-        assertThat(postSettle(admin, bid, "2026-06", null).getStatusCode().value()).isEqualTo(422);
+        YearMonth currentMonth = YearMonth.now(BERLIN);
+        YearMonth futureMonth = currentMonth.plusMonths(1);
+        YearMonth closedMonth = currentMonth.minusMonths(1); // always in the past → always closed
+        insertLedger(bid, "ORDER_PAYMENT", closedMonth + "-10 12:00:00", "18.00", "3.42", "97.58", "119.00");
+
+        // Current month — not yet closed → 422.
+        assertThat(postSettle(admin, bid, currentMonth.toString(), null).getStatusCode().value()).isEqualTo(422);
         // Future month → 422.
-        assertThat(postSettle(admin, bid, "2026-07", null).getStatusCode().value()).isEqualTo(422);
-        // Bad format → 400.
+        assertThat(postSettle(admin, bid, futureMonth.toString(), null).getStatusCode().value()).isEqualTo(422);
+        // Bad format → 400. (Month 13 is invalid regardless of the current date — no rot risk here.)
         assertThat(postSettle(admin, bid, "2026-13", null).getStatusCode().value()).isEqualTo(400);
         // Closed month → 200.
-        assertThat(postSettle(admin, bid, "2026-05", null).getStatusCode().value()).isEqualTo(200);
+        assertThat(postSettle(admin, bid, closedMonth.toString(), null).getStatusCode().value()).isEqualTo(200);
     }
 
     // ===== 3. Double-settle → 409; settled row leaves the GET =====

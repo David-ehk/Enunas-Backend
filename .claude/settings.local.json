@@ -128,7 +128,9 @@
       "Bash(export MSYS_NO_PATHCONV=1)",
       "Bash(docker cp *)",
       "Bash(echo \"psql exit=$?\")",
-      "Bash(docker stop *)"
+      "Bash(docker stop *)",
+      "Bash(git ls-tree *)",
+      "Bash(echo \"exit:$?\")"
     ]
   },
   "enableAllProjectMcpServers": true,
