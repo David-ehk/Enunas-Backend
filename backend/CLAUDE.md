@@ -54,6 +54,7 @@ All secrets are externalized. Copy `.env` and fill in values before running loca
 | `FRONTEND_BASE_URL` | `http://localhost:3000` | Frontend origin for post-payment redirect |
 | `ADMIN_EMAIL` | `admin@enunas.com` | Email for the seeded admin account |
 | `ADMIN_PASSWORD` | — | Password for the seeded admin account (required) |
+| `GOOGLE_OAUTH_CLIENT_ID` | — | Google OAuth 2.0 Client ID (`*.apps.googleusercontent.com`) that `POST /auth/google` validates ID tokens' `aud` claim against (required) |
 
 ## Architecture
 

@@ -39,7 +39,12 @@ public class SecurityConfiguration {
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
                 .authorizeHttpRequests(authorize -> authorize
 
-                        // Public — no token required
+                        // Account-mutating auth routes derive their target account solely from the
+                        // injected Authentication — they must never be reachable anonymously.
+                        // MUST stay above the /auth/** permitAll below (first match wins).
+                        .requestMatchers(HttpMethod.POST, "/auth/set-password", "/auth/change-password").authenticated()
+
+                        // Public — no token required (login, signup, google, forgot/reset-password)
                         .requestMatchers("/auth/**", "/public/**", "/error").permitAll()
                         // Payment webhooks — called server-to-server with no JWT
                         .requestMatchers(HttpMethod.POST, "/webhooks/mollie").permitAll()

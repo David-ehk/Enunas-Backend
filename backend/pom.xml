@@ -122,6 +122,43 @@
             <artifactId>mollie</artifactId>
             <version>1.5.4</version>
         </dependency>
+        <dependency>
+            <groupId>com.google.api-client</groupId>
+            <artifactId>google-api-client</artifactId>
+            <version>2.7.0</version>
+            <exclusions>
+                <!-- Application Default Credentials / service-account auth for CALLING Google APIs.
+                     Not used: ID-token verification fetches Google's public certs anonymously. -->
+                <exclusion>
+                    <groupId>com.google.auth</groupId>
+                    <artifactId>google-auth-library-oauth2-http</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>com.google.auth</groupId>
+                    <artifactId>google-auth-library-credentials</artifactId>
+                </exclusion>
+                <!-- Apache HttpClient transport: GoogleOAuthConfig explicitly uses NetHttpTransport
+                     (JDK HttpURLConnection), never ApacheHttpTransport. -->
+                <exclusion>
+                    <groupId>com.google.http-client</groupId>
+                    <artifactId>google-http-client-apache-v2</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.apache.httpcomponents</groupId>
+                    <artifactId>httpclient</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.apache.httpcomponents</groupId>
+                    <artifactId>httpcore</artifactId>
+                </exclusion>
+                <!-- Only a transitive dependency of httpclient (excluded above); google-api-client
+                     itself does not use commons-codec. -->
+                <exclusion>
+                    <groupId>commons-codec</groupId>
+                    <artifactId>commons-codec</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
 	</dependencies>
 
 	<build>

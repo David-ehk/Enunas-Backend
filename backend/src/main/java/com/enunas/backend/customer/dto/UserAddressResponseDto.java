@@ -21,11 +21,15 @@ public class UserAddressResponseDto {
     private String city;
     private String country;
 
-    // Explicit @JsonProperty: Jackson would otherwise serialize a Lombok-generated isDefault()
-    // getter as JSON key "default" (it strips the "is" prefix from boolean getters by default),
-    // not the "isDefault" the frontend expects.
+    // Field is named "defaultAddress" (not "isDefault") so its own implicit Jackson name and the
+    // Lombok-generated getter's implicit name (isDefaultAddress() -> "defaultAddress") agree.
+    // If the field were named "isDefault", Jackson would key it by "isDefault" (its own implicit
+    // name) while ALSO keying the getter isDefault() by "default" (it strips the "is" prefix from
+    // boolean getters) — two different implicit names that @JsonProperty on the field alone does
+    // not merge, producing BOTH "default" and "isDefault" in the serialized JSON. The explicit
+    // @JsonProperty below keeps the actual wire key as "isDefault" for the frontend contract.
     @JsonProperty("isDefault")
-    private boolean isDefault;
+    private boolean defaultAddress;
 
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
@@ -41,7 +45,7 @@ public class UserAddressResponseDto {
                 .postalCode(address.getPostalCode())
                 .city(address.getCity())
                 .country(address.getCountry())
-                .isDefault(address.isDefault())
+                .defaultAddress(address.isDefault())
                 .createdAt(address.getCreatedAt())
                 .updatedAt(address.getUpdatedAt())
                 .build();

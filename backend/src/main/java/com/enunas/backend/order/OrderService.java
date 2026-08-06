@@ -34,6 +34,7 @@ import com.enunas.backend.discount.DiscountApplication;
 import com.enunas.backend.discount.DiscountService;
 import com.enunas.backend.user.EmailService;
 import com.enunas.backend.user.User;
+import jakarta.validation.Validator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -81,6 +82,7 @@ public class OrderService {
     private final ApplicationEventPublisher eventPublisher;
     private final ReturnAddressSnapshotFactory returnAddressSnapshotFactory;
     private final UserAddressRepository userAddressRepository;
+    private final Validator validator;
 
     @Value("${app.frontend.base-url}")
     private String frontendBaseUrl;
@@ -998,8 +1000,14 @@ public class OrderService {
      * shape. A saved address is loaded with an ownership check — a customer can never use another
      * customer's saved address — and re-checked against {@link AllowedShippingCountries}, since a
      * saved address's country was never restricted at save time (see {@code UserAddress} javadoc).
+     * Both paths then run through the same {@link Validator} pass against {@link ShippingAddressDto}'s
+     * own constraints — {@code UserAddressDto.postalCode} is intentionally looser (no German-format
+     * pattern, since a saved address can be for any country at save time), so a saved address must be
+     * re-validated here rather than trusted as-is; this keeps "validated identically regardless of
+     * source" a structural guarantee instead of something achieved by two different manual checks.
      */
     private ShippingAddressDto resolveShippingAddress(CreateOrderDto dto, User buyer) {
+        ShippingAddressDto resolved;
         if (dto.getSavedAddressId() != null) {
             UserAddress saved = userAddressRepository.findByIdAndUser(dto.getSavedAddressId(), buyer)
                     .orElseThrow(() -> new AddressNotFoundException(
@@ -1008,9 +1016,16 @@ public class OrderService {
                 throw new IllegalArgumentException(
                         "Shipping to " + saved.getCountry() + " is not currently available");
             }
-            return ShippingAddressDto.from(saved);
+            resolved = ShippingAddressDto.from(saved);
+        } else {
+            resolved = dto.getShippingAddress();
         }
-        return dto.getShippingAddress();
+        var violations = validator.validate(resolved);
+        if (!violations.isEmpty()) {
+            var first = violations.iterator().next();
+            throw new IllegalArgumentException(first.getPropertyPath() + ": " + first.getMessage());
+        }
+        return resolved;
     }
 
     private String generateOrderNumber() {

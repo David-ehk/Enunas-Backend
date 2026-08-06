@@ -23,6 +23,9 @@ class UserAddressIntegrationTest extends AbstractDiscountIntegrationTest {
 
         assertThat(created.getStatusCode().value()).isEqualTo(201);
         assertThat(created.getBody().get("isDefault")).isEqualTo(true);
+        // Regression: Jackson must key the boolean by "isDefault" only — a field/getter implicit-name
+        // mismatch previously caused a duplicate "default" key alongside it in the serialized JSON.
+        assertThat(created.getBody()).doesNotContainKey("default");
     }
 
     @Test

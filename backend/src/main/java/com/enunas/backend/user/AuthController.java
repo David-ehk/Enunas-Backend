@@ -2,10 +2,12 @@ package com.enunas.backend.user;
 
 import com.enunas.backend.user.dto.ChangePasswordDto;
 import com.enunas.backend.user.dto.ForgotPasswordRequestDto;
+import com.enunas.backend.user.dto.GoogleAuthDto;
 import com.enunas.backend.user.dto.LoginResponseDto;
 import com.enunas.backend.user.dto.LoginUserDto;
 import com.enunas.backend.user.dto.RegisterUserDto;
 import com.enunas.backend.user.dto.ResetPasswordDto;
+import com.enunas.backend.user.dto.SetPasswordDto;
 import com.enunas.backend.user.dto.UserResponseDto;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -24,6 +26,7 @@ public class AuthController {
     private final AuthenticationService authenticationService;
     private final JwtService jwtService;
     private final UserRepository userRepository;
+    private final GoogleTokenVerifier googleTokenVerifier;
 
     /** Customer signup. Brand-partner applications go to POST /brandpartner/apply. */
     @PostMapping("/signup")
@@ -35,7 +38,17 @@ public class AuthController {
     @PostMapping("/login")
     public ResponseEntity<LoginResponseDto> login(@Valid @RequestBody LoginUserDto dto) {
         User user = authenticationService.login(dto);
+        return issueToken(user);
+    }
 
+    @PostMapping("/google")
+    public ResponseEntity<LoginResponseDto> loginWithGoogle(@Valid @RequestBody GoogleAuthDto dto) {
+        GoogleTokenPayload payload = googleTokenVerifier.verify(dto.getIdToken());
+        User user = authenticationService.loginWithGoogle(payload);
+        return issueToken(user);
+    }
+
+    private ResponseEntity<LoginResponseDto> issueToken(User user) {
         Map<String, Object> extraClaims = new HashMap<>();
         extraClaims.put("role", user.getRole().name());
 
@@ -53,6 +66,16 @@ public class AuthController {
         User currentUser = userRepository.findByEmail(authentication.getName())
                 .orElseThrow(() -> new IllegalArgumentException("User not found"));
         authenticationService.changePassword(currentUser, dto);
+        return ResponseEntity.ok().build();
+    }
+
+    @PostMapping("/set-password")
+    public ResponseEntity<Void> setPassword(
+            @Valid @RequestBody SetPasswordDto dto,
+            Authentication authentication) {
+        User currentUser = userRepository.findByEmail(authentication.getName())
+                .orElseThrow(() -> new IllegalArgumentException("User not found"));
+        authenticationService.setPassword(currentUser, dto);
         return ResponseEntity.ok().build();
     }
 

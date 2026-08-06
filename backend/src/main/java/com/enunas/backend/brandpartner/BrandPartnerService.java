@@ -8,6 +8,7 @@ import com.enunas.backend.brandpartner.dto.RegisterBrandPartnerDto;
 import com.enunas.backend.brandpartner.dto.UpdateBrandPartnerDto;
 import com.enunas.backend.exception.BrandNotFoundException;
 import org.springframework.context.ApplicationEventPublisher;
+import com.enunas.backend.user.EmailNormalizer;
 import com.enunas.backend.user.EmailService;
 import com.enunas.backend.user.Role;
 import com.enunas.backend.user.User;
@@ -58,8 +59,12 @@ public class BrandPartnerService {
      */
     @Transactional
     public BrandPartnerResponseDto applyForBrand(RegisterBrandPartnerDto dto) {
-        if (userRepository.existsByEmail(dto.getEmail())) {
-            log.warn("Brand application failed: email already registered: {}", dto.getEmail());
+        // Normalize BEFORE the duplicate check: users.email is case-sensitive in Postgres, and the
+        // Google flow stores normalized emails — without this, "John@Example.com" would slip past
+        // existsByEmail and create a second User row for the same person.
+        String normalizedEmail = EmailNormalizer.normalize(dto.getEmail());
+        if (userRepository.existsByEmail(normalizedEmail)) {
+            log.warn("Brand application failed: email already registered: {}", normalizedEmail);
             throw new IllegalArgumentException("Email already registered");
         }
         if (brandPartnerRepository.existsByBrandName(dto.getBrandName())) {
@@ -80,7 +85,7 @@ public class BrandPartnerService {
         // enabled=true: login is gated by the operator (adminApproved), NOT by email verification.
         // The verification token still travels (best-effort email below), but nothing gates on it.
         User user = User.builder()
-                .email(dto.getEmail())
+                .email(normalizedEmail)
                 .password(passwordEncoder.encode(dto.getPassword()))
                 .role(Role.BRAND_PARTNER)
                 .enabled(true)
@@ -102,7 +107,7 @@ public class BrandPartnerService {
                 .instagramHandle(dto.getInstagramHandle())
                 .tiktokHandle(dto.getTiktokHandle())
                 .country(dto.getCountry())
-                .contactEmail(dto.getContactEmail() != null ? dto.getContactEmail() : dto.getEmail())
+                .contactEmail(dto.getContactEmail() != null ? dto.getContactEmail() : normalizedEmail)
                 // Returns destination — optional; null here means returns fall back to the §22f
                 // address. Set outside applyMasterData on purpose: it must not touch `domestic`.
                 .returnRecipient(dto.getReturnRecipient())
@@ -135,7 +140,7 @@ public class BrandPartnerService {
     /** Email verification step for brand applicants. Flips User.enabled and notifies admin. */
     @Transactional
     public void verifyBrandApplicant(VerifyUserDto dto) {
-        User user = userRepository.findByEmail(dto.getEmail())
+        User user = userRepository.findByEmail(EmailNormalizer.normalize(dto.getEmail()))
                 .orElseThrow(() -> new IllegalArgumentException("User not found"));
 
         if (user.getRole() != Role.BRAND_PARTNER) {
@@ -167,7 +172,7 @@ public class BrandPartnerService {
     /** Re-issue the verification code for a brand applicant whose code expired. */
     @Transactional
     public void resendVerificationCode(String email) {
-        User user = userRepository.findByEmail(email)
+        User user = userRepository.findByEmail(EmailNormalizer.normalize(email))
                 .orElseThrow(() -> new IllegalArgumentException("User not found"));
 
         if (user.getRole() != Role.BRAND_PARTNER) {
@@ -182,7 +187,7 @@ public class BrandPartnerService {
         userRepository.save(user);
 
         emailService.sendVerificationEmail(user.getEmail(), user.getVerificationCode());
-        log.info("New verification code sent to brand applicant: {}", email);
+        log.info("New verification code sent to brand applicant: {}", user.getEmail());
     }
 
     @Transactional(readOnly = true)

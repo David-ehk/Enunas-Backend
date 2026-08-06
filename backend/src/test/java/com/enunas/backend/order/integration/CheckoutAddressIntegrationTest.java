@@ -139,6 +139,36 @@ class CheckoutAddressIntegrationTest extends AbstractDiscountIntegrationTest {
         assertThat(resp.getStatusCode().value()).isEqualTo(400);
     }
 
+    @Test
+    void checkout_withSavedAddressWithMalformedPostalCode_badRequest() {
+        var brand = seedBrand("BrandA", "brand-a", "0.18");
+        long listing = seedListing(brand.brand(), brand.user(), "50.00", 10);
+        seedCustomer();
+        String token = login("customer@it.local", "Customer123!");
+
+        // UserAddressDto.postalCode has no German-format pattern, so this saves fine — but
+        // ShippingAddressDto requires ^\d{5}$, and the country check alone would let it through.
+        Map<String, Object> malformedAddress = new HashMap<>();
+        malformedAddress.put("firstName", "Jane");
+        malformedAddress.put("lastName", "Doe");
+        malformedAddress.put("street", "Hauptstrasse");
+        malformedAddress.put("houseNumber", "1");
+        malformedAddress.put("postalCode", "ABC123");
+        malformedAddress.put("city", "Berlin");
+        malformedAddress.put("country", "DE");
+        ResponseEntity<Map> created = rest.exchange("/customer/addresses", HttpMethod.POST,
+                new HttpEntity<>(malformedAddress, auth(token)), Map.class);
+        long addressId = ((Number) created.getBody().get("id")).longValue();
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("items", List.of(item(listing, 1)));
+        body.put("savedAddressId", addressId);
+        ResponseEntity<Map> resp = rest.exchange("/orders", HttpMethod.POST,
+                new HttpEntity<>(body, auth(token)), Map.class);
+
+        assertThat(resp.getStatusCode().value()).isEqualTo(400);
+    }
+
     private long createSavedAddress(String token, String firstName, String lastName) {
         Map<String, Object> body = new HashMap<>();
         body.put("firstName", firstName);

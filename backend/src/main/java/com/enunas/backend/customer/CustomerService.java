@@ -27,8 +27,17 @@ public class CustomerService {
     /** Server-side: create the matching Customer record when a CUSTOMER user signs up. */
     @Transactional
     public Customer createForUser(User user) {
+        return createForUser(user, null, null, null);
+    }
+
+    /** Overload for signups that arrive with known profile data (e.g. Google OAuth). */
+    @Transactional
+    public Customer createForUser(User user, String firstName, String lastName, String profileImageUrl) {
         Customer customer = Customer.builder()
                 .user(user)
+                .firstName(firstName)
+                .lastName(lastName)
+                .profileImageUrl(profileImageUrl)
                 .preferredStyles(new ArrayList<>())
                 .favoriteBrands(new ArrayList<>())
                 .favoriteCategories(new ArrayList<>())

@@ -1,5 +1,6 @@
 package com.enunas.backend.config;
 
+import com.enunas.backend.user.EmailNormalizer;
 import com.enunas.backend.user.Role;
 import com.enunas.backend.user.User;
 import com.enunas.backend.user.UserRepository;
@@ -26,18 +27,22 @@ public class DataInitializer implements CommandLineRunner {
 
     @Override
     public void run(String... args) {
-        if (!userRepository.existsByEmail(adminEmail)) {
+        // ADMIN_EMAIL is operator-supplied and may carry padding or uppercase. Everything else
+        // (login, password reset, ...) looks users up by the normalized form, so seeding a raw
+        // value would create a second, unreachable ADMIN row on every differently-cased restart.
+        String normalizedAdminEmail = EmailNormalizer.normalize(adminEmail);
+        if (!userRepository.existsByEmail(normalizedAdminEmail)) {
             User admin = User.builder()
-                    .email(adminEmail)
+                    .email(normalizedAdminEmail)
                     .password(passwordEncoder.encode(adminPassword))
                     .role(Role.ADMIN)
                     .enabled(true)
                     .adminApproved(true)
                     .build();
             userRepository.save(admin);
-            log.info("Admin account created for {}", adminEmail);
+            log.info("Admin account created for {}", normalizedAdminEmail);
         } else {
-            log.info("Admin account already exists for {}", adminEmail);
+            log.info("Admin account already exists for {}", normalizedAdminEmail);
         }
     }
 }

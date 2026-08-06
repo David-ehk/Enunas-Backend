@@ -68,6 +68,10 @@ mollie:
   webhook:
     url: ${MOLLIE_WEBHOOK_URL}
 
+google:
+  oauth:
+    client-id: ${GOOGLE_OAUTH_CLIENT_ID}
+
 app:
   frontend:
     base-url: ${FRONTEND_BASE_URL:http://localhost:3000}
