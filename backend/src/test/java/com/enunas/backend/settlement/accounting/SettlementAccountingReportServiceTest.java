@@ -156,4 +156,22 @@ class SettlementAccountingReportServiceTest {
                         && l.getAmount().compareTo(new BigDecimal("3.57")) == 0
                         && l.getVatRate().compareTo(BigDecimal.ZERO) == 0)).isTrue();
     }
+
+    @Test
+    void ledgerInternalInvariantViolation_forcesUnreconciled() {
+        // Total amount doesn't match commissionGross + payoutAmount: 119.01 != (21.42 + 97.58)
+        var aggResult = agg(1L, "18.00", "3.42", "97.58", "0.00", "0.00", "119.01", 1, 0);
+        lenient().when(ledgerRepository.aggregateAccountingByBrandForPeriod(any(), any())).thenReturn(List.of(aggResult));
+        lenient().when(brandPartnerRepository.findById(1L)).thenReturn(Optional.of(
+                BrandPartner.builder().brandName("BrandA").build()));
+        lenient().when(payoutRepository.sumPaidAmountInRange(any(), any())).thenReturn(new BigDecimal("97.58"));
+        lenient().when(payoutRepository.countPaidPayoutsInRange(any(), any())).thenReturn(1L);
+        lenient().when(accountingInputRepository.findByPeriod("2026-05")).thenReturn(Optional.empty());
+
+        SettlementAccountingReportDto report = service.generateReport("SET-2026-05");
+
+        assertThat(report.getReconciliationDifference()).isEqualByComparingTo("0.01");
+        assertThat(report.getReconciliationStatus()).isEqualTo(ReconciliationStatus.UNRECONCILED);
+        assertThat(report.getReconciliationNote()).contains("Ledger-internal invariant violated");
+    }
 }
