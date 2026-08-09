@@ -41,11 +41,16 @@ build/
 .mcp.json
 
 ### Application Configs ###
+# Real per-environment configs — carry live secrets, never commit.
 application-local.yaml
 application-dev.yaml
 application-prod.yaml
 application-*.yaml
 !application-example.yaml
+# Test-only profiles are secret-free (dummy/test values only, see file headers) and MUST be
+# committed — without them a clean checkout can't run `./mvnw test` (see backend/CLAUDE.md).
+!application-test.yaml
+!application-mock-payments.yaml
 
 ### Logs ###
 logs/

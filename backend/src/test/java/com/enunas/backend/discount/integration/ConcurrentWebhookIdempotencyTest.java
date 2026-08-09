@@ -48,9 +48,10 @@ class ConcurrentWebhookIdempotencyTest extends AbstractDiscountIntegrationTest {
                 Integer.class, oid);
         assertThat(paymentEntries).isEqualTo(1);
 
-        // Brand credited exactly once: no-discount domestic payout on gross 119 = 97.58.
-        assertThat(brandPending(a.brand().getId())).isEqualByComparingTo("97.58");
+        // Brand credited exactly once: no-discount domestic payout on gross 119 + shipping 4.99 = 102.57
+        // (Shipping is added to brand payout; 97.58 + 4.99 = 102.57).
+        assertThat(brandPending(a.brand().getId())).isEqualByComparingTo("102.57");
         assertThat((String) orderRow(oid).get("status")).isEqualTo("PAID");
-        assertThat((BigDecimal) orderRow(oid).get("total")).isEqualByComparingTo("119.00");
+        assertThat((BigDecimal) orderRow(oid).get("total")).isEqualByComparingTo("123.99");
     }
 }

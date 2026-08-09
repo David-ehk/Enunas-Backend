@@ -265,8 +265,8 @@ class MultiBrandReturnTest extends AbstractDiscountIntegrationTest {
                 .as("Brand B's goods never came back — its balance must not move")
                 .isEqualByComparingTo(pendingBBefore);
         assertThat(brandPending(a.brand().getId()))
-                .as("Brand A's payout is reversed")
-                .isEqualByComparingTo(BigDecimal.ZERO);
+                .as("Brand A's product payout is reversed; shipping (4.99) remains as the return did not reverse it")
+                .isEqualByComparingTo(new BigDecimal("4.99"));
         assertThat(orderRow(orderId).get("status"))
                 .as("the order tracks its least-advanced return — Brand B is still REQUESTED")
                 .isEqualTo("RETURN_REQUESTED");

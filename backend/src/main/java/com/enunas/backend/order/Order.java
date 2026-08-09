@@ -70,7 +70,9 @@ public class Order {
     private String currency = "EUR";
 
     // ===== Discount snapshot (immutable; null/zero when no code was applied) =====
-    // total = subtotal − discountAmount + shippingTotal
+    // total = subtotal − discountAmount + shippingTotal — see computeTotal() below, which is the
+    // single source of truth OrderService.createOrder() calls; do not duplicate this arithmetic
+    // elsewhere.
 
     private String discountCode;
 
@@ -163,6 +165,19 @@ public class Order {
         if (items != null && items.remove(item)) {
             item.setOrder(null);
         }
+    }
+
+    // ===== Derived money =====
+
+    /**
+     * total = subtotal − discountAmount + shippingTotal. Null-safe on discountAmount/shippingTotal
+     * so it can be called on an order that hasn't gone through the discount branch (both stay null
+     * on the no-discount path) — see {@link OrderService#createOrder}, the only caller.
+     */
+    public BigDecimal computeTotal() {
+        BigDecimal discount = discountAmount != null ? discountAmount : BigDecimal.ZERO;
+        BigDecimal shipping = shippingTotal != null ? shippingTotal : BigDecimal.ZERO;
+        return subtotal.subtract(discount).add(shipping);
     }
 
     // ===== equals / hashCode =====

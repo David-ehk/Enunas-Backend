@@ -1,0 +1,10 @@
+app:
+  mock:
+    webhook-base-url: http://localhost:8080
+
+# Mollie key is not required when running with mock-payments
+mollie:
+  api:
+    key: mock_not_used
+  webhook:
+    url: http://localhost:8080/webhooks/mollie

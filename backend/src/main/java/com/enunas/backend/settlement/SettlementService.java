@@ -113,6 +113,7 @@ public class SettlementService {
                 .commissionVat(BigDecimal.ZERO)
                 .commissionGross(BigDecimal.ZERO)
                 .payoutAmount(BigDecimal.ZERO)
+                .shippingRevenue(BigDecimal.ZERO)
                 .orderCount(0L)
                 .refundCount(0L)
                 .creditNote(false)

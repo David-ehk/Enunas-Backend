@@ -1,0 +1,64 @@
+# Integration-test profile. Runs the full app context against a throwaway PostgreSQL 16
+# (Testcontainers via the tc: JDBC URL) with Flyway applying V0.0.1..V3. Combine with the
+# "mock-payments" profile so MockPaymentService replaces the real Mollie client.
+spring:
+  datasource:
+    url: jdbc:tc:postgresql:16:///enunas
+    driver-class-name: org.testcontainers.jdbc.ContainerDatabaseDriver
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    baseline-version: 0
+    locations: classpath:db/migration
+  # Mail bean is created but never exercised by the tested paths.
+  mail:
+    host: localhost
+    port: 3025
+    username: test
+    password: test
+
+server:
+  port: 0
+
+security:
+  jwt:
+    secret-key: ZW51bmFzLWludGVncmF0aW9uLXRlc3Qtc2VjcmV0LWtleS0wMTIzNDU2Nzg5LWFiY2RlZg==
+    expiration-time: 86400000
+
+admin:
+  email: seed-admin@test.local
+  password: SeedAdmin123!
+
+enunas:
+  platform:
+    commission-rate: 0.18
+  payout:
+    hold-days: 7
+    release-cron: "0 0 2 * * ?"
+  shipping:
+    default-rate: 4.99
+
+# Unused under mock-payments, but the Mollie Client bean still constructs from these.
+mollie:
+  api:
+    key: mock_not_used
+  webhook:
+    url: http://localhost/unused
+
+google:
+  oauth:
+    client-id: test-google-client-id.apps.googleusercontent.com
+
+app:
+  frontend:
+    base-url: http://localhost:3000
+  # Dead port: disables the racy 1s async webhook auto-dispatch so orders stay PENDING
+  # until the test drives confirmation deterministically.
+  mock:
+    webhook-base-url: http://localhost:1

@@ -30,7 +30,20 @@ public class BrandShippingProfile {
 
     private Integer avgShippingDays;
 
-    /** Flat shipping cost charged once per brand per order. Null/zero = free. */
+    /**
+     * Flat shipping cost charged once per brand per order, in {@link #currency}. These are two
+     * DIFFERENT, DELIBERATELY DISTINCT outcomes — {@code ShippingCostService} names and persists
+     * which one applied on every order, rather than leaving it to be inferred from the number:
+     * <ul>
+     *   <li>{@code null} — not configured. The platform default rate applies.</li>
+     *   <li>{@code 0.00} — explicit free shipping (a campaign, a premium-brand perk, etc.).</li>
+     *   <li>{@code > 0.00} — this brand's flat rate.</li>
+     * </ul>
+     */
     @Column(precision = 10, scale = 2)
     private BigDecimal shippingCost;
+
+    @Builder.Default
+    @Column(nullable = false, length = 3)
+    private String currency = "EUR";
 }

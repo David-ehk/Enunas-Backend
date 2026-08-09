@@ -23,8 +23,13 @@ public class ReconciliationService {
     /**
      * Financial drift report for one brand.
      *
-     * ledgerNetOwed  = SUM(ORDER_PAYMENT) + SUM(REFUND_REVERSAL) − SUM(PAYOUT_TRANSFER)
+     * ledgerNetOwed  = SUM(ORDER_PAYMENT + SHIPPING_REVENUE) + SUM(REFUND_REVERSAL) − SUM(PAYOUT_TRANSFER)
      *                = what the platform still owes the brand, according to the ledger
+     *
+     * SHIPPING_REVENUE counts as revenue because LedgerService.recordShippingRevenue credits it
+     * straight into BrandEconomics.pendingBalance — omitting it would make every brand with a
+     * shipping-inclusive order look permanently drifted. Shipping reversals are typed
+     * REFUND_REVERSAL, so they are already covered by the refund sum.
      *
      * ecoNetOwed     = pendingBalance + payoutBalance − outstandingDebt
      *                = what BrandEconomics thinks the platform owes the brand
@@ -74,14 +79,14 @@ public class ReconciliationService {
         BrandEconomics eco = brandEconomicsRepository.findByBrandPartner_Id(brandId)
                 .orElseThrow(() -> new IllegalArgumentException("No BrandEconomics for brand: " + brandId));
 
-        BigDecimal orderPayments  = orZero(ledgerRepository.sumOrderPaymentsForBrand(brandId));
+        BigDecimal revenueEntries = orZero(ledgerRepository.sumRevenueEntriesForBrand(brandId)); // product + shipping
         BigDecimal refunds        = orZero(ledgerRepository.sumRefundReversalsForBrand(brandId)); // negative
         BigDecimal payoutsSent    = orZero(ledgerRepository.sumPayoutTransfersForBrand(brandId));
         BigDecimal pendingLedger  = orZero(ledgerRepository.sumPendingReleaseForBrand(brandId));
         BigDecimal availableLedger= orZero(ledgerRepository.sumAvailableForBrand(brandId));
 
         // Net the platform still owes the brand (after refunds and paid-outs)
-        BigDecimal netOwed = orderPayments.add(refunds).subtract(payoutsSent);
+        BigDecimal netOwed = revenueEntries.add(refunds).subtract(payoutsSent);
 
         // Derive outstandingDebt: debt = pendingBalance + payoutBalance − netOwed
         // If positive → brand owes platform that amount (over-refunded)
@@ -89,10 +94,11 @@ public class ReconciliationService {
         BigDecimal outstandingDebt = rawDebt.max(BigDecimal.ZERO);
 
         log.warn("ReconciliationService: rebuilding brand={} — "
-                + "lifetimeRevenue={}, paidOutTotal={}, pending≈{}, available≈{}, outstandingDebt={}",
-                brandId, orderPayments, payoutsSent, pendingLedger, availableLedger, outstandingDebt);
+                + "lifetimeRevenue(product+shipping)={}, paidOutTotal={}, pending≈{}, available≈{}, outstandingDebt={}",
+                brandId, revenueEntries, payoutsSent, pendingLedger, availableLedger, outstandingDebt);
 
-        eco.setLifetimeRevenue(orderPayments);
+        // Includes shipping revenue by design — lifetimeRevenue tracks all money credited to the brand.
+        eco.setLifetimeRevenue(revenueEntries);
         eco.setPaidOutTotal(payoutsSent);
         eco.setPendingBalance(pendingLedger);
         eco.setPayoutBalance(availableLedger);
@@ -105,11 +111,11 @@ public class ReconciliationService {
     // ===== Private helpers =====
 
     private DriftReport buildReport(Long brandId, BrandEconomics eco) {
-        BigDecimal orderPayments = orZero(ledgerRepository.sumOrderPaymentsForBrand(brandId));
+        BigDecimal revenueEntries = orZero(ledgerRepository.sumRevenueEntriesForBrand(brandId)); // product + shipping
         BigDecimal refunds       = orZero(ledgerRepository.sumRefundReversalsForBrand(brandId));
         BigDecimal payoutsSent   = orZero(ledgerRepository.sumPayoutTransfersForBrand(brandId));
 
-        BigDecimal ledgerNetOwed = orderPayments.add(refunds).subtract(payoutsSent);
+        BigDecimal ledgerNetOwed = revenueEntries.add(refunds).subtract(payoutsSent);
         BigDecimal ecoNetOwed    = eco.getPendingBalance()
                 .add(eco.getPayoutBalance())
                 .subtract(eco.getOutstandingDebt());

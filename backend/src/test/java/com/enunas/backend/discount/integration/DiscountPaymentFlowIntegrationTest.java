@@ -51,10 +51,12 @@ class DiscountPaymentFlowIntegrationTest extends AbstractDiscountIntegrationTest
         assertThat(order.getStatusCode().value()).isEqualTo(201);
         long oid = orderId(order);
 
-        // ADMIN 10% on gross 119 (net 100, 18% commission). Customer pays 119×0.90 = 107.10;
-        // gross reduction 11.90; platform absorbs the whole 10.00 NET discount.
+        // ADMIN 10% on gross 119 (net 100, 18% commission). Customer pays 119×0.90 = 107.10 in
+        // product terms; + this order's one brand's shipping (GLOBAL_DEFAULT — no
+        // BrandShippingProfile seeded in this test) 4.99 = 112.09 order total. gross reduction
+        // 11.90; platform absorbs the whole 10.00 NET discount (shipping is never discounted).
         Map<String, Object> o = orderRow(oid);
-        assertThat((BigDecimal) o.get("total")).isEqualByComparingTo("107.10");
+        assertThat((BigDecimal) o.get("total")).isEqualByComparingTo("112.09");
         assertThat((BigDecimal) o.get("discount_amount")).isEqualByComparingTo("11.90");        // gross
         assertThat((BigDecimal) o.get("platform_discount_amount")).isEqualByComparingTo("10.00"); // net
         assertThat((BigDecimal) o.get("brand_discount_amount")).isEqualByComparingTo("0.00");
@@ -72,7 +74,7 @@ class DiscountPaymentFlowIntegrationTest extends AbstractDiscountIntegrationTest
         assertThat(usedCount("TESTADMIN10")).isEqualTo(1); // reserved at placement
 
         BigDecimal payAmount = jdbc.queryForObject("SELECT amount FROM payments WHERE order_id = ?", BigDecimal.class, oid);
-        assertThat(payAmount).isEqualByComparingTo("107.10");
+        assertThat(payAmount).isEqualByComparingTo("112.09"); // = order total (product 107.10 + shipping 4.99)
 
         BigDecimal baseline = brandPending(a.brand().getId());
 
@@ -80,7 +82,7 @@ class DiscountPaymentFlowIntegrationTest extends AbstractDiscountIntegrationTest
 
         assertThat((String) orderRow(oid).get("status")).isEqualTo("PAID");
         assertThat(jdbc.queryForObject("SELECT status FROM payments WHERE order_id = ?", String.class, oid)).isEqualTo("PAID");
-        assertThat(brandPending(a.brand().getId())).isEqualByComparingTo("97.58");
+        assertThat(brandPending(a.brand().getId())).isEqualByComparingTo("102.57"); // 97.58 product payout + 4.99 shipping
         BigDecimal ledgerFee = jdbc.queryForObject(
                 "SELECT platform_fee FROM ledger_entries WHERE order_id = ? AND entry_type = 'ORDER_PAYMENT'",
                 BigDecimal.class, oid);
@@ -112,9 +114,11 @@ class DiscountPaymentFlowIntegrationTest extends AbstractDiscountIntegrationTest
         long oid = orderId(order);
 
         // BRAND15 applies only to A (net 100 → net discount 15.00, split 7.50/7.50). A's customer
-        // gross = 101.15; B untouched at 59.50. Order total 160.65; gross reduction 17.85.
+        // gross = 101.15; B untouched at 59.50. Product subtotal 160.65; + shipping 4.99 per
+        // distinct brand (2 brands here, both GLOBAL_DEFAULT — no BrandShippingProfile seeded) =
+        // 9.98 -> order total 170.63. gross reduction 17.85 (shipping is never discounted).
         Map<String, Object> o = orderRow(oid);
-        assertThat((BigDecimal) o.get("total")).isEqualByComparingTo("160.65");
+        assertThat((BigDecimal) o.get("total")).isEqualByComparingTo("170.63");
         assertThat((BigDecimal) o.get("discount_amount")).isEqualByComparingTo("17.85");        // gross
         assertThat((BigDecimal) o.get("platform_discount_amount")).isEqualByComparingTo("7.50"); // net
         assertThat((BigDecimal) o.get("brand_discount_amount")).isEqualByComparingTo("7.50");
@@ -135,8 +139,8 @@ class DiscountPaymentFlowIntegrationTest extends AbstractDiscountIntegrationTest
         BigDecimal baseB = brandPending(b.brand().getId());
 
         confirmPaid(oid);
-        assertThat(brandPending(a.brand().getId())).isEqualByComparingTo("88.65");
-        assertThat(brandPending(b.brand().getId())).isEqualByComparingTo("48.79");
+        assertThat(brandPending(a.brand().getId())).isEqualByComparingTo("93.64"); // 88.65 product payout + 4.99 shipping
+        assertThat(brandPending(b.brand().getId())).isEqualByComparingTo("53.78"); // 48.79 product payout + 4.99 shipping
 
         asAdmin(admin, () -> orderService.updateOrderStatus(oid, OrderStatus.CANCELLED));
         assertThat(brandPending(a.brand().getId())).isEqualByComparingTo(baseA);
@@ -280,7 +284,7 @@ class DiscountPaymentFlowIntegrationTest extends AbstractDiscountIntegrationTest
                 BigDecimal.class, oid);
         assertThat(fee).isEqualByComparingTo("18.00");
         assertThat(payout).isEqualByComparingTo("82.00");
-        assertThat(brandPending(a.brand().getId())).isEqualByComparingTo("82.00");
+        assertThat(brandPending(a.brand().getId())).isEqualByComparingTo("86.99"); // 82.00 product payout + 4.99 shipping
     }
 
     // ---- 8. Partial refund prorates the stored net payout ----
@@ -297,16 +301,19 @@ class DiscountPaymentFlowIntegrationTest extends AbstractDiscountIntegrationTest
 
         long oid = orderId(postOrder(custToken, "BRAND15", List.of(item(listing, 1))));
         confirmPaid(oid);
-        assertThat(brandPending(a.brand().getId())).isEqualByComparingTo("88.65"); // BRAND15 cash payout
+        assertThat(brandPending(a.brand().getId())).isEqualByComparingTo("93.64"); // 88.65 product payout + 4.99 shipping
 
-        // Refund €40.46 = exactly 40% of the €101.15 order total -> 40% of the net payout reversed.
+        // Order total is now 101.15 (product) + 4.99 (this order's one brand, GLOBAL_DEFAULT
+        // shipping) = 106.14 -> refunding €40.46 is 40.46/106.14 ≈ 38.1195% of the order total, not
+        // the pre-shipping 40%. recordRefund(Order, BigDecimal, String) fractions the reversal
+        // against order.getTotal(), so that fraction of the net payout (product + shipping) is reversed.
         TransactionTemplate tx = new TransactionTemplate(txManager);
         tx.executeWithoutResult(s ->
                 ledgerService.recordRefund(orderRepository.findById(oid).orElseThrow(),
                         new BigDecimal("40.46"), "ref-partial"));
 
-        // 88.65 - (88.65 * 40.46/101.15) = 88.65 - 35.46 = 53.19
-        assertThat(brandPending(a.brand().getId())).isEqualByComparingTo("53.19");
+        // (88.65 + 4.99) - ((88.65 + 4.99) * 40.46/106.14) = 93.64 - 35.69 = 57.95
+        assertThat(brandPending(a.brand().getId())).isEqualByComparingTo("57.95");
     }
 
     // ===== helpers =====

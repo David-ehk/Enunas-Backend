@@ -10,4 +10,6 @@ import java.util.Optional;
 public interface BrandShippingProfileRepository extends JpaRepository<BrandShippingProfile, Long> {
 
     Optional<BrandShippingProfile> findByBrandPartner(BrandPartner brandPartner);
+
+    Optional<BrandShippingProfile> findByBrandPartner_Id(Long brandPartnerId);
 }

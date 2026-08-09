@@ -25,6 +25,9 @@ public class OrderResponseDto {
     private List<OrderItemResponseDto> items;
     private BigDecimal subtotal;
     private BigDecimal shippingTotal;
+    /** Per-brand shipping charge for this order. Empty for orders created before this feature —
+     * they carry no snapshot rows and remain fully readable; {@code shippingTotal} stays 0 for them. */
+    private List<ShippingSnapshotDto> shippingSnapshots;
     private BigDecimal total;
     private String currency;
     private String discountCode;

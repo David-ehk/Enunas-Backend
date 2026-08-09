@@ -2,11 +2,14 @@ package com.enunas.backend.admin;
 
 import com.enunas.backend.admin.dto.AdminProductResponseDto;
 import com.enunas.backend.admin.dto.RejectionDto;
+import com.enunas.backend.admin.dto.SetShippingProfileDto;
 import com.enunas.backend.brandpartner.BrandPartner;
 import com.enunas.backend.brandpartner.BrandPartnerRepository;
 import com.enunas.backend.brandpartner.BrandStatus;
 import com.enunas.backend.brandpartner.brandpayoutprofile.BrandPayoutProfile;
 import com.enunas.backend.brandpartner.brandpayoutprofile.BrandPayoutProfileRepository;
+import com.enunas.backend.brandpartner.brandshippingprofile.BrandShippingProfile;
+import com.enunas.backend.brandpartner.brandshippingprofile.BrandShippingProfileRepository;
 import com.enunas.backend.ledger.ReconciliationService;
 import com.enunas.backend.payout.PayoutService;
 import com.enunas.backend.payout.PayoutStatus;
@@ -50,6 +53,7 @@ public class AdminService {
 
     private final BrandPartnerRepository brandPartnerRepository;
     private final BrandPayoutProfileRepository brandPayoutProfileRepository;
+    private final BrandShippingProfileRepository brandShippingProfileRepository;
     private final ReconciliationService reconciliationService;
     private final PayoutService payoutService;
     private final ProductRepository productRepository;
@@ -193,6 +197,59 @@ public class AdminService {
                                 .build())
         );
         log.info("Admin set payout profile for brand {}: iban={}", brand.getBrandName(), iban);
+        return BrandPartnerResponseDto.from(brand);
+    }
+
+    /**
+     * Sets (or replaces) a brand's shipping profile.
+     *
+     * <p><b>FULL-REPLACE SEMANTICS — read this before calling.</b> Despite being exposed over HTTP
+     * {@code PATCH}, this is <b>not</b> a partial update. All three mutable fields
+     * ({@code shippingCost}, {@code originCountry}, {@code avgShippingDays}) are written
+     * unconditionally from the DTO on every call. <b>A field omitted from the request JSON
+     * deserializes to {@code null} and therefore CLEARS the stored value.</b> Sending
+     * {@code {"avgShippingDays": 3}} against a brand configured at €9.99 wipes {@code shippingCost}
+     * back to "not configured", and {@code FlatRateShippingCostService} then falls back to the
+     * platform {@code GLOBAL_DEFAULT} rate on that brand's every subsequent order.
+     *
+     * <p><b>Contract for clients: always submit all three fields together</b>, echoing back the
+     * values you do not intend to change. This is a form-style "save the whole shipping config"
+     * endpoint, not a field-level patch.
+     *
+     * <p>This is deliberate rather than accidental: it is the only behaviour that keeps
+     * {@code shippingCost: null} ("clear back to not configured") reachable at all, given
+     * {@link SetShippingProfileDto} has no way to distinguish "field absent from JSON" from "field
+     * present and explicitly null" without an {@code Optional}/{@code JsonNullable} wrapper type.
+     * The three shippingCost outcomes it must preserve — {@code null} = unset, {@code 0.00} =
+     * explicit free shipping, {@code > 0.00} = flat rate — are documented on
+     * {@link com.enunas.backend.brandpartner.brandshippingprofile.BrandShippingProfile#getShippingCost()}.
+     * Introducing real presence-tracking is the correct long-term fix and would make this a true
+     * PATCH; until then the contract above is authoritative and is pinned by
+     * {@code AdminShippingProfileIntegrationTest.patchOmittingShippingCost_clearsIt_fullReplaceContract}.
+     */
+    @Transactional
+    public BrandPartnerResponseDto setBrandShippingProfile(Long brandId, SetShippingProfileDto dto) {
+        BrandPartner brand = findBrand(brandId);
+        brandShippingProfileRepository.findByBrandPartner_Id(brandId).ifPresentOrElse(
+                profile -> {
+                    // Unconditional by design — see this method's javadoc. Do NOT "fix" these into
+                    // null-guarded setters without also giving the DTO presence-tracking, or
+                    // clearing shippingCost back to "not configured" becomes impossible.
+                    profile.setShippingCost(dto.getShippingCost());
+                    profile.setOriginCountry(dto.getOriginCountry());
+                    profile.setAvgShippingDays(dto.getAvgShippingDays());
+                    brandShippingProfileRepository.save(profile);
+                },
+                () -> brandShippingProfileRepository.save(
+                        BrandShippingProfile.builder()
+                                .brandPartner(brand)
+                                .shippingCost(dto.getShippingCost())
+                                .originCountry(dto.getOriginCountry())
+                                .avgShippingDays(dto.getAvgShippingDays())
+                                .currency("EUR")
+                                .build())
+        );
+        log.info("Admin set shipping profile for brand {}: shippingCost={}", brand.getBrandName(), dto.getShippingCost());
         return BrandPartnerResponseDto.from(brand);
     }
 

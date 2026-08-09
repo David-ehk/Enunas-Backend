@@ -153,6 +153,26 @@ class SettlementIntegrationTest extends AbstractDiscountIntegrationTest {
         assertThat(bd(jun.get("commissionNet"))).isEqualByComparingTo("18.00");
     }
 
+    // ===== 6. Shipping revenue reports separately from commission and folds into payout =====
+    @Test
+    void shippingRevenueAggregatesSeparately_fromCommissionAndPayout() {
+        seedAdmin();
+        BrandFixture a = seedBrand("BrandA", "brand-a", "0.18");
+        long bid = a.brand().getId();
+        String admin = login("admin@it.local", "Admin123!");
+
+        // One product sale (net 100, 18% commission -> 18.00 net + 3.42 VAT, payout 97.58) plus
+        // one shipping charge (4.99, zero commission) in the same period.
+        insertLedger(bid, "ORDER_PAYMENT", "2026-05-10 12:00:00", "18.00", "3.42", "97.58", "119.00");
+        insertLedger(bid, "SHIPPING_REVENUE", "2026-05-10 12:00:00", "0.00", "0.00", "4.99", "4.99");
+
+        Map<String, Object> may = row(admin, "2026-05", bid);
+        assertThat(bd(may.get("commissionNet"))).isEqualByComparingTo("18.00");    // unaffected by shipping
+        assertThat(bd(may.get("commissionVat"))).isEqualByComparingTo("3.42");
+        assertThat(bd(may.get("shippingRevenue"))).isEqualByComparingTo("4.99");   // reported separately
+        assertThat(bd(may.get("payoutAmount"))).isEqualByComparingTo("102.57");    // 97.58 product + 4.99 shipping
+    }
+
     // ===== helpers =====
 
     private void insertLedger(long brandId, String entryType, String createdAtUtc,

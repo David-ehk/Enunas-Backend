@@ -96,9 +96,34 @@ public class DiscountService {
      * to {@code items}. Reserves one usage atomically (at placement); a lost race rejects the
      * order. Each item must already carry its commission snapshot (commissionRate set) so the
      * non-negativity guard can verify the platform fee and brand payout never go negative.
+     *
+     * <p>Thin wrapper over {@link #validateAndCompute} — the ONLY difference is the usage
+     * reservation. Use this at real order placement; use {@link #validateAndCompute} for a
+     * repeatable, non-committal quote (checkout preview) that must not burn a usage.
      */
     @Transactional
     public DiscountApplication validateAndApply(String rawCode, List<OrderItem> items) {
+        DiscountApplication application = validateAndCompute(rawCode, items);
+
+        // Reserve usage atomically — only succeeds while active and below the limit.
+        if (discountCodeRepository.reserveUsage(application.code().getId()) == 0) {
+            throw new IllegalStateException("Discount code is no longer available");
+        }
+        return application;
+    }
+
+    /**
+     * Pure validation + per-item share computation, with NO side effects — identical to
+     * {@link #validateAndApply} except that it never reserves a usage. This is what
+     * {@code OrderService#previewOrder} calls, so the checkout preview quotes the SAME
+     * discount-adjusted total the real charge will use without incrementing {@code usedCount}.
+     *
+     * <p>The {@code maxUses} check here is advisory-only for a preview: a code sitting at its
+     * limit still throws, and the authoritative atomic guard remains the {@code reserveUsage}
+     * conditional update in {@link #validateAndApply}.
+     */
+    @Transactional(readOnly = true)
+    public DiscountApplication validateAndCompute(String rawCode, List<OrderItem> items) {
         DiscountCode code = discountCodeRepository.findByCodeIgnoreCase(rawCode.trim())
                 .orElseThrow(() -> new IllegalArgumentException("Discount code not found: " + rawCode));
 
@@ -164,12 +189,7 @@ public class DiscountService {
             totalDiscount = totalDiscount.add(platformShareNet).add(brandShareNet);
         }
 
-        // Reserve usage atomically — only succeeds while active and below the limit.
-        if (discountCodeRepository.reserveUsage(code.getId()) == 0) {
-            throw new IllegalStateException("Discount code is no longer available");
-        }
-
-        log.info("Discount {} applied (type={}, percent={}): discount={} platform={} brand={}",
+        log.info("Discount {} computed (type={}, percent={}): discount={} platform={} brand={}",
                 code.getCode(), code.getType(), percent, totalDiscount, totalPlatform, totalBrand);
 
         return new DiscountApplication(code, code.getType(), percent, shares,

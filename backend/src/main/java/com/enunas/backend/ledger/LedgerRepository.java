@@ -27,6 +27,7 @@ public interface LedgerRepository extends JpaRepository<LedgerEntry, Long> {
         BigDecimal getCommissionVat();
         BigDecimal getPayoutAmount();
         BigDecimal getTotalAmount();
+        BigDecimal getShippingRevenue();
         Long getOrderCount();
         Long getRefundCount();
     }
@@ -35,6 +36,9 @@ public interface LedgerRepository extends JpaRepository<LedgerEntry, Long> {
      * Sums each brand's ledger figures over a period (UTC bounds, end-exclusive), counting
      * ORDER_PAYMENT and REFUND_REVERSAL entries by their own created_at. REFUND_REVERSAL rows are
      * stored negative, so a plain period-filtered SUM nets refunds against sales automatically.
+     * SHIPPING_REVENUE is included so payoutAmount/totalAmount correctly include shipping money;
+     * shippingRevenue itself is reported as its own column, gross (not netted against a later
+     * shipping-specific refund — see this method's caller-side javadoc for why that's fine).
      */
     @Query("""
            SELECT le.brandPartnerId AS brandId,
@@ -42,12 +46,15 @@ public interface LedgerRepository extends JpaRepository<LedgerEntry, Long> {
                   COALESCE(SUM(le.commissionVat), 0) AS commissionVat,
                   COALESCE(SUM(le.brandPayout), 0)   AS payoutAmount,
                   COALESCE(SUM(le.totalAmount), 0)   AS totalAmount,
+                  COALESCE(SUM(CASE WHEN le.entryType = com.enunas.backend.ledger.LedgerEntryType.SHIPPING_REVENUE
+                                     THEN le.brandPayout ELSE 0 END), 0) AS shippingRevenue,
                   SUM(CASE WHEN le.entryType = com.enunas.backend.ledger.LedgerEntryType.ORDER_PAYMENT   THEN 1 ELSE 0 END) AS orderCount,
                   SUM(CASE WHEN le.entryType = com.enunas.backend.ledger.LedgerEntryType.REFUND_REVERSAL THEN 1 ELSE 0 END) AS refundCount
            FROM LedgerEntry le
            WHERE le.createdAt >= :startUtc AND le.createdAt < :endUtc
              AND le.entryType IN (com.enunas.backend.ledger.LedgerEntryType.ORDER_PAYMENT,
-                                  com.enunas.backend.ledger.LedgerEntryType.REFUND_REVERSAL)
+                                  com.enunas.backend.ledger.LedgerEntryType.REFUND_REVERSAL,
+                                  com.enunas.backend.ledger.LedgerEntryType.SHIPPING_REVENUE)
            GROUP BY le.brandPartnerId
            """)
     List<PeriodAggregate> aggregateByBrandForPeriod(
@@ -67,6 +74,18 @@ public interface LedgerRepository extends JpaRepository<LedgerEntry, Long> {
            ORDER BY le.id ASC
            """)
     List<LedgerEntry> findActivePaymentEntriesByOrderAndBrand(
+            @Param("orderId") Long orderId,
+            @Param("brandPartnerId") Long brandPartnerId);
+
+    @Query("""
+           SELECT le FROM LedgerEntry le
+           WHERE le.orderId = :orderId
+             AND le.brandPartnerId = :brandPartnerId
+             AND le.entryType = com.enunas.backend.ledger.LedgerEntryType.SHIPPING_REVENUE
+             AND le.status <> com.enunas.backend.ledger.LedgerEntryStatus.REVERSED
+           ORDER BY le.id ASC
+           """)
+    List<LedgerEntry> findActiveShippingEntriesByOrderAndBrand(
             @Param("orderId") Long orderId,
             @Param("brandPartnerId") Long brandPartnerId);
 
@@ -109,8 +128,14 @@ public interface LedgerRepository extends JpaRepository<LedgerEntry, Long> {
 
     // ===== Reconciliation (per-brand, used for drift check and rebuild) =====
 
-    @Query("SELECT SUM(le.brandPayout) FROM LedgerEntry le WHERE le.brandPartnerId = :brandId AND le.entryType = com.enunas.backend.ledger.LedgerEntryType.ORDER_PAYMENT")
-    Optional<BigDecimal> sumOrderPaymentsForBrand(@Param("brandId") Long brandId);
+    /**
+     * Sums every revenue-side entry credited to a brand: product money (ORDER_PAYMENT) AND shipping
+     * money (SHIPPING_REVENUE). Both credit BrandEconomics.pendingBalance/lifetimeRevenue, so
+     * reconciliation must count both or every brand with a shipping-inclusive order shows false
+     * drift. REFUND_REVERSAL and PAYOUT_TRANSFER have their own sums and are deliberately excluded.
+     */
+    @Query("SELECT SUM(le.brandPayout) FROM LedgerEntry le WHERE le.brandPartnerId = :brandId AND le.entryType IN (com.enunas.backend.ledger.LedgerEntryType.ORDER_PAYMENT, com.enunas.backend.ledger.LedgerEntryType.SHIPPING_REVENUE)")
+    Optional<BigDecimal> sumRevenueEntriesForBrand(@Param("brandId") Long brandId);
 
     @Query("SELECT SUM(le.brandPayout) FROM LedgerEntry le WHERE le.brandPartnerId = :brandId AND le.entryType = com.enunas.backend.ledger.LedgerEntryType.REFUND_REVERSAL")
     Optional<BigDecimal> sumRefundReversalsForBrand(@Param("brandId") Long brandId);

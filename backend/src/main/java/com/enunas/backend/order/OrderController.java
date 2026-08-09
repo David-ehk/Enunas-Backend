@@ -1,6 +1,7 @@
 package com.enunas.backend.order;
 
 import com.enunas.backend.order.dto.CreateOrderDto;
+import com.enunas.backend.order.dto.OrderPreviewResponseDto;
 import com.enunas.backend.order.dto.OrderResponseDto;
 import com.enunas.backend.order.dto.ReturnRequestDto;
 import com.enunas.backend.user.User;
@@ -28,6 +29,14 @@ public class OrderController {
             @Valid @RequestBody CreateOrderDto dto,
             @AuthenticationPrincipal User buyer) {
         return ResponseEntity.status(HttpStatus.CREATED).body(orderService.createOrder(dto, buyer));
+    }
+
+    @PostMapping("/preview")
+    @PreAuthorize("hasRole('CUSTOMER')")
+    public ResponseEntity<OrderPreviewResponseDto> previewOrder(
+            @Valid @RequestBody CreateOrderDto dto,
+            @AuthenticationPrincipal User buyer) {
+        return ResponseEntity.ok(orderService.previewOrder(dto, buyer));
     }
 
     @GetMapping("/me")

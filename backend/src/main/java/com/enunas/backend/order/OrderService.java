@@ -10,11 +10,13 @@ import com.enunas.backend.exception.OrderNotFoundException;
 import com.enunas.backend.order.dto.CancelOrderDto;
 import com.enunas.backend.order.dto.CreateOrderDto;
 import com.enunas.backend.order.dto.OrderItemRequestDto;
+import com.enunas.backend.order.dto.OrderPreviewResponseDto;
 import com.enunas.backend.order.dto.OrderResponseDto;
 import com.enunas.backend.order.dto.ReturnRequestDto;
 import com.enunas.backend.order.dto.ShipmentConfirmationDto;
 import com.enunas.backend.order.dto.ShippingAddressDto;
 import com.enunas.backend.order.dto.ShippingProblemDto;
+import com.enunas.backend.order.dto.ShippingSnapshotDto;
 import com.enunas.backend.order.dto.UploadReturnLabelDto;
 import com.enunas.backend.order.validation.AllowedShippingCountries;
 import com.enunas.backend.exception.PaymentException;
@@ -32,6 +34,8 @@ import com.enunas.backend.product.productvariant.ProductVariantRepository;
 import com.enunas.backend.ledger.LedgerService;
 import com.enunas.backend.discount.DiscountApplication;
 import com.enunas.backend.discount.DiscountService;
+import com.enunas.backend.shipping.ShippingCostResult;
+import com.enunas.backend.shipping.ShippingCostService;
 import com.enunas.backend.user.EmailService;
 import com.enunas.backend.user.User;
 import jakarta.validation.Validator;
@@ -83,6 +87,8 @@ public class OrderService {
     private final ReturnAddressSnapshotFactory returnAddressSnapshotFactory;
     private final UserAddressRepository userAddressRepository;
     private final Validator validator;
+    private final ShippingCostService shippingCostService;
+    private final OrderShippingSnapshotRepository orderShippingSnapshotRepository;
 
     @Value("${app.frontend.base-url}")
     private String frontendBaseUrl;
@@ -101,95 +107,9 @@ public class OrderService {
     @PreAuthorize("hasRole('CUSTOMER')")
     @Transactional
     public OrderResponseDto createOrder(CreateOrderDto dto, User buyer) {
-        // 1. Resolve listings (price source) and validate availability/window.
-        List<ProductListing> listings = resolveAndValidateListings(dto.getItems());
+        OrderPricingDraft draft = buildPricingDraft(dto, buyer, true);
 
-        // 2. Validate stock availability — decrement happens at PAID, not here.
-        for (int i = 0; i < dto.getItems().size(); i++) {
-            OrderItemRequestDto itemDto = dto.getItems().get(i);
-            ProductVariant variant = listings.get(i).getVariant();
-            if (!variant.hasStock(itemDto.getQuantity())) {
-                throw new IllegalStateException(
-                        "Insufficient stock for: " + listings.get(i).getProduct().getName() +
-                        " (" + variant.getColor() + " / " + variant.getSize() + ")" +
-                        " — requested: " + itemDto.getQuantity() +
-                        ", available: " + variant.getStockQuantity());
-            }
-        }
-
-        // 3. Build order items with price snapshot from listing.
-        List<OrderItem> orderItems = new ArrayList<>();
-        BigDecimal subtotal = BigDecimal.ZERO;
-        Set<Long> distinctBrandIds = new HashSet<>();
-        Map<Long, BigDecimal> brandSubtotals = new HashMap<>(); // brandId → product revenue only
-
-        for (int i = 0; i < dto.getItems().size(); i++) {
-            OrderItemRequestDto itemDto = dto.getItems().get(i);
-            ProductListing pl = listings.get(i);
-            ProductVariant variant = pl.getVariant();
-
-            // lineGross is the customer-facing gross (sale gross if on sale, else regular gross).
-            BigDecimal effectiveGross = pl.getEffectiveGross();
-            BigDecimal lineGross = effectiveGross.multiply(BigDecimal.valueOf(itemDto.getQuantity()));
-            subtotal = subtotal.add(lineGross);
-
-            BrandPartner brand = pl.getProduct().getBrand();
-            boolean domestic = (brand == null) || brand.isDomestic();
-            BigDecimal rate = brand != null ? getBrandCommissionRate(brand.getId()) : BigDecimal.ZERO;
-            if (brand != null) {
-                distinctBrandIds.add(brand.getId());
-                brandSubtotals.merge(brand.getId(), lineGross, BigDecimal::add);
-            }
-
-            OrderItem item = OrderItem.builder()
-                    .variant(variant)
-                    .productSnapshotName(pl.getProduct().getName())
-                    .variantSnapshotSku(variant.getSku())
-                    .variantSnapshotColor(variant.getColor())
-                    .variantSnapshotSize(variant.getSize())
-                    .priceAtPurchase(pl.getPrice())
-                    .discountPriceAtPurchase(pl.getDiscountPrice())
-                    .quantity(itemDto.getQuantity())
-                    .lineGross(lineGross)
-                    .lineTotal(lineGross)
-                    .build();
-            // Pre-discount pass: freezes lineNet/baseCommissionNet so the discount guard can read them.
-            item.applyMoneySnapshot(rate, domestic, vatRateProduct, vatRateService);
-            orderItems.add(item);
-        }
-
-        // 4. Apply optional discount code (max one per order — no stacking). Re-runs the money
-        //    snapshot per item with the NET discount shares folded in, so the ledger (which reads
-        //    commissionNet/commissionVat/brandPayout) stays correct per brand. Reserves usage.
-        DiscountApplication discount = null;
-        if (dto.getDiscountCode() != null && !dto.getDiscountCode().isBlank()) {
-            discount = discountService.validateAndApply(dto.getDiscountCode(), orderItems);
-            for (int i = 0; i < orderItems.size(); i++) {
-                OrderItem item = orderItems.get(i);
-                DiscountApplication.ItemShare share = discount.itemShares().get(i);
-                // percent reduces the customer price only for items the code actually applies to
-                // (a BRAND code leaves other brands' items at full price → zero share, zero percent).
-                BigDecimal itemPercent = share.total().signum() > 0 ? discount.percent() : BigDecimal.ZERO;
-                item.applyMoneySnapshot(item.getCommissionRate(), Boolean.TRUE.equals(item.getBrandIsDomestic()),
-                        vatRateProduct, vatRateService,
-                        share.platformShareNet(), share.brandShareNet(), itemPercent);
-            }
-        }
-
-        // Customer-facing reduction is GROSS (= Σ lineGross − Σ customerGrossAfterDiscount); the
-        // platform/brand discount aggregates on the Order are the NET absorption shares.
-        BigDecimal customerSubtotalAfterDiscount = orderItems.stream()
-                .map(OrderItem::getCustomerGrossAfterDiscount)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-        BigDecimal discountAmount = subtotal.subtract(customerSubtotalAfterDiscount);
-
-        // 5. Free shipping — the platform never charges, collects, or splits shipping. The brand
-        //    bears its own carrier cost off-platform. shippingTotal is always 0 (column retained).
-        BigDecimal shippingTotal = BigDecimal.ZERO;
-
-        // 6. Build & persist order.
-        ShippingAddressDto resolvedAddress = resolveShippingAddress(dto, buyer);
-
+        ShippingAddressDto resolvedAddress = draft.resolvedAddress();
         ShippingAddress address = ShippingAddress.builder()
                 .firstName(resolvedAddress.getFirstName())
                 .lastName(resolvedAddress.getLastName())
@@ -207,28 +127,42 @@ public class OrderService {
                 .buyer(buyer)
                 .status(OrderStatus.PENDING)
                 .shippingAddress(address)
-                .subtotal(subtotal)
-                .shippingTotal(shippingTotal) // always 0 — free shipping
-                // Goods-only discounted total — this is what Mollie charges and the webhook verifies.
-                .total(subtotal.subtract(discountAmount))
-                .currency(listings.get(0).getCurrency())
+                .subtotal(draft.subtotal())
+                .shippingTotal(draft.shippingTotal())
+                .currency(draft.currency())
                 .notes(dto.getNotes());
 
-        if (discount != null) {
+        if (draft.discount() != null) {
             orderBuilder
-                    .discountCode(discount.code().getCode())
-                    .discountType(discount.type())
-                    .discountPercent(discount.percent())
-                    .discountAmount(discountAmount)                              // gross reduction
-                    .platformDiscountAmount(discount.platformDiscountAmount())  // net absorption share
-                    .brandDiscountAmount(discount.brandDiscountAmount());       // net absorption share
+                    .discountCode(draft.discount().code().getCode())
+                    .discountType(draft.discount().type())
+                    .discountPercent(draft.discount().percent())
+                    .discountAmount(draft.discountAmount())
+                    .platformDiscountAmount(draft.discount().platformDiscountAmount())
+                    .brandDiscountAmount(draft.discount().brandDiscountAmount());
         }
 
         Order order = orderBuilder.build();
+        // total = subtotal - discountAmount + shippingTotal. This is what Mollie charges and the
+        // webhook verifies — see Order.computeTotal().
+        order.setTotal(order.computeTotal());
 
         Order saved = orderRepository.save(order);
-        orderItems.forEach(saved::addItem);
-        orderItemRepository.saveAll(orderItems);
+        draft.orderItems().forEach(saved::addItem);
+        orderItemRepository.saveAll(draft.orderItems());
+
+        List<OrderShippingSnapshot> snapshots = draft.shippingLines().stream()
+                .map(line -> OrderShippingSnapshot.builder()
+                        .orderId(saved.getId())
+                        .brandPartnerId(line.brandId())
+                        .amount(line.result().amount())
+                        .currency(line.result().currency())
+                        .calculationMethod(line.result().method())
+                        .ruleVersion(line.result().ruleVersion())
+                        .brandShippingProfileId(line.result().brandShippingProfileId())
+                        .build())
+                .toList();
+        orderShippingSnapshotRepository.saveAll(snapshots);
 
         String redirectUrl = frontendBaseUrl + "/orders/" + saved.getOrderNumber() + "/confirmation";
         PaymentResult paymentResult;
@@ -256,8 +190,163 @@ public class OrderService {
                 .build());
 
         log.info("Order created: {} for buyer: {} (brands: {})",
-                saved.getOrderNumber(), buyer.getEmail(), distinctBrandIds.size());
-        return OrderResponseDto.from(saved, paymentResult.checkoutUrl());
+                saved.getOrderNumber(), buyer.getEmail(), draft.shippingLines().size());
+
+        return OrderResponseDto.from(saved, paymentResult.checkoutUrl())
+                .toBuilder()
+                .shippingSnapshots(mapShippingSnapshots(saved, snapshots))
+                .build();
+    }
+
+    @PreAuthorize("hasRole('CUSTOMER')")
+    @Transactional(readOnly = true)
+    public OrderPreviewResponseDto previewOrder(CreateOrderDto dto, User buyer) {
+        return OrderPreviewResponseDto.from(buildPricingDraft(dto, buyer, false));
+    }
+
+    /**
+     * Prices a cart end to end — listing resolution, stock check, per-item money snapshot,
+     * optional discount application, and per-brand shipping — without persisting anything. Shared
+     * by {@link #createOrder} and {@link #previewOrder} so the checkout preview and the actual
+     * Mollie charge can never drift.
+     *
+     * @param applyDiscount controls ONLY whether the code's usage is reserved, not whether the
+     *                       discount is computed. Both paths compute the identical discount split,
+     *                       so the preview quotes exactly what checkout will charge. When
+     *                       {@code true} (real order creation) the code goes through
+     *                       {@link com.enunas.backend.discount.DiscountService#validateAndApply},
+     *                       which reserves one usage atomically. When {@code false} (checkout
+     *                       preview) it goes through the side-effect-free
+     *                       {@link com.enunas.backend.discount.DiscountService#validateAndCompute},
+     *                       so a repeatable, non-committal preview never burns a usage.
+     */
+    private OrderPricingDraft buildPricingDraft(CreateOrderDto dto, User buyer, boolean applyDiscount) {
+        List<ProductListing> listings = resolveAndValidateListings(dto.getItems());
+
+        for (int i = 0; i < dto.getItems().size(); i++) {
+            OrderItemRequestDto itemDto = dto.getItems().get(i);
+            ProductVariant variant = listings.get(i).getVariant();
+            if (!variant.hasStock(itemDto.getQuantity())) {
+                throw new IllegalStateException(
+                        "Insufficient stock for: " + listings.get(i).getProduct().getName() +
+                        " (" + variant.getColor() + " / " + variant.getSize() + ")" +
+                        " — requested: " + itemDto.getQuantity() +
+                        ", available: " + variant.getStockQuantity());
+            }
+        }
+
+        List<OrderItem> orderItems = new ArrayList<>();
+        BigDecimal subtotal = BigDecimal.ZERO;
+        // brandId -> brand, and brandId -> that brand's OrderItems, in first-seen order — both
+        // needed to make one ShippingCostService call per brand after this loop.
+        Map<Long, BrandPartner> brandsById = new LinkedHashMap<>();
+        Map<Long, List<OrderItem>> itemsByBrand = new LinkedHashMap<>();
+
+        for (int i = 0; i < dto.getItems().size(); i++) {
+            OrderItemRequestDto itemDto = dto.getItems().get(i);
+            ProductListing pl = listings.get(i);
+            ProductVariant variant = pl.getVariant();
+
+            // lineGross is the customer-facing gross (sale gross if on sale, else regular gross).
+            BigDecimal effectiveGross = pl.getEffectiveGross();
+            BigDecimal lineGross = effectiveGross.multiply(BigDecimal.valueOf(itemDto.getQuantity()));
+            subtotal = subtotal.add(lineGross);
+
+            BrandPartner brand = pl.getProduct().getBrand();
+            boolean domestic = (brand == null) || brand.isDomestic();
+            BigDecimal rate = brand != null ? getBrandCommissionRate(brand.getId()) : BigDecimal.ZERO;
+
+            OrderItem item = OrderItem.builder()
+                    .variant(variant)
+                    .productSnapshotName(pl.getProduct().getName())
+                    .variantSnapshotSku(variant.getSku())
+                    .variantSnapshotColor(variant.getColor())
+                    .variantSnapshotSize(variant.getSize())
+                    .priceAtPurchase(pl.getPrice())
+                    .discountPriceAtPurchase(pl.getDiscountPrice())
+                    .quantity(itemDto.getQuantity())
+                    .lineGross(lineGross)
+                    .lineTotal(lineGross)
+                    .build();
+            // Pre-discount pass: freezes lineNet/baseCommissionNet so the discount guard can read them.
+            item.applyMoneySnapshot(rate, domestic, vatRateProduct, vatRateService);
+            orderItems.add(item);
+
+            if (brand != null) {
+                brandsById.putIfAbsent(brand.getId(), brand);
+                itemsByBrand.computeIfAbsent(brand.getId(), k -> new ArrayList<>()).add(item);
+            }
+        }
+
+        // Apply optional discount code (max one per order — no stacking). Re-runs the money
+        // snapshot per item with the NET discount shares folded in, so the ledger (which reads
+        // commissionNet/commissionVat/brandPayout) stays correct per brand. The discount is ALWAYS
+        // computed so preview and checkout quote the same total; only the usage reservation is
+        // gated on applyDiscount — see this method's javadoc.
+        DiscountApplication discount = null;
+        if (dto.getDiscountCode() != null && !dto.getDiscountCode().isBlank()) {
+            discount = applyDiscount
+                    ? discountService.validateAndApply(dto.getDiscountCode(), orderItems)
+                    : discountService.validateAndCompute(dto.getDiscountCode(), orderItems);
+            for (int i = 0; i < orderItems.size(); i++) {
+                OrderItem item = orderItems.get(i);
+                DiscountApplication.ItemShare share = discount.itemShares().get(i);
+                BigDecimal itemPercent = share.total().signum() > 0 ? discount.percent() : BigDecimal.ZERO;
+                item.applyMoneySnapshot(item.getCommissionRate(), Boolean.TRUE.equals(item.getBrandIsDomestic()),
+                        vatRateProduct, vatRateService,
+                        share.platformShareNet(), share.brandShareNet(), itemPercent);
+            }
+        }
+
+        // Customer-facing reduction is GROSS (= Σ lineGross − Σ customerGrossAfterDiscount); the
+        // platform/brand discount aggregates on the Order are the NET absorption shares.
+        BigDecimal customerSubtotalAfterDiscount = orderItems.stream()
+                .map(OrderItem::getCustomerGrossAfterDiscount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal discountAmount = subtotal.subtract(customerSubtotalAfterDiscount);
+
+        ShippingAddressDto resolvedAddress = resolveShippingAddress(dto, buyer);
+        ShippingAddress destination = ShippingAddress.builder()
+                .firstName(resolvedAddress.getFirstName())
+                .lastName(resolvedAddress.getLastName())
+                .street(resolvedAddress.getStreet())
+                .houseNumber(resolvedAddress.getHouseNumber())
+                .addressLine2(resolvedAddress.getAddressLine2())
+                .city(resolvedAddress.getCity())
+                .postalCode(resolvedAddress.getPostalCode())
+                .country(resolvedAddress.getCountry())
+                .phone(resolvedAddress.getPhone())
+                .build();
+
+        // 5. Shipping — one ShippingCostService call per distinct brand on the cart.
+        List<OrderPricingDraft.ShippingLine> shippingLines = new ArrayList<>();
+        BigDecimal shippingTotal = BigDecimal.ZERO;
+        for (Map.Entry<Long, BrandPartner> e : brandsById.entrySet()) {
+            BrandPartner brand = e.getValue();
+            List<OrderItem> brandItems = itemsByBrand.get(e.getKey());
+            ShippingCostResult result = shippingCostService.calculate(brand, destination, brandItems);
+            shippingLines.add(new OrderPricingDraft.ShippingLine(brand.getId(), brand.getBrandName(), result));
+            shippingTotal = shippingTotal.add(result.amount());
+        }
+
+        // 6. total = subtotal − discountAmount + shippingTotal — this is what Mollie charges and
+        //    the webhook trusts (see Order.total's own javadoc, which already documented this
+        //    formula before shipping was wired up to stop being hardcoded zero).
+        BigDecimal total = subtotal.subtract(discountAmount).add(shippingTotal);
+
+        return new OrderPricingDraft(orderItems, subtotal, discount, discountAmount,
+                shippingLines, shippingTotal, total, resolvedAddress,
+                listings.get(0).getCurrency());
+    }
+
+    private List<ShippingSnapshotDto> mapShippingSnapshots(Order order, List<OrderShippingSnapshot> snapshots) {
+        Map<Long, String> brandNames = new HashMap<>();
+        for (OrderItem item : order.getItems()) {
+            if (item.getBrandId() != null) brandNames.putIfAbsent(item.getBrandId(), item.getBrandSnapshotName());
+        }
+        return snapshots.stream()
+                .map(s -> ShippingSnapshotDto.from(s, brandNames.get(s.getBrandPartnerId())))
+                .toList();
     }
 
     @Transactional(readOnly = true)
@@ -542,6 +631,8 @@ public class OrderService {
         orderRepository.save(order);
 
         ledgerService.recordOrderPayment(order);
+        ledgerService.recordShippingRevenue(order,
+                orderShippingSnapshotRepository.findByOrderIdOrderByIdAsc(order.getId()));
 
         log.info("Webhook: order {} PENDING → PAID", order.getOrderNumber());
     }
@@ -621,6 +712,8 @@ public class OrderService {
         // Record ledger entries for admin-forced payment confirmation.
         if (newStatus == OrderStatus.PAID && current == OrderStatus.PENDING) {
             ledgerService.recordOrderPayment(saved);
+            ledgerService.recordShippingRevenue(saved,
+                    orderShippingSnapshotRepository.findByOrderIdOrderByIdAsc(saved.getId()));
         }
 
         // Reverse brand ledger entries when a post-payment order is cancelled. The discount code
@@ -1058,15 +1151,18 @@ public class OrderService {
      * nothing is re-derived from the order's items here.
      */
     private OrderResponseDto toDto(Order order) {
+        OrderResponseDto base;
         if (order.getStatus() == OrderStatus.RETURN_REQUESTED
                 || order.getStatus() == OrderStatus.RETURN_APPROVED
                 || order.getStatus() == OrderStatus.RETURN_RECEIVED
                 || order.getStatus() == OrderStatus.REFUNDED) {
             List<ReturnOrder> returns = returnOrderRepository.findByOrder_IdOrderByIdAsc(order.getId());
-            if (!returns.isEmpty()) {
-                return OrderResponseDto.withReturns(order, returns);
-            }
+            base = !returns.isEmpty() ? OrderResponseDto.withReturns(order, returns) : OrderResponseDto.from(order);
+        } else {
+            base = OrderResponseDto.from(order);
         }
-        return OrderResponseDto.from(order);
+
+        List<OrderShippingSnapshot> snapshots = orderShippingSnapshotRepository.findByOrderIdOrderByIdAsc(order.getId());
+        return base.toBuilder().shippingSnapshots(mapShippingSnapshots(order, snapshots)).build();
     }
 }

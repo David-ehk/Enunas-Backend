@@ -1,0 +1,12 @@
+package com.enunas.backend.order;
+
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.stereotype.Repository;
+
+import java.util.List;
+
+@Repository
+public interface OrderShippingSnapshotRepository extends JpaRepository<OrderShippingSnapshot, Long> {
+
+    List<OrderShippingSnapshot> findByOrderIdOrderByIdAsc(Long orderId);
+}

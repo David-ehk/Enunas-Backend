@@ -2,6 +2,7 @@ package com.enunas.backend.admin;
 
 import com.enunas.backend.admin.dto.AdminProductResponseDto;
 import com.enunas.backend.admin.dto.SetPayoutProfileDto;
+import com.enunas.backend.admin.dto.SetShippingProfileDto;
 import com.enunas.backend.admin.dto.RejectionDto;
 import com.enunas.backend.customer.dto.CustomerBrandSpendingDto;
 import com.enunas.backend.ledger.ReconciliationService;
@@ -80,6 +81,13 @@ public class AdminController {
             @PathVariable Long brandId,
             @Valid @RequestBody SetPayoutProfileDto dto) {
         return ResponseEntity.ok(adminService.setBrandPayoutProfile(brandId, dto.getIban(), dto.getBankAccountHolder()));
+    }
+
+    @PatchMapping("/brands/{brandId}/shipping-profile")
+    public ResponseEntity<BrandPartnerResponseDto> setBrandShippingProfile(
+            @PathVariable Long brandId,
+            @Valid @RequestBody SetShippingProfileDto dto) {
+        return ResponseEntity.ok(adminService.setBrandShippingProfile(brandId, dto));
     }
 
     /** Admin edit of a brand's §22f master data (legal name + address + tax IDs only). */

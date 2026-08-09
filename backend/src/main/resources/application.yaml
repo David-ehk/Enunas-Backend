@@ -61,6 +61,8 @@ enunas:
   brand:
     # When true, USt-IdNr is a hard onboarding requirement (@NotBlank-style; never format-validated).
     vat-id-required: false
+  shipping:
+    default-rate: 4.99
 
 mollie:
   api:

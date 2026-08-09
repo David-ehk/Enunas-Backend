@@ -25,6 +25,7 @@ public class SettlementRowDto {
     private final BigDecimal commissionVat;
     private final BigDecimal commissionGross;
     private final BigDecimal payoutAmount;
+    private final BigDecimal shippingRevenue;
     private final long orderCount;
     private final long refundCount;
 
@@ -45,6 +46,7 @@ public class SettlementRowDto {
                 .commissionVat(commissionVat)
                 .commissionGross(commissionNet.add(commissionVat))
                 .payoutAmount(nz(a.getPayoutAmount()))
+                .shippingRevenue(nz(a.getShippingRevenue()))
                 .orderCount(a.getOrderCount() != null ? a.getOrderCount() : 0L)
                 .refundCount(a.getRefundCount() != null ? a.getRefundCount() : 0L)
                 .creditNote(commissionNet.signum() < 0)
