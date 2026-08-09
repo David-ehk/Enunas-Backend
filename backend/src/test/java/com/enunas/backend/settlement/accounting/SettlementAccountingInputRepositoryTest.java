@@ -2,7 +2,8 @@ package com.enunas.backend.settlement.accounting;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.test.context.ActiveProfiles;
 
 import java.math.BigDecimal;
@@ -10,8 +11,9 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-@SpringBootTest
+@DataJpaTest
 @ActiveProfiles("test")
 class SettlementAccountingInputRepositoryTest {
 
@@ -36,5 +38,31 @@ class SettlementAccountingInputRepositoryTest {
         assertThat(found.getPayoutReference()).isEqualTo("stl_test123");
 
         assertThat(repository.findByPeriod("2026-09")).isEmpty();
+    }
+
+    @Test
+    void enforcesUniquePeriodConstraint() {
+        repository.save(SettlementAccountingInput.builder()
+                .period("2026-08")
+                .mollieFees(new BigDecimal("35.70"))
+                .mollieFeesIncludedInActualPayout(false)
+                .payoutReference("stl_test123")
+                .mollieSettlementDate(LocalDate.of(2026, 8, 8))
+                .enteredByAdminEmail("admin@it.local")
+                .enteredAt(LocalDateTime.now())
+                .updatedAt(LocalDateTime.now())
+                .build());
+
+        assertThatThrownBy(() -> repository.save(SettlementAccountingInput.builder()
+                .period("2026-08")  // Same period
+                .mollieFees(new BigDecimal("50.00"))
+                .mollieFeesIncludedInActualPayout(true)
+                .payoutReference("stl_test456")
+                .mollieSettlementDate(LocalDate.of(2026, 8, 9))
+                .enteredByAdminEmail("admin@it.local")
+                .enteredAt(LocalDateTime.now())
+                .updatedAt(LocalDateTime.now())
+                .build()))
+                .isInstanceOf(DataIntegrityViolationException.class);
     }
 }
