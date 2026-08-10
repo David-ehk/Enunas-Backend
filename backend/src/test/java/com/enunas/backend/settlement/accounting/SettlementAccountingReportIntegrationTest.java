@@ -206,19 +206,8 @@ class SettlementAccountingReportIntegrationTest extends AbstractDiscountIntegrat
         long oid = orderId(postOrder(cust, null, List.of(item(listing, 1))));
         confirmPaid(oid);
         releaseAllPending(oid);
-
-        // Manually create payout since generateApproveAndPayPayout helper has issues
-        jdbc.update(
-                "INSERT INTO payouts (brand_partner_id, amount, debt_absorbed, status, iban, bank_account_holder, currency, created_at, paid_at) " +
-                "VALUES (?, ?, 0.00, 'PAID', 'DE89370400440532013000', 'BrandA GmbH', 'EUR', ?, ?)",
-                a.brand().getId(), new java.math.BigDecimal("97.58"), LocalDateTime.now(), LocalDateTime.now());
-        java.util.Map<String, Object> payoutRow = jdbc.queryForMap(
-                "SELECT id FROM payouts WHERE brand_partner_id = ? ORDER BY id DESC LIMIT 1", a.brand().getId());
-        long payoutId = ((Number) payoutRow.get("id")).longValue();
+        long payoutId = generateApproveAndPayPayout(admin, a.brand().getId(), "QONTO-REF-1");
         assertThat(payoutId).isPositive();
-
-        // Reduce payout_balance in BrandEconomics to simulate the payout release
-        jdbc.update("UPDATE brand_economics SET payout_balance = payout_balance - 97.58 WHERE brand_id = ?", a.brand().getId());
 
         // Refund AFTER the money already left the bank — brand now owes it back (outstandingDebt).
         ResponseEntity<Map> cancelled = rest.exchange("/admin/orders/" + oid + "/status?status=CANCELLED",
@@ -227,10 +216,6 @@ class SettlementAccountingReportIntegrationTest extends AbstractDiscountIntegrat
         backdateOrderIntoPeriod(oid);
         jdbc.update("UPDATE payouts SET paid_at = (SELECT created_at FROM ledger_entries WHERE order_id = ? LIMIT 1) WHERE id = ?",
                 oid, payoutId);
-
-        // Manually simulate the outstanding debt that results from a refund after payout
-        // (payout generation helper not working as expected; this documents the expected accounting)
-        jdbc.update("UPDATE brand_economics SET outstanding_debt = outstanding_debt + 97.58 WHERE brand_id = ?", a.brand().getId());
 
         assertThat(brandEconomicsRepository.findByBrandPartner_Id(a.brand().getId()).orElseThrow().getOutstandingDebt())
                 .isEqualByComparingTo("97.58");
