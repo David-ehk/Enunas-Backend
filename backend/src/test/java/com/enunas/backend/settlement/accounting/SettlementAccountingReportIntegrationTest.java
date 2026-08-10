@@ -109,6 +109,60 @@ class SettlementAccountingReportIntegrationTest extends AbstractDiscountIntegrat
         assertThat(bd(brandB.get("commissionGross"))).isEqualByComparingTo("11.90");
     }
 
+    @Test
+    void adminDiscount_reducesOnlyCommission_brandPayoutUnchanged() {
+        seedAdmin();
+        BrandFixture a = seedBrand("BrandA", "brand-a", "0.18");
+        brandShippingProfileRepository.save(BrandShippingProfile.builder()
+                .brandPartner(a.brand()).shippingCost(new BigDecimal("0.00")).currency("EUR").build());
+        long listing = seedListing(a.brand(), a.user(), "119.00", 10); // net 100
+        String admin = login("admin@it.local", "Admin123!");
+        seedCustomer();
+        String cust = login("customer@it.local", "Customer123!");
+
+        createAdminDiscount(admin, Map.of("code", "ADM10", "percent", "0.1000"));
+        long oid = orderId(postOrder(cust, "ADM10", List.of(item(listing, 1))));
+        confirmPaid(oid);
+        backdateOrderIntoPeriod(oid);
+
+        Map<String, Object> report = getReport(admin, closedPeriod());
+
+        // Brand payout is IDENTICAL to the no-discount case (97.58) — Enunas absorbs the whole 10%.
+        assertThat(bd(report.get("brandPayoutAmount"))).isEqualByComparingTo("97.58");
+        assertThat(bd(report.get("enunasCommissionNet"))).isEqualByComparingTo("8.00");   // 18.00 - 10.00
+        assertThat(bd(report.get("enunasVatAmount"))).isEqualByComparingTo("1.52");
+        assertThat(bd(report.get("enunasCommissionGross"))).isEqualByComparingTo("9.52");
+        assertThat(bd(report.get("totalCustomerPayments"))).isEqualByComparingTo("107.10");
+        assertThat(bd(report.get("reconciliationDifference"))).isEqualByComparingTo("0.00");
+    }
+
+    @Test
+    void brandDiscount_splits5050_betweenBrandAndPlatform() {
+        seedAdmin();
+        BrandFixture a = seedBrand("BrandA", "brand-a", "0.18");
+        brandShippingProfileRepository.save(BrandShippingProfile.builder()
+                .brandPartner(a.brand()).shippingCost(new BigDecimal("0.00")).currency("EUR").build());
+        long listing = seedListing(a.brand(), a.user(), "119.00", 10); // net 100
+        String admin = login("admin@it.local", "Admin123!");
+        String brandToken = login("brand-a@it.local", "Brand123!");
+        seedCustomer();
+        String cust = login("customer@it.local", "Customer123!");
+
+        createBrandDiscount(brandToken, Map.of("code", "BRAND15", "percent", "0.1500"));
+        long oid = orderId(postOrder(cust, "BRAND15", List.of(item(listing, 1))));
+        confirmPaid(oid);
+        backdateOrderIntoPeriod(oid);
+
+        Map<String, Object> report = getReport(admin, closedPeriod());
+
+        assertThat(bd(report.get("enunasCommissionNet"))).isEqualByComparingTo("10.50");  // 18.00 - 7.50
+        assertThat(bd(report.get("enunasVatAmount"))).isEqualByComparingTo("2.00");
+        assertThat(bd(report.get("enunasCommissionGross"))).isEqualByComparingTo("12.50");
+        assertThat(bd(report.get("brandPayoutAmount"))).isEqualByComparingTo("88.65");
+        assertThat(bd(report.get("totalCustomerPayments"))).isEqualByComparingTo("101.15");
+        assertThat(bd(report.get("reconciliationDifference"))).isEqualByComparingTo("0.00");
+    }
+
     // ===== shared helpers for this class =====
 
     /** Orders created "now" land in the current (open) month; back-date created_at on every ledger
