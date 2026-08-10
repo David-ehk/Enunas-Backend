@@ -43,6 +43,12 @@ public class Payout {
     @Builder.Default
     private PayoutStatus status = PayoutStatus.PENDING;
 
+    /** Which ledger revenue stream this transfer covers — see {@link PayoutType}. */
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20)
+    @Builder.Default
+    private PayoutType type = PayoutType.REVENUE;
+
     /** Snapshot of the brand's IBAN at generation time. */
     @Column(nullable = false, length = 34)
     private String iban;

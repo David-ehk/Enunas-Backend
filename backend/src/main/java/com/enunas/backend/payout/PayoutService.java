@@ -6,6 +6,7 @@ import com.enunas.backend.brandpartner.brandeconomics.BrandEconomics;
 import com.enunas.backend.brandpartner.brandeconomics.BrandEconomicsRepository;
 import com.enunas.backend.brandpartner.brandpayoutprofile.BrandPayoutProfile;
 import com.enunas.backend.brandpartner.brandpayoutprofile.BrandPayoutProfileRepository;
+import com.enunas.backend.ledger.LedgerRepository;
 import com.enunas.backend.ledger.LedgerService;
 import com.enunas.backend.payout.dto.MarkAsPaidDto;
 import com.enunas.backend.payout.dto.PayoutDashboardDto;
@@ -32,12 +33,21 @@ public class PayoutService {
     private final BrandEconomicsRepository brandEconomicsRepository;
     private final BrandPayoutProfileRepository brandPayoutProfileRepository;
     private final LedgerService ledgerService;
+    private final LedgerRepository ledgerRepository;
 
     // ===== Generation =====
 
     /**
      * Generates PENDING payout records for every brand that has an AVAILABLE balance
      * and a configured payout profile. Debt is netted off before the payout amount is set.
+     *
+     * The net amount is split into up to two Payout rows — REVENUE (product/commission-side)
+     * and SHIPPING — so the brand receives two separate bank transfers it can reconcile
+     * independently, instead of one lump sum mixing merchandise proceeds with shipping money
+     * collected on its behalf. The split ratio comes from the brand's AVAILABLE-status ledger
+     * entries grouped by entry type (the same money this payout is drawn from); debt is then
+     * absorbed proportionally across both, so no single stream is unfairly drained by a refund
+     * or chargeback unrelated to it.
      *
      * Brands already holding a PENDING or APPROVED payout are skipped — idempotent.
      * Brands with no payout profile are skipped with a warning.
@@ -85,22 +95,53 @@ public class PayoutService {
                 continue;
             }
 
-            Payout payout = Payout.builder()
-                    .brandPartnerId(brandId)
-                    .amount(netAmount)
-                    .debtAbsorbed(debtAbsorbed)
-                    .status(PayoutStatus.PENDING)
-                    .iban(profile.getIban())
-                    .bankAccountHolder(profile.getBankAccountHolder())
-                    .currency("EUR")
-                    .build();
+            BigDecimal grossShipping = ledgerRepository.sumAvailableShippingForBrand(brandId).orElse(BigDecimal.ZERO);
+            BigDecimal grossProduct  = ledgerRepository.sumAvailableProductForBrand(brandId).orElse(BigDecimal.ZERO);
+            BigDecimal grossTotal    = grossShipping.add(grossProduct);
 
-            created.add(payoutRepository.save(payout));
-            log.info("generatePayouts: created payout brand={} net={} debtAbsorbed={}", brandId, netAmount, debtAbsorbed);
+            // Shipping's share of the net amount (and of debt absorption), by the same ratio it
+            // has in the raw available balance. Revenue gets the remainder rather than its own
+            // ratio-based calculation, so the two rows always sum exactly to netAmount/debtAbsorbed
+            // with no rounding drift. grossTotal <= 0 shouldn't happen (netAmount > 0 implies some
+            // AVAILABLE money exists) but falls back to an all-REVENUE payout rather than dividing
+            // by zero.
+            BigDecimal shippingRatio = grossTotal.compareTo(BigDecimal.ZERO) > 0
+                    ? grossShipping.divide(grossTotal, 10, RoundingMode.HALF_UP)
+                    : BigDecimal.ZERO;
+
+            BigDecimal shippingAmount       = netAmount.multiply(shippingRatio).setScale(2, RoundingMode.HALF_UP);
+            BigDecimal revenueAmount        = netAmount.subtract(shippingAmount);
+            BigDecimal shippingDebtAbsorbed = debtAbsorbed.multiply(shippingRatio).setScale(2, RoundingMode.HALF_UP);
+            BigDecimal revenueDebtAbsorbed  = debtAbsorbed.subtract(shippingDebtAbsorbed);
+
+            if (revenueAmount.compareTo(BigDecimal.ZERO) > 0) {
+                created.add(payoutRepository.save(buildPayout(
+                        brandId, PayoutType.REVENUE, revenueAmount, revenueDebtAbsorbed, profile)));
+            }
+            if (shippingAmount.compareTo(BigDecimal.ZERO) > 0) {
+                created.add(payoutRepository.save(buildPayout(
+                        brandId, PayoutType.SHIPPING, shippingAmount, shippingDebtAbsorbed, profile)));
+            }
+            log.info("generatePayouts: brand={} revenue={} shipping={} debtAbsorbed={} (revenue={}/shipping={})",
+                    brandId, revenueAmount, shippingAmount, debtAbsorbed, revenueDebtAbsorbed, shippingDebtAbsorbed);
         }
 
         log.info("generatePayouts: {} payout record(s) created", created.size());
         return created.stream().map(PayoutResponseDto::from).toList();
+    }
+
+    private Payout buildPayout(Long brandId, PayoutType type, BigDecimal amount, BigDecimal debtAbsorbed,
+                                BrandPayoutProfile profile) {
+        return Payout.builder()
+                .brandPartnerId(brandId)
+                .type(type)
+                .amount(amount)
+                .debtAbsorbed(debtAbsorbed)
+                .status(PayoutStatus.PENDING)
+                .iban(profile.getIban())
+                .bankAccountHolder(profile.getBankAccountHolder())
+                .currency("EUR")
+                .build();
     }
 
     // ===== State transitions =====

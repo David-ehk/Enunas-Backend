@@ -97,7 +97,13 @@ public interface LedgerRepository extends JpaRepository<LedgerEntry, Long> {
            """)
     List<LedgerEntry> findReleasableEntries(@Param("now") LocalDateTime now);
 
-    @Modifying(clearAutomatically = true)
+    // flushAutomatically=true is load-bearing: releasePendingBalances() saves BrandEconomics
+    // changes (pendingBalance/payoutBalance) on the same persistence context just before calling
+    // this, but a bulk JPQL UPDATE runs as direct SQL and doesn't trigger Hibernate's normal
+    // auto-flush-before-query. Without flushAutomatically, clearAutomatically then detaches the
+    // still-unflushed BrandEconomics changes before they're ever written — the bulk update commits,
+    // the balance changes silently vanish. flushAutomatically forces the flush first, so both land.
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("""
            UPDATE LedgerEntry le
            SET le.status = com.enunas.backend.ledger.LedgerEntryStatus.AVAILABLE,
@@ -148,4 +154,20 @@ public interface LedgerRepository extends JpaRepository<LedgerEntry, Long> {
 
     @Query("SELECT SUM(le.brandPayout) FROM LedgerEntry le WHERE le.brandPartnerId = :brandId AND le.status = com.enunas.backend.ledger.LedgerEntryStatus.AVAILABLE")
     Optional<BigDecimal> sumAvailableForBrand(@Param("brandId") Long brandId);
+
+    // ===== Payout-generation split (product vs shipping) =====
+
+    /**
+     * AVAILABLE-status shipping money for a brand — used at payout-generation time to split
+     * the brand's net payout proportionally into a REVENUE and a SHIPPING transfer. Gross (pre
+     * debt-absorption); PayoutService applies the same ratio to the already debt-reduced net
+     * amount rather than re-deriving debt handling here, so this never has to agree in isolation
+     * with BrandEconomics.payoutBalance (which is already net of any debt absorbed on release).
+     */
+    @Query("SELECT SUM(le.brandPayout) FROM LedgerEntry le WHERE le.brandPartnerId = :brandId AND le.status = com.enunas.backend.ledger.LedgerEntryStatus.AVAILABLE AND le.entryType = com.enunas.backend.ledger.LedgerEntryType.SHIPPING_REVENUE")
+    Optional<BigDecimal> sumAvailableShippingForBrand(@Param("brandId") Long brandId);
+
+    /** AVAILABLE-status product money (order payments net of refunds) for a brand — see above. */
+    @Query("SELECT SUM(le.brandPayout) FROM LedgerEntry le WHERE le.brandPartnerId = :brandId AND le.status = com.enunas.backend.ledger.LedgerEntryStatus.AVAILABLE AND le.entryType IN (com.enunas.backend.ledger.LedgerEntryType.ORDER_PAYMENT, com.enunas.backend.ledger.LedgerEntryType.REFUND_REVERSAL)")
+    Optional<BigDecimal> sumAvailableProductForBrand(@Param("brandId") Long brandId);
 }
