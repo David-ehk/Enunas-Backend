@@ -69,6 +69,8 @@ public abstract class AbstractDiscountIntegrationTest {
     @Autowired protected OrderRepository orderRepository;
     @Autowired protected DiscountCodeRepository discountCodeRepository;
     @Autowired protected LedgerRepository ledgerRepository;
+    @Autowired protected com.enunas.backend.payout.PayoutRepository payoutRepository;
+    @Autowired protected com.enunas.backend.brandpartner.brandpayoutprofile.BrandPayoutProfileRepository brandPayoutProfileRepository;
 
     @Autowired protected OrderService orderService;
     @Autowired protected LedgerService ledgerService;
@@ -76,7 +78,8 @@ public abstract class AbstractDiscountIntegrationTest {
     @AfterEach
     void cleanDatabase() {
         // CASCADE truncates child/element-collection tables (analytics, catalogue categories, etc.).
-        jdbc.execute("TRUNCATE TABLE settlement_runs, ledger_entries, payments, order_items, orders, listings, " +
+        jdbc.execute("TRUNCATE TABLE settlement_accounting_inputs, payouts, brand_payout_profiles, " +
+                "settlement_runs, ledger_entries, payments, order_items, orders, listings, " +
                 "product_variants, product_colors, products, discount_codes, brand_economics, " +
                 "brand_partners, user_addresses, oauth_accounts, customers, users RESTART IDENTITY CASCADE");
     }
@@ -203,6 +206,34 @@ public abstract class AbstractDiscountIntegrationTest {
     /** Drives a PENDING order to PAID via the exact webhook code path (synchronous, deterministic). */
     protected void confirmPaid(long orderId) {
         orderService.confirmPaymentByWebhook(orderId);
+    }
+
+    /** Backdates every PENDING_RELEASE entry for an order into the past, then runs the release job
+     *  synchronously — used instead of waiting out the real hold-days window in tests. */
+    protected void releaseAllPending(long orderId) {
+        jdbc.update("UPDATE ledger_entries SET payout_eligible_at = ? WHERE order_id = ?",
+                java.time.LocalDateTime.now().minusDays(1), orderId);
+        ledgerService.releasePendingBalances();
+    }
+
+    /** Drives a brand's AVAILABLE balance through generate → approve → markAsPaid, exactly the real
+     *  admin flow (POST /admin/payouts/generate, /approve, /paid). Requires a BrandPayoutProfile to
+     *  already exist for the brand. Returns the created payout's id. */
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    protected long generateApproveAndPayPayout(String adminToken, long brandId, String externalReference) {
+        rest.exchange("/admin/payouts/generate", org.springframework.http.HttpMethod.POST,
+                new HttpEntity<>(auth(adminToken)), java.util.List.class);
+
+        java.util.Map<String, Object> row = jdbc.queryForList(
+                "SELECT id FROM payouts WHERE brand_partner_id = ? ORDER BY id DESC LIMIT 1", brandId)
+                .get(0);
+        long payoutId = ((Number) row.get("id")).longValue();
+
+        rest.exchange("/admin/payouts/" + payoutId + "/approve", org.springframework.http.HttpMethod.POST,
+                new HttpEntity<>(auth(adminToken)), Map.class);
+        rest.exchange("/admin/payouts/" + payoutId + "/paid", org.springframework.http.HttpMethod.POST,
+                new HttpEntity<>(Map.of("externalReference", externalReference), auth(adminToken)), Map.class);
+        return payoutId;
     }
 
     // ===== DB assertion accessors =====
