@@ -150,7 +150,7 @@ public interface LedgerRepository extends JpaRepository<LedgerEntry, Long> {
            """)
     List<LedgerEntry> findReleasableEntries(@Param("now") LocalDateTime now);
 
-    @Modifying(clearAutomatically = true)
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("""
            UPDATE LedgerEntry le
            SET le.status = com.enunas.backend.ledger.LedgerEntryStatus.AVAILABLE,
