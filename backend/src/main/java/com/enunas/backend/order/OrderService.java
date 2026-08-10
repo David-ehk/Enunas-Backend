@@ -259,6 +259,7 @@ public class OrderService {
             OrderItem item = OrderItem.builder()
                     .variant(variant)
                     .productSnapshotName(pl.getProduct().getName())
+                    .brandSnapshotName(brand != null ? brand.getBrandName() : null)
                     .variantSnapshotSku(variant.getSku())
                     .variantSnapshotColor(variant.getColor())
                     .variantSnapshotSize(variant.getSize())
