@@ -33,8 +33,20 @@ public class SettlementAccountingReportDto {
     private final BigDecimal brandPayoutAmount;
     private final BigDecimal brandTotalAmount;
     private final BigDecimal mollieFees;                 // admin-entered, nullable
+
+    /**
+     * Admin-entered informational flag describing whether {@link #mollieFees} was already netted out
+     * of Mollie's settlement to Enunas (a different money flow than {@link #actualPayoutAmount}, which
+     * is brand-directed). Not consumed by any calculation here — captured for audit context only.
+     */
     private final Boolean mollieFeesIncludedInActualPayout; // admin-entered, nullable
     private final BigDecimal refundAmount;
+
+    /**
+     * Best-effort sum of brand payouts Enunas actually executed (PAID {@code Payout} rows) in this
+     * period — money flowing OUT to brands, not Mollie's inbound settlement to Enunas. Null when no
+     * matching PAID payout exists; never fabricated as zero.
+     */
     private final BigDecimal actualPayoutAmount;         // best-effort from PAID Payouts, nullable
 
     // ===== Reconciliation =====

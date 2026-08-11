@@ -3,6 +3,7 @@ package com.enunas.backend.settlement.accounting;
 import com.enunas.backend.settlement.accounting.dto.SettlementAccountingReportDto;
 import com.enunas.backend.settlement.accounting.dto.UpsertAccountingInputDto;
 import com.enunas.backend.user.User;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
@@ -52,7 +53,7 @@ public class SettlementAccountingReportController {
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<Void> upsertInput(
             @PathVariable String period,
-            @RequestBody UpsertAccountingInputDto dto,
+            @Valid @RequestBody UpsertAccountingInputDto dto,
             @AuthenticationPrincipal User admin) {
         reportService.upsertInput(period, dto, admin.getEmail());
         return ResponseEntity.noContent().build();
