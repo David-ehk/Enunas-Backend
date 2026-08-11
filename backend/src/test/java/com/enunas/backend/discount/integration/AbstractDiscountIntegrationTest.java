@@ -43,6 +43,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 /**
  * Base for discount payment-flow integration tests. Boots the full app on a random port against a
  * throwaway PostgreSQL 16 (Testcontainers) with Flyway-managed schema, and the mock-payments
@@ -221,18 +223,25 @@ public abstract class AbstractDiscountIntegrationTest {
      *  already exist for the brand. Returns the created payout's id. */
     @SuppressWarnings({"rawtypes", "unchecked"})
     protected long generateApproveAndPayPayout(String adminToken, long brandId, String externalReference) {
-        rest.exchange("/admin/payouts/generate", org.springframework.http.HttpMethod.POST,
+        org.springframework.http.ResponseEntity<java.util.List> genResp = rest.exchange(
+                "/admin/payouts/generate", org.springframework.http.HttpMethod.POST,
                 new HttpEntity<>(auth(adminToken)), java.util.List.class);
+        assertThat(genResp.getStatusCode().is2xxSuccessful()).as("generate: %s", genResp.getBody()).isTrue();
 
         java.util.Map<String, Object> row = jdbc.queryForList(
                 "SELECT id FROM payouts WHERE brand_partner_id = ? ORDER BY id DESC LIMIT 1", brandId)
                 .get(0);
         long payoutId = ((Number) row.get("id")).longValue();
 
-        rest.exchange("/admin/payouts/" + payoutId + "/approve", org.springframework.http.HttpMethod.POST,
+        org.springframework.http.ResponseEntity<Map> approveResp = rest.exchange(
+                "/admin/payouts/" + payoutId + "/approve", org.springframework.http.HttpMethod.POST,
                 new HttpEntity<>(auth(adminToken)), Map.class);
-        rest.exchange("/admin/payouts/" + payoutId + "/paid", org.springframework.http.HttpMethod.POST,
+        assertThat(approveResp.getStatusCode().is2xxSuccessful()).as("approve: %s", approveResp.getBody()).isTrue();
+
+        org.springframework.http.ResponseEntity<Map> paidResp = rest.exchange(
+                "/admin/payouts/" + payoutId + "/paid", org.springframework.http.HttpMethod.POST,
                 new HttpEntity<>(Map.of("externalReference", externalReference), auth(adminToken)), Map.class);
+        assertThat(paidResp.getStatusCode().is2xxSuccessful()).as("paid: %s", paidResp.getBody()).isTrue();
         return payoutId;
     }
 

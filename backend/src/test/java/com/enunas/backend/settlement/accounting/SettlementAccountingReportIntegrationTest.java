@@ -290,6 +290,81 @@ class SettlementAccountingReportIntegrationTest extends AbstractDiscountIntegrat
         assertThat(report.get("reconciliationStatus")).isEqualTo("UNRECONCILED");
     }
 
+    @Test
+    void csvExport_headerAndDataRow_matchSpecColumnOrder() {
+        seedAdmin();
+        BrandFixture a = seedBrand("BrandA", "brand-a", "0.18");
+        brandShippingProfileRepository.save(BrandShippingProfile.builder()
+                .brandPartner(a.brand()).shippingCost(new BigDecimal("10.00")).currency("EUR").build());
+        long listing = seedListing(a.brand(), a.user(), "119.00", 10); // gross 119 -> net 100
+        String admin = login("admin@it.local", "Admin123!");
+        seedCustomer();
+        String cust = login("customer@it.local", "Customer123!");
+
+        long oid = orderId(postOrder(cust, null, List.of(item(listing, 1))));
+        confirmPaid(oid);
+        backdateOrderIntoPeriod(oid);
+        String period = closedPeriod();
+        String settlementId = "SET-" + period;
+
+        ResponseEntity<String> resp = rest.exchange(
+                "/admin/settlements/" + settlementId + "/accounting-report/export?format=csv",
+                HttpMethod.GET, new HttpEntity<>(auth(admin)), String.class);
+        assertThat(resp.getStatusCode().is2xxSuccessful()).as("export: %s", resp.getBody()).isTrue();
+        assertThat(resp.getHeaders().getFirst("Content-Type")).startsWith("text/csv");
+        assertThat(resp.getHeaders().getFirst("Content-Disposition"))
+                .contains("attachment").contains(settlementId);
+
+        String body = resp.getBody();
+        assertThat(body).isNotNull();
+        String[] lines = body.split("\r\n|\n");
+        assertThat(lines.length).isGreaterThanOrEqualTo(2);
+
+        assertThat(lines[0]).isEqualTo(
+                "settlement_id,period_start,period_end,currency,settlement_date,payout_reference," +
+                "mollie_gross_inflows,enunas_commission_net,enunas_vat_rate,enunas_vat_amount," +
+                "enunas_commission_gross,brand_product_amount,brand_shipping_amount,brand_payout_amount," +
+                "mollie_fees,refunds,actual_payout_amount,payout_account,booking_date");
+
+        String[] row = lines[1].split(",", -1);
+        assertThat(row[0]).startsWith("SET-");
+        assertThat(bd(row[7])).isEqualByComparingTo("18.00");   // enunas_commission_net
+        assertThat(bd(row[13])).isEqualByComparingTo("107.58"); // brand_payout_amount
+        assertThat(row[17]).isEqualTo("MOLLIE");                // payout_account
+    }
+
+    @Test
+    void reconciledPayout_matchesLedgerExactly_reportGoesGreen() {
+        seedAdmin();
+        BrandFixture a = seedBrand("BrandA", "brand-a", "0.18");
+        brandShippingProfileRepository.save(BrandShippingProfile.builder()
+                .brandPartner(a.brand()).shippingCost(new BigDecimal("0.00")).currency("EUR").build());
+        long listing = seedListing(a.brand(), a.user(), "119.00", 10);
+        String admin = login("admin@it.local", "Admin123!");
+        seedCustomer();
+        String cust = login("customer@it.local", "Customer123!");
+        brandPayoutProfileRepository.save(com.enunas.backend.brandpartner.brandpayoutprofile.BrandPayoutProfile.builder()
+                .brandPartner(a.brand()).iban("DE89370400440532013000").bankAccountHolder("BrandA GmbH").build());
+
+        long oid = orderId(postOrder(cust, null, List.of(item(listing, 1))));
+        confirmPaid(oid);
+        releaseAllPending(oid);
+        long payoutId = generateApproveAndPayPayout(admin, a.brand().getId(), "QONTO-RECONCILED-1");
+        assertThat(payoutId).isPositive();
+
+        backdateOrderIntoPeriod(oid);
+        jdbc.update("UPDATE payouts SET paid_at = (SELECT created_at FROM ledger_entries WHERE order_id = ? LIMIT 1) WHERE id = ?",
+                oid, payoutId);
+
+        Map<String, Object> report = getReport(admin, closedPeriod());
+
+        assertThat(bd(report.get("brandPayoutAmount"))).isEqualByComparingTo("97.58");
+        assertThat(bd(report.get("actualPayoutAmount"))).isEqualByComparingTo("97.58");
+        assertThat(bd(report.get("payoutDifference"))).isEqualByComparingTo("0.00");
+        assertThat(bd(report.get("reconciliationDifference"))).isEqualByComparingTo("0.00");
+        assertThat(report.get("reconciliationStatus")).isEqualTo("RECONCILED");
+    }
+
     // ===== shared helpers for this class =====
 
     /** Orders created "now" land in the current (open) month; back-date created_at on every ledger
