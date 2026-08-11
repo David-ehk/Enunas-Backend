@@ -8,6 +8,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -29,4 +30,16 @@ public interface PayoutRepository extends JpaRepository<Payout, Long> {
 
     @Query("SELECT COALESCE(SUM(p.amount), 0) FROM Payout p WHERE p.status = :status")
     BigDecimal sumAmountByStatus(@Param("status") PayoutStatus status);
+
+    @Query("SELECT COALESCE(SUM(p.amount), 0) FROM Payout p " +
+           "WHERE p.status = com.enunas.backend.payout.PayoutStatus.PAID " +
+           "AND p.paidAt >= :startUtc AND p.paidAt < :endUtc")
+    BigDecimal sumPaidAmountInRange(@Param("startUtc") LocalDateTime startUtc,
+                                     @Param("endUtc") LocalDateTime endUtc);
+
+    @Query("SELECT COUNT(p) FROM Payout p " +
+           "WHERE p.status = com.enunas.backend.payout.PayoutStatus.PAID " +
+           "AND p.paidAt >= :startUtc AND p.paidAt < :endUtc")
+    long countPaidPayoutsInRange(@Param("startUtc") LocalDateTime startUtc,
+                                  @Param("endUtc") LocalDateTime endUtc);
 }

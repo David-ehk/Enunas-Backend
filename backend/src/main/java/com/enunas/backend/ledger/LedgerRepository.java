@@ -61,6 +61,59 @@ public interface LedgerRepository extends JpaRepository<LedgerEntry, Long> {
             @Param("startUtc") LocalDateTime startUtc,
             @Param("endUtc") LocalDateTime endUtc);
 
+    /** Per-brand period aggregate for the accounting report — product/shipping split net of their
+     *  own refunds (unlike PeriodAggregate.shippingRevenue, which is gross-only; see its javadoc). */
+    interface AccountingPeriodAggregate {
+        Long getBrandId();
+        BigDecimal getCommissionNet();
+        BigDecimal getCommissionVat();
+        BigDecimal getProductRevenueNet();
+        BigDecimal getShippingRevenueNet();
+        BigDecimal getRefundAmount();
+        BigDecimal getTotalAmount();
+        Long getOrderCount();
+        Long getRefundCount();
+    }
+
+    /**
+     * Same period/entry-type scope as {@link #aggregateByBrandForPeriod}, but splits brandPayout
+     * into product vs. shipping, each already netted against its own refunds. Shipping refunds are
+     * identified by the {@code :SHIPPING} suffix {@link LedgerService#recordRefund(com.enunas.backend.order.Order, java.math.BigDecimal, String)}
+     * already tags them with — no new column, reuses the existing signal. refundAmount is reported
+     * positive (sum of both product and shipping REFUND_REVERSAL rows, which are stored negative).
+     */
+    @Query("""
+           SELECT le.brandPartnerId AS brandId,
+                  COALESCE(SUM(le.commissionNet), 0) AS commissionNet,
+                  COALESCE(SUM(le.commissionVat), 0) AS commissionVat,
+                  COALESCE(SUM(CASE
+                      WHEN le.entryType = com.enunas.backend.ledger.LedgerEntryType.ORDER_PAYMENT THEN le.brandPayout
+                      WHEN le.entryType = com.enunas.backend.ledger.LedgerEntryType.REFUND_REVERSAL
+                           AND (le.externalReferenceId IS NULL OR le.externalReferenceId NOT LIKE '%:SHIPPING')
+                           THEN le.brandPayout
+                      ELSE 0 END), 0) AS productRevenueNet,
+                  COALESCE(SUM(CASE
+                      WHEN le.entryType = com.enunas.backend.ledger.LedgerEntryType.SHIPPING_REVENUE THEN le.brandPayout
+                      WHEN le.entryType = com.enunas.backend.ledger.LedgerEntryType.REFUND_REVERSAL
+                           AND le.externalReferenceId LIKE '%:SHIPPING'
+                           THEN le.brandPayout
+                      ELSE 0 END), 0) AS shippingRevenueNet,
+                  COALESCE(SUM(CASE WHEN le.entryType = com.enunas.backend.ledger.LedgerEntryType.REFUND_REVERSAL
+                                     THEN -le.totalAmount ELSE 0 END), 0) AS refundAmount,
+                  COALESCE(SUM(le.totalAmount), 0) AS totalAmount,
+                  SUM(CASE WHEN le.entryType = com.enunas.backend.ledger.LedgerEntryType.ORDER_PAYMENT   THEN 1 ELSE 0 END) AS orderCount,
+                  SUM(CASE WHEN le.entryType = com.enunas.backend.ledger.LedgerEntryType.REFUND_REVERSAL THEN 1 ELSE 0 END) AS refundCount
+           FROM LedgerEntry le
+           WHERE le.createdAt >= :startUtc AND le.createdAt < :endUtc
+             AND le.entryType IN (com.enunas.backend.ledger.LedgerEntryType.ORDER_PAYMENT,
+                                  com.enunas.backend.ledger.LedgerEntryType.REFUND_REVERSAL,
+                                  com.enunas.backend.ledger.LedgerEntryType.SHIPPING_REVENUE)
+           GROUP BY le.brandPartnerId
+           """)
+    List<AccountingPeriodAggregate> aggregateAccountingByBrandForPeriod(
+            @Param("startUtc") LocalDateTime startUtc,
+            @Param("endUtc") LocalDateTime endUtc);
+
     boolean existsByOrderIdAndEntryType(Long orderId, LedgerEntryType entryType);
 
     boolean existsByExternalReferenceIdAndEntryType(String externalReferenceId, LedgerEntryType entryType);
