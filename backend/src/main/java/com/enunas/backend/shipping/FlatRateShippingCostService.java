@@ -7,6 +7,7 @@ import com.enunas.backend.order.OrderItem;
 import com.enunas.backend.order.ShippingAddress;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -19,6 +20,7 @@ import java.util.Optional;
  * with a platform-wide fallback. {@code destination}/{@code brandItems} are accepted but ignored
  * — see {@link ShippingCostService}'s javadoc for why the signature carries them anyway.
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class FlatRateShippingCostService implements ShippingCostService {
@@ -51,6 +53,8 @@ public class FlatRateShippingCostService implements ShippingCostService {
                 : Optional.empty();
 
         if (profile.isEmpty() || profile.get().getShippingCost() == null) {
+            log.debug("Brand {} shipping resolved: {} ({})",
+                    brand != null ? brand.getId() : null, defaultRate, ShippingCalculationMethod.GLOBAL_DEFAULT);
             return new ShippingCostResult(
                     defaultRate, CURRENCY, ShippingCalculationMethod.GLOBAL_DEFAULT, RULE_VERSION,
                     profile.map(BrandShippingProfile::getId).orElse(null));
@@ -71,6 +75,7 @@ public class FlatRateShippingCostService implements ShippingCostService {
                 ? ShippingCalculationMethod.BRAND_FREE_SHIPPING
                 : ShippingCalculationMethod.BRAND_FLAT_RATE;
         String currency = p.getCurrency() != null ? p.getCurrency() : CURRENCY;
+        log.debug("Brand {} shipping resolved: {} ({})", brand.getId(), rate, method);
         return new ShippingCostResult(rate, currency, method, RULE_VERSION, p.getId());
     }
 }
