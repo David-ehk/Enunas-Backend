@@ -7,9 +7,9 @@ import lombok.Data;
 public class ProductVideoDto {
 
     @NotBlank
-    private String videoUrl;
+    private String storageKey;
 
     private String title;
 
-    private String thumbnailUrl;
+    private String thumbnailStorageKey;
 }

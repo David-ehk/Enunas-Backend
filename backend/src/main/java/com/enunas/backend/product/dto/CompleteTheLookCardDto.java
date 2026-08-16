@@ -1,5 +1,6 @@
 package com.enunas.backend.product.dto;
 
+import com.enunas.backend.media.storage.MediaUrlResolver;
 import com.enunas.backend.product.Product;
 import lombok.Builder;
 import lombok.Getter;
@@ -27,18 +28,18 @@ public class CompleteTheLookCardDto {
     private BigDecimal price;
 
     /** Convenience overload — price will be null. */
-    public static CompleteTheLookCardDto from(Product product) {
-        return from(product, null);
+    public static CompleteTheLookCardDto from(Product product, MediaUrlResolver resolver) {
+        return from(product, null, resolver);
     }
 
-    public static CompleteTheLookCardDto from(Product product, BigDecimal lowestActivePrice) {
+    public static CompleteTheLookCardDto from(Product product, BigDecimal lowestActivePrice, MediaUrlResolver resolver) {
         String firstImage = product.getImages().stream()
                 .filter(img -> img.isPrimary())
                 .findFirst()
-                .map(img -> img.getImageUrl())
+                .map(img -> resolver.resolve(img.getStorageKey()))
                 .orElseGet(() -> product.getImages().isEmpty()
                         ? null
-                        : product.getImages().get(0).getImageUrl());
+                        : resolver.resolve(product.getImages().get(0).getStorageKey()));
 
         return CompleteTheLookCardDto.builder()
                 .id(product.getId())

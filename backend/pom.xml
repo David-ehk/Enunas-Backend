@@ -106,6 +106,16 @@
 			<scope>test</scope>
 		</dependency>
 		<dependency>
+			<!-- Provides @Testcontainers/@Container (JUnit 5 lifecycle integration) used by
+			     MediaStorageServiceS3MockIntegrationTest and MediaEndToEndIntegrationTest.
+			     Testcontainers 2.x renamed this module from org.testcontainers:junit-jupiter to
+			     org.testcontainers:testcontainers-junit-jupiter — BOM-managed via
+			     spring-boot-dependencies -> testcontainers-bom:2.0.4, no explicit version needed. -->
+			<groupId>org.testcontainers</groupId>
+			<artifactId>testcontainers-junit-jupiter</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
 			<groupId>io.jsonwebtoken</groupId>
 			<artifactId>jjwt-api</artifactId>
 			<version>0.12.6</version>
@@ -164,7 +174,47 @@
                 </exclusion>
             </exclusions>
         </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>s3</artifactId>
+            <exclusions>
+                <!-- Presigning needs no HTTP transport (pure local SigV4 computation); the S3Client
+                     that DOES make real calls (HeadObject/PutObjectTagging/DeleteObject) uses
+                     url-connection-client below. s3's default runtime transitives (apache5-client, netty-nio-client)
+                     are excluded — verified via dependency:tree that they're the actual pulled-in clients. -->
+                <exclusion>
+                    <groupId>software.amazon.awssdk</groupId>
+                    <artifactId>apache5-client</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>software.amazon.awssdk</groupId>
+                    <artifactId>netty-nio-client</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>url-connection-client</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.adobe.testing</groupId>
+            <artifactId>s3mock-testcontainers</artifactId>
+            <version>5.1.0</version>
+            <scope>test</scope>
+        </dependency>
 	</dependencies>
+
+	<dependencyManagement>
+		<dependencies>
+			<dependency>
+				<groupId>software.amazon.awssdk</groupId>
+				<artifactId>bom</artifactId>
+				<version>2.53.0</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+		</dependencies>
+	</dependencyManagement>
 
 	<build>
 		<plugins>

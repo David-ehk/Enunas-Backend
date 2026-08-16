@@ -7,7 +7,7 @@ import lombok.Data;
 public class ProductImageDto {
 
     @NotBlank
-    private String imageUrl;
+    private String storageKey;
 
     private String altText;
 

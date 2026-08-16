@@ -111,20 +111,17 @@ class BrandPartnerDtoValidationTest {
     }
 
     @Test
-    void logoUrlAndWebsiteUrl_boundaryLength_enforcesNewCap() {
+    void websiteUrl_boundaryLength_enforcesNewCap() {
         RegisterBrandPartnerDto dto = validRegisterDto();
 
         String atMax = validUrlOfLength(255);
-        dto.setLogoUrl(atMax);
         dto.setWebsiteUrl(atMax);
         assertThat(validator.validate(dto)).isEmpty();
 
         String overMax = validUrlOfLength(256);
-        dto.setLogoUrl(overMax);
         dto.setWebsiteUrl(overMax);
         Set<ConstraintViolation<RegisterBrandPartnerDto>> violations = validator.validate(dto);
 
-        assertThat(violations).anyMatch(v -> "logoUrl".equals(v.getPropertyPath().toString()));
         assertThat(violations).anyMatch(v -> "websiteUrl".equals(v.getPropertyPath().toString()));
     }
 

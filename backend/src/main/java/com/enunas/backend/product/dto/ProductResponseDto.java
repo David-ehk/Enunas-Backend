@@ -2,6 +2,7 @@ package com.enunas.backend.product.dto;
 
 import com.enunas.backend.media.dto.ProductImageResponseDto;
 import com.enunas.backend.media.dto.ProductVideoResponseDto;
+import com.enunas.backend.media.storage.MediaUrlResolver;
 import com.enunas.backend.product.*;
 import lombok.Builder;
 import lombok.Getter;
@@ -48,13 +49,13 @@ public class ProductResponseDto {
     private LocalDateTime updatedAt;
 
     /** Maps product to DTO without own/CTL prices (price = null). */
-    public static ProductResponseDto from(Product product) {
-        return from(product, null, id -> null);
+    public static ProductResponseDto from(Product product, MediaUrlResolver resolver) {
+        return from(product, null, id -> null, resolver);
     }
 
     /** Back-compat overload: CTL prices only, own price = null. */
-    public static ProductResponseDto from(Product product, Function<Long, BigDecimal> ctlPriceProvider) {
-        return from(product, null, ctlPriceProvider);
+    public static ProductResponseDto from(Product product, Function<Long, BigDecimal> ctlPriceProvider, MediaUrlResolver resolver) {
+        return from(product, null, ctlPriceProvider, resolver);
     }
 
     /**
@@ -62,7 +63,7 @@ public class ProductResponseDto {
      * CTL card prices supplied by {@code ctlPriceProvider}. The provider receives the related
      * product's id and returns its lowest active price, or null when no active listing exists.
      */
-    public static ProductResponseDto from(Product product, BigDecimal price, Function<Long, BigDecimal> ctlPriceProvider) {
+    public static ProductResponseDto from(Product product, BigDecimal price, Function<Long, BigDecimal> ctlPriceProvider, MediaUrlResolver resolver) {
         return ProductResponseDto.builder()
                 .id(product.getId())
                 .name(product.getName())
@@ -88,16 +89,16 @@ public class ProductResponseDto {
                 .creatorEmail(product.getCreator().getEmail())
                 .completeTheLookEnabled(product.getCompleteTheLookEnabled())
                 .completeTheLookProducts(product.getCompleteTheLookProducts().stream()
-                        .map(p -> CompleteTheLookCardDto.from(p, ctlPriceProvider.apply(p.getId())))
+                        .map(p -> CompleteTheLookCardDto.from(p, ctlPriceProvider.apply(p.getId()), resolver))
                         .toList())
                 .variants(product.getVariants().stream()
                         .map(ProductVariantResponseDto::from)
                         .toList())
                 .images(product.getImages().stream()
-                        .map(ProductImageResponseDto::from)
+                        .map(img -> ProductImageResponseDto.from(img, resolver))
                         .toList())
                 .videos(product.getVideos().stream()
-                        .map(ProductVideoResponseDto::from)
+                        .map(video -> ProductVideoResponseDto.from(video, resolver))
                         .toList())
                 .createdAt(product.getCreatedAt())
                 .updatedAt(product.getUpdatedAt())

@@ -42,10 +42,6 @@ public class RegisterBrandPartnerDto {
 
     @Size(max = 255)
     @URL
-    private String logoUrl;
-
-    @Size(max = 255)
-    @URL
     private String websiteUrl;
 
     @Size(max = 30)

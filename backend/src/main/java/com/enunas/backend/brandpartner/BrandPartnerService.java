@@ -7,6 +7,11 @@ import com.enunas.backend.brandpartner.dto.BrandPartnerResponseDto;
 import com.enunas.backend.brandpartner.dto.RegisterBrandPartnerDto;
 import com.enunas.backend.brandpartner.dto.UpdateBrandPartnerDto;
 import com.enunas.backend.exception.BrandNotFoundException;
+import com.enunas.backend.media.dto.PresignUploadRequestDto;
+import com.enunas.backend.media.dto.PresignUploadResponseDto;
+import com.enunas.backend.media.storage.MediaPurpose;
+import com.enunas.backend.media.storage.MediaStorageService;
+import com.enunas.backend.media.storage.MediaUrlResolver;
 import org.springframework.context.ApplicationEventPublisher;
 import com.enunas.backend.user.EmailNormalizer;
 import com.enunas.backend.user.EmailService;
@@ -38,6 +43,8 @@ public class BrandPartnerService {
     private final BCryptPasswordEncoder passwordEncoder;
     private final EmailService emailService;
     private final ApplicationEventPublisher applicationEventPublisher;
+    private final MediaStorageService mediaStorageService;
+    private final MediaUrlResolver mediaUrlResolver;
 
     @Value("${enunas.platform.commission-rate:0.18}")
     private BigDecimal platformCommissionRate;
@@ -102,7 +109,6 @@ public class BrandPartnerService {
                 .firstName(dto.getFirstName())
                 .lastName(dto.getLastName())
                 .description(dto.getDescription())
-                .logoUrl(dto.getLogoUrl())
                 .websiteUrl(dto.getWebsiteUrl())
                 .instagramHandle(dto.getInstagramHandle())
                 .tiktokHandle(dto.getTiktokHandle())
@@ -134,7 +140,7 @@ public class BrandPartnerService {
                 new BrandApplicationSubmittedEvent(user.getEmail(), user.getVerificationCode()));
         log.info("Brand application submitted: {} ({})", dto.getBrandName(), user.getEmail());
 
-        return BrandPartnerResponseDto.from(saved);
+        return BrandPartnerResponseDto.from(saved, mediaUrlResolver);
     }
 
     /** Email verification step for brand applicants. Flips User.enabled and notifies admin. */
@@ -193,7 +199,7 @@ public class BrandPartnerService {
     @Transactional(readOnly = true)
     @PreAuthorize("hasRole('BRAND_PARTNER')")
     public BrandPartnerResponseDto getMyProfile(User user) {
-        return BrandPartnerResponseDto.from(findByUser(user));
+        return BrandPartnerResponseDto.from(findByUser(user), mediaUrlResolver);
     }
 
     @Transactional
@@ -202,7 +208,14 @@ public class BrandPartnerService {
         BrandPartner brand = findByUser(user);
 
         if (dto.getDescription() != null) brand.setDescription(dto.getDescription());
-        if (dto.getLogoUrl() != null) brand.setLogoUrl(dto.getLogoUrl());
+        if (dto.getLogoStorageKey() != null) {
+            mediaStorageService.verifyUploaded(dto.getLogoStorageKey(), MediaPurpose.BRAND_LOGO, brand.getId());
+            brand.setLogoStorageKey(dto.getLogoStorageKey());
+        }
+        if (dto.getHeroStorageKey() != null) {
+            mediaStorageService.verifyUploaded(dto.getHeroStorageKey(), MediaPurpose.BRAND_HERO, brand.getId());
+            brand.setHeroStorageKey(dto.getHeroStorageKey());
+        }
         if (dto.getWebsiteUrl() != null) brand.setWebsiteUrl(dto.getWebsiteUrl());
         if (dto.getInstagramHandle() != null) brand.setInstagramHandle(dto.getInstagramHandle());
         if (dto.getTiktokHandle() != null) brand.setTiktokHandle(dto.getTiktokHandle());
@@ -226,7 +239,19 @@ public class BrandPartnerService {
         if (dto.getReturnCountry() != null) brand.setReturnCountry(normalizeCountry(dto.getReturnCountry()));
         if (dto.getReturnInstructions() != null) brand.setReturnInstructions(dto.getReturnInstructions());
 
-        return BrandPartnerResponseDto.from(brandPartnerRepository.save(brand));
+        return BrandPartnerResponseDto.from(brandPartnerRepository.save(brand), mediaUrlResolver);
+    }
+
+    @PreAuthorize("hasRole('BRAND_PARTNER')")
+    public PresignUploadResponseDto presignMediaUpload(PresignUploadRequestDto dto, User user) {
+        BrandPartner brand = findByUser(user);
+        if (dto.getPurpose().scope() != MediaPurpose.Scope.BRAND) {
+            throw new IllegalArgumentException(
+                    "purpose " + dto.getPurpose() + " is not valid for brand media upload");
+        }
+        MediaStorageService.PresignedUpload upload = mediaStorageService.presignUpload(
+                dto.getPurpose(), brand.getId(), dto.getContentType(), dto.getContentLength());
+        return PresignUploadResponseDto.from(upload);
     }
 
     /**
@@ -241,7 +266,7 @@ public class BrandPartnerService {
                 .orElseThrow(() -> new BrandNotFoundException("Brand not found with id: " + brandId));
         applyMasterData(brand, dto.getLegalName(), dto.getAddressStreet(), dto.getAddressPostalCode(),
                 dto.getAddressCity(), dto.getAddressCountry(), dto.getVatId(), dto.getTaxNumber());
-        return BrandPartnerResponseDto.from(brandPartnerRepository.save(brand));
+        return BrandPartnerResponseDto.from(brandPartnerRepository.save(brand), mediaUrlResolver);
     }
 
     /**
@@ -274,7 +299,8 @@ public class BrandPartnerService {
     public BrandPartnerResponseDto getBrandById(Long id) {
         return BrandPartnerResponseDto.from(
                 brandPartnerRepository.findById(id)
-                        .orElseThrow(() -> new BrandNotFoundException("Brand not found with id: " + id))
+                        .orElseThrow(() -> new BrandNotFoundException("Brand not found with id: " + id)),
+                mediaUrlResolver
         );
     }
 

@@ -3,6 +3,7 @@ package com.enunas.backend.product;
 import com.enunas.backend.brandpartner.BrandPartner;
 import com.enunas.backend.brandpartner.BrandPartnerRepository;
 import com.enunas.backend.exception.ProductNotFoundException;
+import com.enunas.backend.media.storage.MediaUrlResolver;
 import com.enunas.backend.product.dto.*;
 import com.enunas.backend.product.productlisting.ProductListingRepository;
 import com.enunas.backend.product.productvariant.ProductColor;
@@ -32,6 +33,7 @@ public class ProductService {
     private final ProductListingRepository listingRepository;
     private final ProductVariantService variantService;
     private final BrandPartnerRepository brandPartnerRepository;
+    private final MediaUrlResolver mediaUrlResolver;
 
     @Transactional
     public ProductResponseDto createProduct(CreateProductDto dto, User creator) {
@@ -280,7 +282,7 @@ public class ProductService {
                     Product::getId,
                     p -> listingRepository.findLowestActivePriceByProductId(p.getId()).orElse(null),
                     (a, b) -> a));
-        return ProductResponseDto.from(product, price, ctlPrices::get);
+        return ProductResponseDto.from(product, price, ctlPrices::get, mediaUrlResolver);
     }
 
     /**

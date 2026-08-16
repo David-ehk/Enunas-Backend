@@ -63,6 +63,12 @@ enunas:
     vat-id-required: false
   shipping:
     default-rate: 4.99
+  media:
+    bucket: ${S3_BUCKET:enunas-media}
+    region: ${AWS_REGION:eu-central-1}
+    cdn-base-url: ${MEDIA_CDN_BASE_URL:}
+    endpoint: ${S3_ENDPOINT:}
+    presign-ttl: ${MEDIA_PRESIGN_TTL:PT10M}
 
 mollie:
   api:

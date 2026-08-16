@@ -24,11 +24,11 @@ public class ProductVideo {
     private Product product;
 
     @Column(nullable = false)
-    private String videoUrl;
+    private String storageKey;
 
     private String title;
 
-    private String thumbnailUrl;
+    private String thumbnailStorageKey;
 
     @Column(updatable = false)
     private LocalDateTime createdAt;

@@ -14,9 +14,11 @@ public class UpdateBrandPartnerDto {
     @NoHtml
     private String description;
 
-    @Size(max = 255)
-    @URL
-    private String logoUrl;
+    @Size(max = 512)
+    private String logoStorageKey;
+
+    @Size(max = 512)
+    private String heroStorageKey;
 
     @Size(max = 255)
     @URL

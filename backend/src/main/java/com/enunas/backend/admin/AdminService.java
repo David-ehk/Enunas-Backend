@@ -11,6 +11,7 @@ import com.enunas.backend.brandpartner.brandpayoutprofile.BrandPayoutProfileRepo
 import com.enunas.backend.brandpartner.brandshippingprofile.BrandShippingProfile;
 import com.enunas.backend.brandpartner.brandshippingprofile.BrandShippingProfileRepository;
 import com.enunas.backend.ledger.ReconciliationService;
+import com.enunas.backend.media.storage.MediaUrlResolver;
 import com.enunas.backend.payout.PayoutService;
 import com.enunas.backend.payout.PayoutStatus;
 import com.enunas.backend.payout.dto.MarkAsPaidDto;
@@ -60,6 +61,7 @@ public class AdminService {
     private final ProductService productService;
     private final UserRepository userRepository;
     private final EmailService emailService;
+    private final MediaUrlResolver mediaUrlResolver;
 
     // ===== Brand management =====
 
@@ -88,7 +90,7 @@ public class AdminService {
         emailService.sendAccountApprovedEmail(user.getEmail());
         log.info("Brand approved by admin: {} ({})", brand.getBrandName(), user.getEmail());
 
-        return BrandPartnerResponseDto.from(saved);
+        return BrandPartnerResponseDto.from(saved, mediaUrlResolver);
     }
 
     /** Reject a brand application — sets status=REJECTED. User stays disabled (login already blocked). */
@@ -99,7 +101,7 @@ public class AdminService {
         BrandPartner saved = brandPartnerRepository.save(brand);
 
         log.info("Brand rejected by admin: {} ({})", brand.getBrandName(), brand.getUser().getEmail());
-        return BrandPartnerResponseDto.from(saved);
+        return BrandPartnerResponseDto.from(saved, mediaUrlResolver);
     }
 
     @Transactional
@@ -109,19 +111,19 @@ public class AdminService {
         BrandPartner saved = brandPartnerRepository.save(brand);
 
         log.info("Brand suspended by admin: {} ({})", brand.getBrandName(), brand.getUser().getEmail());
-        return BrandPartnerResponseDto.from(saved);
+        return BrandPartnerResponseDto.from(saved, mediaUrlResolver);
     }
 
     @Transactional(readOnly = true)
     public Page<BrandPartnerResponseDto> getAllBrands(Pageable pageable) {
-        return brandPartnerRepository.findAll(pageable).map(BrandPartnerResponseDto::from);
+        return brandPartnerRepository.findAll(pageable).map(b -> BrandPartnerResponseDto.from(b, mediaUrlResolver));
     }
 
     // ===== Product moderation =====
 
     @Transactional(readOnly = true)
     public Page<AdminProductResponseDto> getAllProducts(Pageable pageable) {
-        return productRepository.findAll(pageable).map(AdminProductResponseDto::from);
+        return productRepository.findAll(pageable).map(p -> AdminProductResponseDto.from(p, mediaUrlResolver));
     }
 
     /** Admin can edit any product — no ownership check (ownership stays with BrandPartner). */
@@ -129,7 +131,7 @@ public class AdminService {
     public AdminProductResponseDto updateProduct(Long productId, UpdateProductDto dto) {
         Product product = findProduct(productId);
         productService.applyProductUpdates(product, dto);
-        return AdminProductResponseDto.from(productRepository.save(product));
+        return AdminProductResponseDto.from(productRepository.save(product), mediaUrlResolver);
     }
 
     @Transactional
@@ -149,7 +151,7 @@ public class AdminService {
         product.setModeratedAt(LocalDateTime.now());
 
         log.info("Product approved by admin {}: id={}", admin.getEmail(), productId);
-        return AdminProductResponseDto.from(productRepository.save(product));
+        return AdminProductResponseDto.from(productRepository.save(product), mediaUrlResolver);
     }
 
     /** Reject a product — status=REJECTED, stores the (optional) reason and moderation metadata. */
@@ -163,7 +165,7 @@ public class AdminService {
 
         log.info("Product rejected by admin {}: id={}, reason={}",
                 admin.getEmail(), productId, product.getRejectionReason());
-        return AdminProductResponseDto.from(productRepository.save(product));
+        return AdminProductResponseDto.from(productRepository.save(product), mediaUrlResolver);
     }
 
     /** Hide a product — status=SUSPENDED, invisible to customers but not permanently rejected. */
@@ -175,7 +177,7 @@ public class AdminService {
         product.setModeratedAt(LocalDateTime.now());
 
         log.info("Product hidden by admin {}: id={}", admin.getEmail(), productId);
-        return AdminProductResponseDto.from(productRepository.save(product));
+        return AdminProductResponseDto.from(productRepository.save(product), mediaUrlResolver);
     }
 
     // ===== Payout Profile =====
@@ -197,7 +199,7 @@ public class AdminService {
                                 .build())
         );
         log.info("Admin set payout profile for brand {}: iban={}", brand.getBrandName(), iban);
-        return BrandPartnerResponseDto.from(brand);
+        return BrandPartnerResponseDto.from(brand, mediaUrlResolver);
     }
 
     /**
@@ -250,7 +252,7 @@ public class AdminService {
                                 .build())
         );
         log.info("Admin set shipping profile for brand {}: shippingCost={}", brand.getBrandName(), dto.getShippingCost());
-        return BrandPartnerResponseDto.from(brand);
+        return BrandPartnerResponseDto.from(brand, mediaUrlResolver);
     }
 
     // ===== Payouts =====

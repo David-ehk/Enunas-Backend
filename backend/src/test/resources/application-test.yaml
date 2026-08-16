@@ -43,6 +43,15 @@ enunas:
     release-cron: "0 0 2 * * ?"
   shipping:
     default-rate: 4.99
+  media:
+    bucket: test-media-bucket
+    region: eu-central-1
+    cdn-base-url: http://localhost:1/cdn
+    # Dead endpoint by default — plain @SpringBootTest/@DataJpaTest classes never call S3, so this
+    # only needs to be a non-blank string to satisfy the fail-fast check. Media-specific test
+    # classes override enunas.media.* via @DynamicPropertySource to point at a real S3Mock container.
+    endpoint: http://localhost:1
+    presign-ttl: PT10M
 
 # Unused under mock-payments, but the Mollie Client bean still constructs from these.
 mollie:

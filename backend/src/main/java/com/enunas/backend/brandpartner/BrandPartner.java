@@ -45,7 +45,10 @@ public class BrandPartner {
     @Column(columnDefinition = "TEXT")
     private String description;
 
-    private String logoUrl;
+    private String logoStorageKey;
+
+    /** Net-new, key-only from birth — no legacy free-text hero_image_url ever existed. */
+    private String heroStorageKey;
 
     private String websiteUrl;
 

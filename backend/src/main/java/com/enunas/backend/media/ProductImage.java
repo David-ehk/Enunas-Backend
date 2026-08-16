@@ -24,7 +24,7 @@ public class ProductImage {
     private Product product;
 
     @Column(nullable = false)
-    private String imageUrl;
+    private String storageKey;
 
     private String altText;
 

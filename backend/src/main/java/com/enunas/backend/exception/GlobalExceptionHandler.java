@@ -46,6 +46,12 @@ public class GlobalExceptionHandler {
         return buildResponse(HttpStatus.BAD_REQUEST, ex.getMessage());
     }
 
+    @ExceptionHandler(SecurityException.class)
+    public ResponseEntity<Map<String, Object>> handleSecurity(SecurityException ex) {
+        log.warn("SecurityException: {}", ex.getMessage());
+        return buildResponse(HttpStatus.FORBIDDEN, ex.getMessage());
+    }
+
     @ExceptionHandler(PeriodNotClosedException.class)
     public ResponseEntity<Map<String, Object>> handlePeriodNotClosed(PeriodNotClosedException ex) {
         log.warn("PeriodNotClosedException: {}", ex.getMessage());

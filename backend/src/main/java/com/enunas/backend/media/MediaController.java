@@ -19,6 +19,15 @@ public class MediaController {
 
     private final MediaService mediaService;
 
+    @PostMapping("/upload-url")
+    @PreAuthorize("hasRole('BRAND_PARTNER')")
+    public ResponseEntity<PresignUploadResponseDto> presignUpload(
+            @PathVariable Long productId,
+            @Valid @RequestBody PresignUploadRequestDto dto,
+            @AuthenticationPrincipal User owner) {
+        return ResponseEntity.ok(mediaService.presignUpload(productId, dto, owner));
+    }
+
     @PostMapping("/images")
     @PreAuthorize("hasRole('BRAND_PARTNER')")
     public ResponseEntity<ProductImageResponseDto> addImage(

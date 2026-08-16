@@ -2,6 +2,9 @@ package com.enunas.backend.media;
 
 import com.enunas.backend.exception.ProductNotFoundException;
 import com.enunas.backend.media.dto.*;
+import com.enunas.backend.media.storage.MediaPurpose;
+import com.enunas.backend.media.storage.MediaStorageService;
+import com.enunas.backend.media.storage.MediaUrlResolver;
 import com.enunas.backend.product.Product;
 import com.enunas.backend.product.ProductRepository;
 import com.enunas.backend.user.User;
@@ -18,10 +21,24 @@ public class MediaService {
     private final ProductImageRepository imageRepository;
     private final ProductVideoRepository videoRepository;
     private final ProductRepository productRepository;
+    private final MediaStorageService mediaStorageService;
+    private final MediaUrlResolver mediaUrlResolver;
+
+    public PresignUploadResponseDto presignUpload(Long productId, PresignUploadRequestDto dto, User owner) {
+        findProductAndVerifyOwnership(productId, owner);
+        if (dto.getPurpose().scope() != MediaPurpose.Scope.PRODUCT) {
+            throw new IllegalArgumentException(
+                    "purpose " + dto.getPurpose() + " is not valid for product media upload");
+        }
+        MediaStorageService.PresignedUpload upload = mediaStorageService.presignUpload(
+                dto.getPurpose(), productId, dto.getContentType(), dto.getContentLength());
+        return PresignUploadResponseDto.from(upload);
+    }
 
     @Transactional
     public ProductImageResponseDto addImage(Long productId, ProductImageDto dto, User owner) {
         Product product = findProductAndVerifyOwnership(productId, owner);
+        mediaStorageService.verifyUploaded(dto.getStorageKey(), MediaPurpose.PRODUCT_IMAGE, productId);
 
         if (dto.isPrimary()) {
             imageRepository.findByProductIdAndPrimary(productId, true)
@@ -33,18 +50,18 @@ public class MediaService {
 
         ProductImage image = ProductImage.builder()
                 .product(product)
-                .imageUrl(dto.getImageUrl())
+                .storageKey(dto.getStorageKey())
                 .altText(dto.getAltText())
                 .primary(dto.isPrimary())
                 .displayOrder(dto.getDisplayOrder())
                 .build();
 
-        return ProductImageResponseDto.from(imageRepository.save(image));
+        return ProductImageResponseDto.from(imageRepository.save(image), mediaUrlResolver);
     }
 
     public List<ProductImageResponseDto> getImages(Long productId) {
         return imageRepository.findByProductIdOrderByDisplayOrderAsc(productId).stream()
-                .map(ProductImageResponseDto::from)
+                .map(image -> ProductImageResponseDto.from(image, mediaUrlResolver))
                 .toList();
     }
 
@@ -53,26 +70,31 @@ public class MediaService {
         ProductImage image = imageRepository.findById(imageId)
                 .orElseThrow(() -> new ProductNotFoundException("Image not found with id: " + imageId));
         verifyProductOwnership(image.getProduct(), owner);
+        mediaStorageService.delete(image.getStorageKey());
         imageRepository.delete(image);
     }
 
     @Transactional
     public ProductVideoResponseDto addVideo(Long productId, ProductVideoDto dto, User owner) {
         Product product = findProductAndVerifyOwnership(productId, owner);
+        mediaStorageService.verifyUploaded(dto.getStorageKey(), MediaPurpose.PRODUCT_VIDEO, productId);
+        if (dto.getThumbnailStorageKey() != null) {
+            mediaStorageService.verifyUploaded(dto.getThumbnailStorageKey(), MediaPurpose.VIDEO_THUMB, productId);
+        }
 
         ProductVideo video = ProductVideo.builder()
                 .product(product)
-                .videoUrl(dto.getVideoUrl())
+                .storageKey(dto.getStorageKey())
                 .title(dto.getTitle())
-                .thumbnailUrl(dto.getThumbnailUrl())
+                .thumbnailStorageKey(dto.getThumbnailStorageKey())
                 .build();
 
-        return ProductVideoResponseDto.from(videoRepository.save(video));
+        return ProductVideoResponseDto.from(videoRepository.save(video), mediaUrlResolver);
     }
 
     public List<ProductVideoResponseDto> getVideos(Long productId) {
         return videoRepository.findByProductId(productId).stream()
-                .map(ProductVideoResponseDto::from)
+                .map(video -> ProductVideoResponseDto.from(video, mediaUrlResolver))
                 .toList();
     }
 
@@ -81,6 +103,10 @@ public class MediaService {
         ProductVideo video = videoRepository.findById(videoId)
                 .orElseThrow(() -> new ProductNotFoundException("Video not found with id: " + videoId));
         verifyProductOwnership(video.getProduct(), owner);
+        mediaStorageService.delete(video.getStorageKey());
+        if (video.getThumbnailStorageKey() != null) {
+            mediaStorageService.delete(video.getThumbnailStorageKey());
+        }
         videoRepository.delete(video);
     }
 

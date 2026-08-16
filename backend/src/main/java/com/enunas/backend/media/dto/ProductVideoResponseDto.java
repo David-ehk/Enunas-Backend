@@ -1,6 +1,7 @@
 package com.enunas.backend.media.dto;
 
 import com.enunas.backend.media.ProductVideo;
+import com.enunas.backend.media.storage.MediaUrlResolver;
 import lombok.Builder;
 import lombok.Getter;
 
@@ -16,12 +17,12 @@ public class ProductVideoResponseDto {
     private String thumbnailUrl;
     private LocalDateTime createdAt;
 
-    public static ProductVideoResponseDto from(ProductVideo video) {
+    public static ProductVideoResponseDto from(ProductVideo video, MediaUrlResolver resolver) {
         return ProductVideoResponseDto.builder()
                 .id(video.getId())
-                .videoUrl(video.getVideoUrl())
+                .videoUrl(resolver.resolve(video.getStorageKey()))
                 .title(video.getTitle())
-                .thumbnailUrl(video.getThumbnailUrl())
+                .thumbnailUrl(resolver.resolve(video.getThumbnailStorageKey()))
                 .createdAt(video.getCreatedAt())
                 .build();
     }

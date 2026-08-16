@@ -3,6 +3,8 @@ package com.enunas.backend.brandpartner;
 import com.enunas.backend.brandpartner.dto.BrandPartnerResponseDto;
 import com.enunas.backend.brandpartner.dto.RegisterBrandPartnerDto;
 import com.enunas.backend.brandpartner.dto.UpdateBrandPartnerDto;
+import com.enunas.backend.media.dto.PresignUploadRequestDto;
+import com.enunas.backend.media.dto.PresignUploadResponseDto;
 import com.enunas.backend.user.User;
 import com.enunas.backend.user.dto.VerifyUserDto;
 import jakarta.validation.Valid;
@@ -57,6 +59,15 @@ public class BrandPartnerController {
             @RequestBody @Valid UpdateBrandPartnerDto dto,
             @AuthenticationPrincipal User user) {
         return ResponseEntity.ok(brandPartnerService.updateMyProfile(dto, user));
+    }
+
+    /** Presigned upload URL for the brand's own logo/hero — POST /brandpartner/media/upload-url. */
+    @PostMapping("/media/upload-url")
+    @PreAuthorize("hasRole('BRAND_PARTNER')")
+    public ResponseEntity<PresignUploadResponseDto> presignMediaUpload(
+            @RequestBody @Valid PresignUploadRequestDto dto,
+            @AuthenticationPrincipal User user) {
+        return ResponseEntity.ok(brandPartnerService.presignMediaUpload(dto, user));
     }
 
     /** Look up any brand by ID — accessible to any authenticated user. */

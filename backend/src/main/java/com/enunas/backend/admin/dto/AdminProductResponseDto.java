@@ -2,6 +2,7 @@ package com.enunas.backend.admin.dto;
 
 import com.enunas.backend.media.dto.ProductImageResponseDto;
 import com.enunas.backend.media.dto.ProductVideoResponseDto;
+import com.enunas.backend.media.storage.MediaUrlResolver;
 import com.enunas.backend.product.*;
 import com.enunas.backend.product.dto.CompleteTheLookCardDto;
 import com.enunas.backend.product.dto.ProductVariantResponseDto;
@@ -55,7 +56,7 @@ public class AdminProductResponseDto {
     private LocalDateTime moderatedAt;
     private String rejectionReason;
 
-    public static AdminProductResponseDto from(Product product) {
+    public static AdminProductResponseDto from(Product product, MediaUrlResolver resolver) {
         User moderator = product.getModeratedBy();
         return AdminProductResponseDto.builder()
                 .id(product.getId())
@@ -80,16 +81,16 @@ public class AdminProductResponseDto {
                 .creatorEmail(product.getCreator().getEmail())
                 .completeTheLookEnabled(product.getCompleteTheLookEnabled())
                 .completeTheLookProducts(product.getCompleteTheLookProducts().stream()
-                        .map(CompleteTheLookCardDto::from)
+                        .map(p -> CompleteTheLookCardDto.from(p, resolver))
                         .toList())
                 .variants(product.getVariants().stream()
                         .map(ProductVariantResponseDto::from)
                         .toList())
                 .images(product.getImages().stream()
-                        .map(ProductImageResponseDto::from)
+                        .map(img -> ProductImageResponseDto.from(img, resolver))
                         .toList())
                 .videos(product.getVideos().stream()
-                        .map(ProductVideoResponseDto::from)
+                        .map(video -> ProductVideoResponseDto.from(video, resolver))
                         .toList())
                 .createdAt(product.getCreatedAt())
                 .updatedAt(product.getUpdatedAt())

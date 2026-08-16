@@ -3,6 +3,7 @@ package com.enunas.backend.brandpartner.dto;
 import com.enunas.backend.brandpartner.BrandPartner;
 import com.enunas.backend.brandpartner.BrandReturnAddress;
 import com.enunas.backend.brandpartner.BrandStatus;
+import com.enunas.backend.media.storage.MediaUrlResolver;
 import lombok.Builder;
 import lombok.Getter;
 
@@ -20,6 +21,8 @@ public class BrandPartnerResponseDto {
     private String lastName;
     private String description;
     private String logoUrl;
+    /** Net-new, key-only from birth — no legacy free-text hero URL ever existed. */
+    private String heroImageUrl;
     private String websiteUrl;
     private String instagramHandle;
     private String tiktokHandle;
@@ -53,7 +56,7 @@ public class BrandPartnerResponseDto {
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
-    public static BrandPartnerResponseDto from(BrandPartner brand) {
+    public static BrandPartnerResponseDto from(BrandPartner brand, MediaUrlResolver mediaUrlResolver) {
         return BrandPartnerResponseDto.builder()
                 .id(brand.getId())
                 .brandName(brand.getBrandName())
@@ -61,7 +64,8 @@ public class BrandPartnerResponseDto {
                 .firstName(brand.getFirstName())
                 .lastName(brand.getLastName())
                 .description(brand.getDescription())
-                .logoUrl(brand.getLogoUrl())
+                .logoUrl(mediaUrlResolver.resolve(brand.getLogoStorageKey()))
+                .heroImageUrl(mediaUrlResolver.resolve(brand.getHeroStorageKey()))
                 .websiteUrl(brand.getWebsiteUrl())
                 .instagramHandle(brand.getInstagramHandle())
                 .tiktokHandle(brand.getTiktokHandle())

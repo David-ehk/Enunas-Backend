@@ -1,6 +1,7 @@
 package com.enunas.backend.media.dto;
 
 import com.enunas.backend.media.ProductImage;
+import com.enunas.backend.media.storage.MediaUrlResolver;
 import lombok.Builder;
 import lombok.Getter;
 
@@ -17,10 +18,10 @@ public class ProductImageResponseDto {
     private int displayOrder;
     private LocalDateTime createdAt;
 
-    public static ProductImageResponseDto from(ProductImage image) {
+    public static ProductImageResponseDto from(ProductImage image, MediaUrlResolver resolver) {
         return ProductImageResponseDto.builder()
                 .id(image.getId())
-                .imageUrl(image.getImageUrl())
+                .imageUrl(resolver.resolve(image.getStorageKey()))
                 .altText(image.getAltText())
                 .primary(image.isPrimary())
                 .displayOrder(image.getDisplayOrder())
