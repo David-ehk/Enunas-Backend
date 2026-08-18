@@ -1,5 +1,6 @@
 package com.enunas.backend.config;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -14,6 +15,7 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+import java.util.Arrays;
 import java.util.List;
 
 @Configuration
@@ -23,6 +25,9 @@ public class SecurityConfiguration {
 
     private final AuthenticationProvider authenticationProvider;
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
+
+    @Value("${app.cors.allowed-origins}")
+    private String allowedOriginsProperty;
 
     public SecurityConfiguration(
             AuthenticationProvider authenticationProvider,
@@ -54,6 +59,9 @@ public class SecurityConfiguration {
                                 "/brandpartner/apply",
                                 "/brandpartner/verify",
                                 "/brandpartner/resend-verification").permitAll()
+
+                        // Health check — used by load balancers / uptime monitors, no auth
+                        .requestMatchers("/actuator/health").permitAll()
 
                         // Admin only
                         .requestMatchers("/admin/**").hasRole("ADMIN")
@@ -98,10 +106,13 @@ public class SecurityConfiguration {
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
 
-        configuration.setAllowedOrigins(List.of(
-                "http://localhost:3000",
-                "https://deine-domain.com"
-        ));
+        // Comma-separated, exact origins (scheme + host, no path/trailing slash) — see
+        // app.cors.allowed-origins / CORS_ALLOWED_ORIGINS. apex and www count as different
+        // origins to the browser, so both must be listed explicitly if both are live.
+        configuration.setAllowedOrigins(Arrays.stream(allowedOriginsProperty.split(","))
+                .map(String::strip)
+                .filter(origin -> !origin.isEmpty())
+                .toList());
 
         configuration.setAllowedMethods(List.of(
                 "GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"

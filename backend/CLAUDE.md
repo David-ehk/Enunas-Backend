@@ -52,6 +52,7 @@ All secrets are externalized. Copy `.env` and fill in values before running loca
 | `MOLLIE_API_KEY` | — | Mollie API key (test: `test_xxx`, live: `live_xxx`) |
 | `MOLLIE_WEBHOOK_URL` | — | Full public URL Mollie posts to, e.g. `https://api.enunas.com/webhooks/mollie` |
 | `FRONTEND_BASE_URL` | `http://localhost:3000` | Frontend origin for post-payment redirect |
+| `CORS_ALLOWED_ORIGINS` | `http://localhost:3000,https://enunas.com,https://www.enunas.com` | Comma-separated, exact origins (scheme+host, no path) allowed by Spring Security CORS — apex and `www` are different origins to the browser, list both if both are live |
 | `ADMIN_EMAIL` | `admin@enunas.com` | Email for the seeded admin account |
 | `ADMIN_PASSWORD` | — | Password for the seeded admin account (required) |
 | `GOOGLE_OAUTH_CLIENT_ID` | — | Google OAuth 2.0 Client ID (`*.apps.googleusercontent.com`) that `POST /auth/google` validates ID tokens' `aud` claim against (required) |

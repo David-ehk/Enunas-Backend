@@ -215,7 +215,8 @@
       "Bash(./mvnw -o -q dependency:build-classpath -Dmdep.outputFile=/tmp/cp.txt -Dmdep.includeScope=test)",
       "Bash(find 'C:\\\\Users\\\\david/.m2/repository/org/springframework/boot/spring-boot-dependencies' -name *.pom)",
       "Bash(find 'C:\\\\Users\\\\david/.m2/repository/org/testcontainers/testcontainers-bom' -name *.pom)",
-      "Bash(python3 -c ' *)"
+      "Bash(python3 -c ' *)",
+      "WebFetch(domain:search.maven.org)"
     ]
   },
   "enableAllProjectMcpServers": true,

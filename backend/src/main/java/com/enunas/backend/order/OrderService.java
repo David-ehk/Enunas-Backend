@@ -1,6 +1,7 @@
 package com.enunas.backend.order;
 
 import com.enunas.backend.brandpartner.BrandPartner;
+import com.enunas.backend.brandpartner.BrandPartnerRepository;
 import com.enunas.backend.brandpartner.brandeconomics.BrandEconomics;
 import com.enunas.backend.brandpartner.brandeconomics.BrandEconomicsRepository;
 import com.enunas.backend.customer.UserAddress;
@@ -77,6 +78,7 @@ public class OrderService {
     private final ProductVariantRepository productVariantRepository;
     private final PaymentRepository paymentRepository;
     private final BrandEconomicsRepository brandEconomicsRepository;
+    private final BrandPartnerRepository brandPartnerRepository;
     private final ReturnOrderRepository returnOrderRepository;
     private final EmailService emailService;
     private final PaymentProvider paymentProvider;
@@ -631,11 +633,67 @@ public class OrderService {
         order.setStatus(OrderStatus.PAID);
         orderRepository.save(order);
 
+        List<OrderShippingSnapshot> shippingSnapshots =
+                orderShippingSnapshotRepository.findByOrderIdOrderByIdAsc(order.getId());
         ledgerService.recordOrderPayment(order);
-        ledgerService.recordShippingRevenue(order,
-                orderShippingSnapshotRepository.findByOrderIdOrderByIdAsc(order.getId()));
+        ledgerService.recordShippingRevenue(order, shippingSnapshots);
+
+        sendOrderConfirmationEmail(order, shippingSnapshots);
 
         log.info("Webhook: order {} PENDING → PAID", order.getOrderNumber());
+    }
+
+    /**
+     * Publishes a confirmation event once payment is captured. Sent from the webhook path only
+     * (not {@code createOrder}) — that's the point where money has actually changed hands, not
+     * just where a Mollie payment intent was opened. The actual send happens AFTER_COMMIT in
+     * {@link OrderConfirmationEmailListener} so an SMTP failure can never roll back the
+     * already-committed PENDING → PAID transition (see that class for the best-effort contract).
+     */
+    private void sendOrderConfirmationEmail(Order order, List<OrderShippingSnapshot> shippingSnapshots) {
+        List<String> itemLines = order.getItems().stream()
+                .map(item -> "  - " + item.getQuantity() + "x " + item.getProductSnapshotName()
+                        + " (" + item.getVariantSnapshotColor() + ", " + item.getVariantSnapshotSize() + ")"
+                        + " – " + item.getLineTotal() + " " + order.getCurrency())
+                .toList();
+
+        ShippingAddress addr = order.getShippingAddress();
+        String addressBlock = addr == null ? "" :
+                addr.getFirstName() + " " + addr.getLastName() + "\n"
+                + addr.getStreet() + " " + addr.getHouseNumber() + "\n"
+                + (addr.getAddressLine2() != null && !addr.getAddressLine2().isBlank()
+                        ? addr.getAddressLine2() + "\n" : "")
+                + addr.getPostalCode() + " " + addr.getCity() + "\n"
+                + addr.getCountry();
+
+        String orderLink = frontendBaseUrl + "/orders/" + order.getOrderNumber() + "/confirmation";
+
+        // Per-brand breakdown only when there's more than one shipping line — a single-brand
+        // order's shipping is already fully explained by the one shippingTotal figure.
+        List<String> shippingBreakdown = List.of();
+        if (shippingSnapshots.size() > 1) {
+            Map<Long, String> brandNames = brandPartnerRepository
+                    .findAllById(shippingSnapshots.stream().map(OrderShippingSnapshot::getBrandPartnerId).toList())
+                    .stream()
+                    .collect(java.util.stream.Collectors.toMap(BrandPartner::getId, BrandPartner::getBrandName));
+            shippingBreakdown = shippingSnapshots.stream()
+                    .map(s -> "  - " + brandNames.getOrDefault(s.getBrandPartnerId(), "Marke")
+                            + ": " + s.getAmount() + " " + s.getCurrency())
+                    .toList();
+        }
+
+        eventPublisher.publishEvent(new OrderConfirmationEvent(
+                order.getBuyer().getEmail(),
+                order.getOrderNumber(),
+                itemLines,
+                order.getSubtotal(),
+                order.getShippingTotal(),
+                shippingBreakdown,
+                order.getDiscountAmount(),
+                order.getTotal(),
+                order.getCurrency(),
+                addressBlock,
+                orderLink));
     }
 
     // ===== Admin: forward flow =====

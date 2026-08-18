@@ -83,3 +83,8 @@ google:
 app:
   frontend:
     base-url: ${FRONTEND_BASE_URL:http://localhost:3000}
+  cors:
+    # Comma-separated list, no spaces. Must be exact origins (scheme + host, no path) — the
+    # browser sends the Origin header as-is and Spring does a literal match against this list.
+    # apex and www are different origins to the browser, so both are listed by default.
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000,https://enunas.com,https://www.enunas.com}
