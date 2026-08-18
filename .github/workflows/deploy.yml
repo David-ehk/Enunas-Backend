@@ -6,8 +6,7 @@ on:
     paths:
       - 'backend/**'
       - '.github/workflows/deploy.yml'
-
-  workflow_dispatch:
+  workflow_dispatch: {}
 
 env:
   AWS_REGION: eu-central-1
@@ -78,10 +77,10 @@ jobs:
               -e ADMIN_PASSWORD="${{ secrets.ADMIN_PASSWORD }}" \
               -e S3_BUCKET="${{ secrets.S3_BUCKET }}" \
               -e AWS_REGION="${{ env.AWS_REGION }}" \
+              -e MEDIA_CDN_BASE_URL="${{ secrets.MEDIA_CDN_BASE_URL }}" \
               -e MOLLIE_API_KEY="${{ secrets.MOLLIE_API_KEY }}" \
               -e MOLLIE_WEBHOOK_URL="${{ secrets.MOLLIE_WEBHOOK_URL }}" \
               -e GOOGLE_OAUTH_CLIENT_ID="${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}" \
-              -e GOOGLE_API_KEY="${{ secrets.GOOGLE_API_KEY }}" \
               -e FRONTEND_BASE_URL="${{ secrets.FRONTEND_BASE_URL }}" \
               ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
 
