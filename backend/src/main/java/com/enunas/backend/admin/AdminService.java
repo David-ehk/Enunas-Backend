@@ -27,12 +27,12 @@ import com.enunas.backend.product.ProductRepository;
 import com.enunas.backend.product.ProductService;
 import com.enunas.backend.product.ProductStatus;
 import com.enunas.backend.product.dto.UpdateProductDto;
-import com.enunas.backend.user.EmailService;
 import com.enunas.backend.user.Role;
 import com.enunas.backend.user.User;
 import com.enunas.backend.user.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -60,8 +60,8 @@ public class AdminService {
     private final ProductRepository productRepository;
     private final ProductService productService;
     private final UserRepository userRepository;
-    private final EmailService emailService;
     private final MediaUrlResolver mediaUrlResolver;
+    private final ApplicationEventPublisher applicationEventPublisher;
 
     // ===== Brand management =====
 
@@ -87,7 +87,9 @@ public class AdminService {
         userRepository.save(user);
         BrandPartner saved = brandPartnerRepository.save(brand);
 
-        emailService.sendAccountApprovedEmail(user.getEmail());
+        // Best-effort account-approved email, dispatched AFTER_COMMIT — never blocks/rolls back
+        // the already-committed approval.
+        applicationEventPublisher.publishEvent(new BrandApprovedEvent(user.getEmail()));
         log.info("Brand approved by admin: {} ({})", brand.getBrandName(), user.getEmail());
 
         return BrandPartnerResponseDto.from(saved, mediaUrlResolver);

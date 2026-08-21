@@ -24,7 +24,11 @@ public class BrandApplicationEmailListener {
         try {
             emailService.sendVerificationEmail(event.email(), event.verificationCode());
         } catch (Exception ex) {
-            log.error("Best-effort verification email failed for {} — application already persisted: {}",
+            // EMAIL_DELIVERY_FAILURE — stable marker for a log-based alert (e.g. CloudWatch Logs
+            // metric filter). The application/resend is already persisted; only the code delivery failed
+            // — and unlike the other best-effort emails, this one blocks the applicant's own next step
+            // (they have no code to enter) until they use resend-verification again.
+            log.error("EMAIL_DELIVERY_FAILURE type=brand-verification-code email={} reason={}",
                     event.email(), ex.getMessage());
         }
     }

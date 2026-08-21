@@ -43,10 +43,11 @@ All secrets are externalized. Copy `.env` and fill in values before running loca
 | `DB_URL` | `jdbc:postgresql://localhost:5432/Enunas` | Full JDBC URL |
 | `DB_USERNAME` | `postgres` | Database user |
 | `DB_PASSWORD` | — | Database password (required) |
-| `MAIL_HOST` | `smtp.gmail.com` | SMTP host |
-| `MAIL_PORT` | `587` | SMTP port |
-| `MAIL_USERNAME` | — | Email sender address |
-| `MAIL_PASSWORD` | — | Email app password |
+| `MAIL_HOST` | — (required) | SMTP host. Provider is Resend: `smtp.resend.com`. No code-level default — a missing value fails app startup loudly instead of silently falling back to an abandoned mail path. |
+| `MAIL_PORT` | — (required) | SMTP port, `587` for Resend. No code-level default, same reasoning as `MAIL_HOST`. |
+| `MAIL_USERNAME` | — | Resend SMTP **auth identity** — literally the string `resend`, not an email address. Never used as the sender address (see `MAIL_FROM_ADDRESS`). |
+| `MAIL_PASSWORD` | — | Resend API key. |
+| `MAIL_FROM_ADDRESS` | — (required) | The `From:` address on every outbound email. **Must be an address at a domain verified in the Resend dashboard** (DNS-verified — currently `enunas.com`) — an address at an unverified domain is silently rejected by Resend, not caught by this app. Deliberately a separate variable from `MAIL_USERNAME`: they were the same string under Gmail by coincidence, not by design — don't re-conflate them if the provider changes again. |
 | `JWT_SECRET` | — | Base64-encoded HMAC-SHA256 key, must decode to ≥32 bytes (required) |
 | `JWT_EXPIRATION` | `86400000` | Token TTL in milliseconds (default 24 h) |
 | `MOLLIE_API_KEY` | — | Mollie API key (test: `test_xxx`, live: `live_xxx`) |

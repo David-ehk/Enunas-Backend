@@ -40,7 +40,9 @@ public class ReturnApprovedEmailListener {
                     "in deinem Konto unter Meine Bestellungen."
             );
         } catch (Exception ex) {
-            log.error("Best-effort return-approval email failed for order {} / {} — approval already persisted: {}",
+            // EMAIL_DELIVERY_FAILURE — stable marker for a log-based alert (e.g. CloudWatch Logs
+            // metric filter). The approval is already persisted; only the customer notification failed.
+            log.error("EMAIL_DELIVERY_FAILURE type=return-approved order={} return={} reason={}",
                     event.orderNumber(), event.returnNumber(), ex.getMessage());
         }
     }

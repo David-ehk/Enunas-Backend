@@ -14,7 +14,6 @@ import com.enunas.backend.media.storage.MediaStorageService;
 import com.enunas.backend.media.storage.MediaUrlResolver;
 import org.springframework.context.ApplicationEventPublisher;
 import com.enunas.backend.user.EmailNormalizer;
-import com.enunas.backend.user.EmailService;
 import com.enunas.backend.user.Role;
 import com.enunas.backend.user.User;
 import com.enunas.backend.user.UserRepository;
@@ -41,7 +40,6 @@ public class BrandPartnerService {
     private final BrandEconomicsRepository brandEconomicsRepository;
     private final UserRepository userRepository;
     private final BCryptPasswordEncoder passwordEncoder;
-    private final EmailService emailService;
     private final ApplicationEventPublisher applicationEventPublisher;
     private final MediaStorageService mediaStorageService;
     private final MediaUrlResolver mediaUrlResolver;
@@ -89,13 +87,18 @@ public class BrandPartnerService {
             throw new IllegalArgumentException("USt-IdNr (vatId) is required");
         }
 
-        // enabled=true: login is gated by the operator (adminApproved), NOT by email verification.
-        // The verification token still travels (best-effort email below), but nothing gates on it.
+        // enabled=false until verifyBrandApplicant() flips it: login is gated on BOTH email
+        // verification AND operator approval (see AuthenticationService.assertAccountActive's
+        // dedicated BRAND_PARTNER branch — "verify your email first" only makes sense if this
+        // starts false). A commit in Jun 2026 flipped this to enabled=true without updating
+        // verifyBrandApplicant()'s "already verified" guard to match, which made /brandpartner/verify
+        // reject every real applicant on their first (and only) attempt. Reverted — email
+        // verification is a real gate again, not just a best-effort courtesy email.
         User user = User.builder()
                 .email(normalizedEmail)
                 .password(passwordEncoder.encode(dto.getPassword()))
                 .role(Role.BRAND_PARTNER)
-                .enabled(true)
+                .enabled(false)
                 .adminApproved(false)
                 .verificationCode(generateVerificationCode())
                 .verificationCodeExpiresAt(LocalDateTime.now().plusMinutes(15))
@@ -171,8 +174,10 @@ public class BrandPartnerService {
 
         log.info("Brand applicant email verified: {}", user.getEmail());
 
-        notifyAdminForApproval(user);
-        emailService.sendPendingApprovalEmail(user.getEmail());
+        // Best-effort applicant + admin notification emails, dispatched AFTER_COMMIT — never
+        // blocks/rolls back the already-persisted verification.
+        applicationEventPublisher.publishEvent(
+                new BrandVerificationCompletedEvent(user.getEmail(), user.getId(), adminEmail));
     }
 
     /** Re-issue the verification code for a brand applicant whose code expired. */
@@ -192,8 +197,11 @@ public class BrandPartnerService {
         user.setVerificationCodeExpiresAt(LocalDateTime.now().plusMinutes(15));
         userRepository.save(user);
 
-        emailService.sendVerificationEmail(user.getEmail(), user.getVerificationCode());
-        log.info("New verification code sent to brand applicant: {}", user.getEmail());
+        // Reuses the apply flow's own best-effort, AFTER_COMMIT verification email — same shape,
+        // same listener (BrandApplicationEmailListener) — never blocks/rolls back the new code.
+        applicationEventPublisher.publishEvent(
+                new BrandApplicationSubmittedEvent(user.getEmail(), user.getVerificationCode()));
+        log.info("New verification code requested for brand applicant: {}", user.getEmail());
     }
 
     @Transactional(readOnly = true)
@@ -323,20 +331,5 @@ public class BrandPartnerService {
                 .toLowerCase()
                 .replaceAll("[^a-z0-9]+", "-")
                 .replaceAll("^-+|-+$", "");
-    }
-
-    private void notifyAdminForApproval(User user) {
-        String subject = "New Brand Partner pending approval";
-        String message = String.format("""
-                A new brand partner is awaiting admin approval.
-
-                Email: %s
-                User ID: %d
-
-                Approve via: POST /admin/brands/{brandId}/approve
-                """, user.getEmail(), user.getId());
-
-        emailService.sendPlainTextEmail(adminEmail, subject, message);
-        log.info("Admin notified for approval of: {}", user.getEmail());
     }
 }

@@ -9,6 +9,7 @@ import com.enunas.backend.user.dto.ResetPasswordDto;
 import com.enunas.backend.user.dto.SetPasswordDto;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -27,9 +28,9 @@ public class AuthenticationService {
     private final UserRepository userRepository;
     private final BCryptPasswordEncoder passwordEncoder;
     private final AuthenticationManager authenticationManager;
-    private final EmailService emailService;
     private final CustomerService customerService;
     private final OAuthAccountRepository oAuthAccountRepository;
+    private final ApplicationEventPublisher applicationEventPublisher;
 
     /**
      * Customer signup. Always creates a CUSTOMER, immediately active, with an empty
@@ -58,7 +59,8 @@ public class AuthenticationService {
 
         customerService.createForUser(user);
 
-        emailService.sendWelcomeEmail(user.getEmail(), user.getEmail());
+        // Best-effort welcome email, dispatched AFTER_COMMIT — never blocks/rolls back the signup.
+        applicationEventPublisher.publishEvent(new WelcomeEmailEvent(user.getEmail()));
         log.info("Customer registered and active: {}", user.getEmail());
         return user;
     }
@@ -132,8 +134,9 @@ public class AuthenticationService {
             user.setPasswordResetToken(code);
             user.setPasswordResetExpiresAt(LocalDateTime.now().plusMinutes(15));
             userRepository.save(user);
-            emailService.sendPasswordResetEmail(user.getEmail(), code);
-            log.info("Password reset code sent to: {}", user.getEmail());
+            // Best-effort reset email, dispatched AFTER_COMMIT — never blocks/rolls back the token write.
+            applicationEventPublisher.publishEvent(new PasswordResetRequestedEvent(user.getEmail(), code));
+            log.info("Password reset code requested for: {}", user.getEmail());
         });
     }
 
@@ -215,7 +218,8 @@ public class AuthenticationService {
                 .providerUserId(payload.subject())
                 .build());
 
-        emailService.sendWelcomeEmail(user.getEmail(), user.getEmail());
+        // Best-effort welcome email, dispatched AFTER_COMMIT — never blocks/rolls back the signup.
+        applicationEventPublisher.publishEvent(new WelcomeEmailEvent(user.getEmail()));
         log.info("Customer registered via Google: {}", user.getEmail());
         return user;
     }

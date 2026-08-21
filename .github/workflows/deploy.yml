@@ -71,6 +71,7 @@ jobs:
               -e MAIL_PORT="${{ secrets.MAIL_PORT }}" \
               -e MAIL_USERNAME="${{ secrets.MAIL_USERNAME }}" \
               -e MAIL_PASSWORD="${{ secrets.MAIL_PASSWORD }}" \
+              -e MAIL_FROM_ADDRESS="${{ secrets.MAIL_FROM_ADDRESS }}" \
               -e JWT_SECRET="${{ secrets.JWT_SECRET }}" \
               -e JWT_EXPIRATION="${{ secrets.JWT_EXPIRATION }}" \
               -e ADMIN_EMAIL="${{ secrets.ADMIN_EMAIL }}" \

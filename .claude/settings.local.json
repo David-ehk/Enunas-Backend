@@ -216,7 +216,9 @@
       "Bash(find 'C:\\\\Users\\\\david/.m2/repository/org/springframework/boot/spring-boot-dependencies' -name *.pom)",
       "Bash(find 'C:\\\\Users\\\\david/.m2/repository/org/testcontainers/testcontainers-bom' -name *.pom)",
       "Bash(python3 -c ' *)",
-      "WebFetch(domain:search.maven.org)"
+      "WebFetch(domain:search.maven.org)",
+      "Bash(./mvnw -q test-compile)",
+      "Bash(./mvnw -q compile test-compile)"
     ]
   },
   "enableAllProjectMcpServers": true,

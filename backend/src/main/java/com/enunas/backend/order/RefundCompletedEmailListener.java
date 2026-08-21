@@ -37,7 +37,9 @@ public class RefundCompletedEmailListener {
                     "unter Meine Bestellungen."
             );
         } catch (Exception ex) {
-            log.error("Best-effort refund-completed email failed for order {} / {} — refund already persisted: {}",
+            // EMAIL_DELIVERY_FAILURE — stable marker for a log-based alert (e.g. CloudWatch Logs
+            // metric filter). The refund is already persisted; only the customer notification failed.
+            log.error("EMAIL_DELIVERY_FAILURE type=refund-completed order={} return={} reason={}",
                     event.orderNumber(), event.returnNumber(), ex.getMessage());
         }
     }

@@ -53,7 +53,9 @@ public class OrderConfirmationEmailListener {
             log.info("Order confirmation email sent to {} for order {}",
                     event.buyerEmail(), event.orderNumber());
         } catch (Exception ex) {
-            log.error("Best-effort order-confirmation email failed for order {} — payment already captured: {}",
+            // EMAIL_DELIVERY_FAILURE — stable marker for a log-based alert (e.g. CloudWatch Logs
+            // metric filter). Payment is already captured; only the confirmation email failed.
+            log.error("EMAIL_DELIVERY_FAILURE type=order-confirmation order={} reason={}",
                     event.orderNumber(), ex.getMessage());
         }
     }

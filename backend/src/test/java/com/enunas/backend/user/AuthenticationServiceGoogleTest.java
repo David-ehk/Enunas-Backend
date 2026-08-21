@@ -7,6 +7,7 @@ import com.enunas.backend.user.dto.LoginUserDto;
 import com.enunas.backend.user.dto.RegisterUserDto;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -38,9 +39,9 @@ class AuthenticationServiceGoogleTest {
                 userRepository,
                 mock(BCryptPasswordEncoder.class),
                 authenticationManager,
-                mock(EmailService.class),
                 customerService,
-                oAuthAccountRepository);
+                oAuthAccountRepository,
+                mock(ApplicationEventPublisher.class));
     }
 
     @Test

@@ -17,7 +17,12 @@ public class EmailService {
 
     private final JavaMailSender mailSender;
 
-    @Value("${spring.mail.username}")
+    // Deliberately NOT spring.mail.username: that's the SMTP AUTH identity, which is a different
+    // concept from the sender address — they were coincidentally the same string under Gmail, but
+    // Resend's SMTP auth username is the literal string "resend", not an address. No default here:
+    // a wrong-but-present from-address would fail silently at every provider that checks sender
+    // domain verification, which is worse than refusing to start.
+    @Value("${enunas.mail.from-address}")
     private String fromEmail;
 
     // ✅ Spezifische Verifizierungs-Email (aus Enunas)

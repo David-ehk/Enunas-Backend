@@ -37,7 +37,6 @@ import com.enunas.backend.discount.DiscountApplication;
 import com.enunas.backend.discount.DiscountService;
 import com.enunas.backend.shipping.ShippingCostResult;
 import com.enunas.backend.shipping.ShippingCostService;
-import com.enunas.backend.user.EmailService;
 import com.enunas.backend.user.User;
 import jakarta.validation.Validator;
 import lombok.RequiredArgsConstructor;
@@ -80,7 +79,6 @@ public class OrderService {
     private final BrandEconomicsRepository brandEconomicsRepository;
     private final BrandPartnerRepository brandPartnerRepository;
     private final ReturnOrderRepository returnOrderRepository;
-    private final EmailService emailService;
     private final PaymentProvider paymentProvider;
     private final LedgerService ledgerService;
     private final RefundPersistenceHelper refundPersistenceHelper;
@@ -539,17 +537,20 @@ public class OrderService {
         order.setTrackingNumber(dto.getTrackingNumber());
         order.setShippedAt(LocalDateTime.now());
         order.setStatus(OrderStatus.SHIPPED);
+        Order saved = orderRepository.save(order);
 
-        emailService.sendPlainTextEmail(
+        // Best-effort shipment-notification email, dispatched AFTER_COMMIT — never blocks/rolls
+        // back the already-committed PAID -> SHIPPED transition.
+        eventPublisher.publishEvent(new ShipmentConfirmedEvent(
                 order.getBuyer().getEmail(),
-                "Deine Bestellung " + order.getOrderNumber() + " wurde versendet",
-                "Deine Bestellung ist unterwegs!\nVersanddienstleister: " + dto.getCarrier() +
-                "\nTracking-Nummer: " + dto.getTrackingNumber() +
-                (dto.getNote() != null && !dto.getNote().isBlank() ? "\nHinweis: " + dto.getNote() : ""));
+                order.getOrderNumber(),
+                dto.getCarrier(),
+                dto.getTrackingNumber(),
+                dto.getNote()));
 
         log.info("BrandPartner {} confirmed shipment for order {} via {}",
                 brandPartner.getEmail(), order.getOrderNumber(), dto.getCarrier());
-        return OrderResponseDto.from(orderRepository.save(order));
+        return OrderResponseDto.from(saved);
     }
 
     @PreAuthorize("hasRole('BRAND_PARTNER')")
@@ -819,13 +820,10 @@ public class OrderService {
         // completes.
         releaseDiscountUsageOnce(order);
 
-        String body = "Deine Bestellung " + order.getOrderNumber() + " wurde storniert.\n" +
-                "Grund: " + dto.getReason() +
-                (dto.getNote() != null && !dto.getNote().isBlank() ? "\nHinweis: " + dto.getNote() : "");
-        emailService.sendPlainTextEmail(
-                order.getBuyer().getEmail(),
-                "Bestellung " + order.getOrderNumber() + " storniert",
-                body);
+        // Best-effort cancellation-notification email, dispatched AFTER_COMMIT — never blocks/rolls
+        // back the already-committed cancellation + discount-usage release.
+        eventPublisher.publishEvent(new OrderCancelledEvent(
+                order.getBuyer().getEmail(), order.getOrderNumber(), dto.getReason(), dto.getNote()));
 
         log.info("Order {} cancelled by admin {} — reason: {}",
                 order.getOrderNumber(), admin.getEmail(), dto.getReason());

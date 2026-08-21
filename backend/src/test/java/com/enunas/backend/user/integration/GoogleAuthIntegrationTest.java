@@ -16,6 +16,7 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class GoogleAuthIntegrationTest extends AbstractDiscountIntegrationTest {
@@ -23,9 +24,10 @@ class GoogleAuthIntegrationTest extends AbstractDiscountIntegrationTest {
     @MockitoBean
     private GoogleIdTokenVerifier googleIdTokenVerifier;
 
-    // Real SMTP is unreachable in the test environment; loginWithGoogle sends a welcome email
-    // synchronously for new signups, so it must be mocked (same pattern as MultiBrandReturnTest,
-    // ReturnLifecyclePhase3Test, Vat22fComplianceTest).
+    // Real SMTP is unreachable in the test environment; loginWithGoogle publishes a best-effort,
+    // AFTER_COMMIT welcome email for new signups (WelcomeEmailListener), so it's mocked to keep
+    // tests fast/quiet (same pattern as MultiBrandReturnTest, ReturnLifecyclePhase3Test,
+    // Vat22fComplianceTest) — not because a real failure here would break anything anymore.
     @MockitoBean
     private EmailService emailService;
 
@@ -42,6 +44,36 @@ class GoogleAuthIntegrationTest extends AbstractDiscountIntegrationTest {
         assertThat(created.getRole()).isEqualTo(Role.CUSTOMER);
         assertThat(created.getPassword()).isNull();
         assertThat(created.isEnabled()).isTrue();
+    }
+
+    /** Wiring proof, not just failure-swallowing: a broken/missing event publish would also make
+     *  the "throws" test below pass (for the wrong reason — the mocked throw simply never fires). */
+    @Test
+    void googleSignIn_newUser_onSuccess_sendsWelcomeEmail() throws Exception {
+        stubGoogleToken("fake-token-1c", "sub-1c", "wired@example.com", true, "Wired", "User");
+
+        rest.exchange("/auth/google", HttpMethod.POST,
+                new HttpEntity<>(Map.of("idToken", "fake-token-1c")), Map.class);
+
+        verify(emailService).sendWelcomeEmail(org.mockito.ArgumentMatchers.eq("wired@example.com"),
+                org.mockito.ArgumentMatchers.eq("wired@example.com"));
+    }
+
+    /** Regression: welcome email must be best-effort (AFTER_COMMIT) — an SMTP failure must never
+     *  turn a successful Google signup into a 500 or roll back the newly-created account. */
+    @Test
+    void googleSignIn_newUser_succeedsEvenWhenWelcomeEmailThrows() throws Exception {
+        org.mockito.Mockito.doThrow(new RuntimeException("smtp down"))
+                .when(emailService).sendWelcomeEmail(org.mockito.ArgumentMatchers.anyString(),
+                        org.mockito.ArgumentMatchers.anyString());
+        stubGoogleToken("fake-token-1b", "sub-1b", "resilient@example.com", true, "Resilient", "User");
+
+        ResponseEntity<Map> resp = rest.exchange("/auth/google", HttpMethod.POST,
+                new HttpEntity<>(Map.of("idToken", "fake-token-1b")), Map.class);
+
+        assertThat(resp.getStatusCode().value()).isEqualTo(200); // no rollback
+        assertThat(resp.getBody().get("token")).isNotNull();
+        assertThat(userRepository.findByEmail("resilient@example.com")).isPresent();
     }
 
     @Test

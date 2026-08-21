@@ -26,8 +26,10 @@ spring:
         format_sql: true
 
   mail:
-    host: ${MAIL_HOST:smtp.gmail.com}
-    port: ${MAIL_PORT:587}
+    # No code-level defaults: a missing MAIL_* var must fail app startup loudly, not silently fall
+    # back to a provider we've moved away from (was Gmail; see CLAUDE.md for the current provider).
+    host: ${MAIL_HOST}
+    port: ${MAIL_PORT}
     username: ${MAIL_USERNAME}
     password: ${MAIL_PASSWORD}
     properties:
@@ -36,6 +38,13 @@ spring:
           auth: true
           starttls:
             enable: true
+          # JavaMail's defaults are infinite — without these, a provider that accepts the TCP
+          # connection and then stalls (vs. cleanly refusing) pins the request thread indefinitely.
+          # Emails are best-effort (see the *EmailListener classes) but the thread they run on isn't
+          # free until one of these fires.
+          connectiontimeout: 5000
+          timeout: 5000
+          writetimeout: 5000
 
 server:
   port: 8080
@@ -50,6 +59,12 @@ admin:
   password: ${ADMIN_PASSWORD}
 
 enunas:
+  mail:
+    # The sender address, deliberately separate from spring.mail.username (SMTP auth identity) —
+    # see EmailService for why they must never be conflated again. Must be an address at a domain
+    # verified in whatever provider MAIL_HOST points at (Resend, currently) — an unverified sender
+    # domain gets silently rejected by the provider, not caught here.
+    from-address: ${MAIL_FROM_ADDRESS}
   platform:
     commission-rate: 0.18
   payout:

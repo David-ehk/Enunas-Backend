@@ -5,6 +5,7 @@ import com.enunas.backend.user.dto.LoginUserDto;
 import com.enunas.backend.user.dto.SetPasswordDto;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -31,9 +32,9 @@ class AuthenticationServicePasswordTest {
                 userRepository,
                 passwordEncoder,
                 authenticationManager,
-                mock(EmailService.class),
                 mock(CustomerService.class),
-                mock(OAuthAccountRepository.class));
+                mock(OAuthAccountRepository.class),
+                mock(ApplicationEventPublisher.class));
     }
 
     @Test

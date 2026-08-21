@@ -36,6 +36,10 @@ admin:
   password: SeedAdmin123!
 
 enunas:
+  mail:
+    # Obviously-fake, non-deliverable address — never a real inbox, so a misconfigured test run
+    # can never actually send anywhere even if EmailService's @MockitoBean override were missing.
+    from-address: test@example.invalid
   platform:
     commission-rate: 0.18
   payout:
