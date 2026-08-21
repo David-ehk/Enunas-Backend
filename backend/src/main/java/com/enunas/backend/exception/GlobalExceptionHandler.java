@@ -1,6 +1,11 @@
 package com.enunas.backend.exception;
 
-import com.fasterxml.jackson.databind.exc.InvalidFormatException;
+// tools.jackson, not com.fasterxml.jackson: Spring Boot 4 / Spring Framework 7 moved the default
+// JSON message converter to Jackson 3, which relocated its package root. com.fasterxml.jackson.*
+// classes still resolve on the classpath (jjwt-jackson pulls Jackson 2 transitively) but are never
+// the actual runtime type Spring's converter throws — an easy silent-mismatch trap.
+import tools.jackson.databind.exc.InvalidFormatException;
+import tools.jackson.databind.exc.UnrecognizedPropertyException;
 import io.jsonwebtoken.JwtException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -100,10 +105,12 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public ResponseEntity<Map<String, Object>> handleUnreadable(HttpMessageNotReadableException ex) {
         String message = "Malformed or invalid request body";
-        if (ex.getCause() instanceof InvalidFormatException ife) {
+        if (ex.getCause() instanceof UnrecognizedPropertyException upe) {
+            message = "Unknown field: " + upe.getPropertyName();
+        } else if (ex.getCause() instanceof InvalidFormatException ife) {
             String field = ife.getPath().isEmpty()
                     ? "unknown"
-                    : ife.getPath().get(ife.getPath().size() - 1).getFieldName();
+                    : ife.getPath().get(ife.getPath().size() - 1).getPropertyName();
             Class<?> targetType = ife.getTargetType();
             if (targetType != null && targetType.isEnum()) {
                 message = "Invalid value '" + ife.getValue() + "' for field '" + field

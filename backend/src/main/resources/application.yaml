@@ -2,6 +2,14 @@ spring:
   application:
     name: backend
 
+  jackson:
+    deserialization:
+      # Spring Boot's Jackson autoconfig disables this vanilla-Jackson default; without it, a
+      # request body field that doesn't match any DTO property (typo, stale frontend contract,
+      # e.g. "logoUrl" instead of "logoStorageKey") is silently dropped and the request still
+      # returns 200 — the caller has no way to know their field was ignored.
+      fail-on-unknown-properties: true
+
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/Enunas}
     username: ${DB_USERNAME:postgres}
