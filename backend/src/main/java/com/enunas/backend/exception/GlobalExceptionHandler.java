@@ -8,9 +8,12 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.time.LocalDateTime;
 import java.util.Arrays;
@@ -56,6 +59,32 @@ public class GlobalExceptionHandler {
     public ResponseEntity<Map<String, Object>> handlePeriodNotClosed(PeriodNotClosedException ex) {
         log.warn("PeriodNotClosedException: {}", ex.getMessage());
         return buildResponse(HttpStatus.UNPROCESSABLE_ENTITY, ex.getMessage());
+    }
+
+    // Spring MVC's own routing exceptions must resolve to their real status, not fall through to
+    // the generic Exception.class handler below — @ExceptionHandler dispatch picks the most
+    // specific declared type, so these take priority over handleGeneric for these exact types.
+
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<Map<String, Object>> handleNoResourceFound(NoResourceFoundException ex) {
+        log.warn("NoResourceFoundException: {}", ex.getMessage());
+        return buildResponse(HttpStatus.NOT_FOUND, "No endpoint " + ex.getHttpMethod() + " " + ex.getResourcePath());
+    }
+
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<Map<String, Object>> handleMethodNotAllowed(HttpRequestMethodNotSupportedException ex) {
+        log.warn("HttpRequestMethodNotSupportedException: {}", ex.getMessage());
+        return buildResponse(HttpStatus.METHOD_NOT_ALLOWED, ex.getMessage());
+    }
+
+    // A path variable that fails to convert (e.g. a non-numeric id on a Long-typed {id}) is a
+    // malformed request, not a missing resource: 404 stays reserved for a syntactically valid id
+    // that just doesn't match a record.
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<Map<String, Object>> handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
+        log.warn("MethodArgumentTypeMismatchException: {}", ex.getMessage());
+        return buildResponse(HttpStatus.BAD_REQUEST,
+                "Invalid ID format: '" + ex.getValue() + "'");
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
