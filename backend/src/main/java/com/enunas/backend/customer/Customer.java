@@ -4,7 +4,6 @@ import com.enunas.backend.user.User;
 import jakarta.persistence.*;
 import lombok.*;
 
-import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -62,15 +61,11 @@ public class Customer {
     @Builder.Default
     private List<String> favoriteCategories = new ArrayList<>();
 
-    // Behavior — denormalized for cheap reads; not auto-maintained at MVP.
-    @Builder.Default
-    @Column(nullable = false)
-    private Integer totalOrders = 0;
-
-    @Builder.Default
-    @Column(nullable = false, precision = 19, scale = 2)
-    private BigDecimal totalSpent = BigDecimal.ZERO;
-
+    // Behavior stats (order count, total spent) are computed on read from Order rows — see
+    // CustomerService — never stored on this entity. A denormalized totalOrders/totalSpent pair
+    // used to live here but was never wired up to actually update (V26 dropped the dead columns);
+    // computing on read has no drift to go stale in the first place.
+    //
     // Orders are queried via OrderRepository.findByBuyer(customer.getUser())
     // — no direct FK from Order to Customer, so no @OneToMany mapping here.
 

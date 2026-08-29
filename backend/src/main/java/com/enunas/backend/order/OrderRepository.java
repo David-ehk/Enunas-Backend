@@ -1,5 +1,6 @@
 package com.enunas.backend.order;
 
+import com.enunas.backend.customer.dto.CustomerOrderStatsDto;
 import com.enunas.backend.user.User;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
@@ -42,4 +43,23 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
     Page<Order> findByBrandPartnerCreatorId(@Param("creatorId") Long creatorId, Pageable pageable);
 
     List<Order> findByStatusAndCreatedAtBefore(OrderStatus status, LocalDateTime cutoff);
+
+    /**
+     * Powers the customer-facing BESTELLUNGEN/AUSGEGEBEN tiles (GET /customer/me) — computed on
+     * read, not a denormalized counter (see Customer entity / CustomerOrderStatsDto javadoc for
+     * why). PENDING (never paid) and CANCELLED (only reachable from PENDING) are the only
+     * exclusions: everything else — including REFUNDED — reflects an order that was actually
+     * placed and paid for, same convention as {@code OrderItemRepository.findVat22fLineItems}.
+     * COUNT/SUM without GROUP BY always returns exactly one row, so this never returns null even
+     * for a buyer with zero qualifying orders.
+     */
+    @Query("""
+            SELECT new com.enunas.backend.customer.dto.CustomerOrderStatsDto(
+                COUNT(o), COALESCE(SUM(o.total), 0))
+            FROM Order o
+            WHERE o.buyer = :buyer
+              AND o.status <> com.enunas.backend.order.OrderStatus.PENDING
+              AND o.status <> com.enunas.backend.order.OrderStatus.CANCELLED
+            """)
+    CustomerOrderStatsDto getOrderStatsByBuyer(@Param("buyer") User buyer);
 }

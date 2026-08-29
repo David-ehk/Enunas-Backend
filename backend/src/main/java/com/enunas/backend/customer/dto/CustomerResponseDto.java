@@ -39,7 +39,12 @@ public class CustomerResponseDto {
 
     private LocalDateTime createdAt;
 
-    public static CustomerResponseDto from(Customer customer) {
+    /**
+     * {@code orderStats} is computed on read from Order rows (see
+     * {@code OrderRepository.getOrderStatsByBuyer}), never stored on the entity — the API
+     * contract (totalOrders/totalSpent fields) is unchanged, only where the values come from.
+     */
+    public static CustomerResponseDto from(Customer customer, CustomerOrderStatsDto orderStats) {
         return CustomerResponseDto.builder()
                 .id(customer.getId())
                 .userId(customer.getUser() != null ? customer.getUser().getId() : null)
@@ -58,8 +63,8 @@ public class CustomerResponseDto {
                 .preferredStyles(customer.getPreferredStyles())
                 .favoriteBrands(customer.getFavoriteBrands())
                 .favoriteCategories(customer.getFavoriteCategories())
-                .totalOrders(customer.getTotalOrders())
-                .totalSpent(customer.getTotalSpent())
+                .totalOrders(orderStats.totalOrders().intValue())
+                .totalSpent(orderStats.totalSpent())
                 .createdAt(customer.getCreatedAt())
                 .build();
     }

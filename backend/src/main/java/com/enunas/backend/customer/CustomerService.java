@@ -1,10 +1,12 @@
 package com.enunas.backend.customer;
 
 import com.enunas.backend.customer.dto.CustomerBrandSpendingDto;
+import com.enunas.backend.customer.dto.CustomerOrderStatsDto;
 import com.enunas.backend.customer.dto.CustomerResponseDto;
 import com.enunas.backend.customer.dto.UpdateCustomerProfileDto;
 import com.enunas.backend.exception.CustomerNotFoundException;
 import com.enunas.backend.order.OrderItemRepository;
+import com.enunas.backend.order.OrderRepository;
 import com.enunas.backend.order.OrderStatus;
 import com.enunas.backend.user.User;
 import lombok.RequiredArgsConstructor;
@@ -23,6 +25,7 @@ public class CustomerService {
 
     private final CustomerRepository customerRepository;
     private final OrderItemRepository orderItemRepository;
+    private final OrderRepository orderRepository;
 
     /** Server-side: create the matching Customer record when a CUSTOMER user signs up. */
     @Transactional
@@ -47,7 +50,8 @@ public class CustomerService {
 
     @Transactional(readOnly = true)
     public CustomerResponseDto getMyProfile(User user) {
-        return CustomerResponseDto.from(findByUser(user));
+        Customer customer = findByUser(user);
+        return CustomerResponseDto.from(customer, orderStatsFor(customer));
     }
 
     /** Partial update by the authenticated customer. Only non-null fields are applied. */
@@ -55,19 +59,22 @@ public class CustomerService {
     public CustomerResponseDto updateMyProfile(UpdateCustomerProfileDto dto, User user) {
         Customer customer = findByUser(user);
         applyProfileUpdates(customer, dto);
-        return CustomerResponseDto.from(customerRepository.save(customer));
+        customer = customerRepository.save(customer);
+        return CustomerResponseDto.from(customer, orderStatsFor(customer));
     }
 
     @Transactional(readOnly = true)
     @PreAuthorize("hasRole('ADMIN')")
     public Page<CustomerResponseDto> getAllCustomers(Pageable pageable) {
-        return customerRepository.findAll(pageable).map(CustomerResponseDto::from);
+        return customerRepository.findAll(pageable)
+                .map(customer -> CustomerResponseDto.from(customer, orderStatsFor(customer)));
     }
 
     @Transactional(readOnly = true)
     @PreAuthorize("hasRole('ADMIN')")
     public CustomerResponseDto getCustomerById(Long id) {
-        return CustomerResponseDto.from(findById(id));
+        Customer customer = findById(id);
+        return CustomerResponseDto.from(customer, orderStatsFor(customer));
     }
 
     @Transactional(readOnly = true)
@@ -87,7 +94,14 @@ public class CustomerService {
     public CustomerResponseDto updateCustomerByAdmin(Long id, UpdateCustomerProfileDto dto) {
         Customer customer = findById(id);
         applyProfileUpdates(customer, dto);
-        return CustomerResponseDto.from(customerRepository.save(customer));
+        customer = customerRepository.save(customer);
+        return CustomerResponseDto.from(customer, orderStatsFor(customer));
+    }
+
+    /** Order count + total spent across every non-PENDING, non-CANCELLED order — see
+     *  OrderRepository.getOrderStatsByBuyer for the exact status semantics. */
+    private CustomerOrderStatsDto orderStatsFor(Customer customer) {
+        return orderRepository.getOrderStatsByBuyer(customer.getUser());
     }
 
     Customer findByUser(User user) {
