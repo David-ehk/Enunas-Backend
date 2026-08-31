@@ -28,6 +28,13 @@ public class OrderResponseDto {
     /** Per-brand shipping charge for this order. Empty for orders created before this feature —
      * they carry no snapshot rows and remain fully readable; {@code shippingTotal} stays 0 for them. */
     private List<ShippingSnapshotDto> shippingSnapshots;
+    /** Per-brand shipment progress — one entry per brand on the order, populated by OrderService
+     * (not here — same reason shippingSnapshots isn't set in {@link #from}: it needs a repository
+     * query). Empty for orders placed before this feature; nothing shipped yet also shows empty. */
+    private List<OrderShipmentDto> shipments;
+    /** True if ANY brand on this order has ever reported a shipping problem — independent of
+     * {@code status}, which stays an honest per-brand rollup. See {@code Order.shippingProblem}. */
+    private Boolean hasShippingProblem;
     private BigDecimal total;
     private String currency;
     private String discountCode;
@@ -74,6 +81,7 @@ public class OrderResponseDto {
                 .discountPercent(order.getDiscountPercent())
                 .discountAmount(order.getDiscountAmount())
                 .notes(order.getNotes())
+                .hasShippingProblem(order.isShippingProblem())
                 .createdAt(order.getCreatedAt())
                 .updatedAt(order.getUpdatedAt())
                 .build();

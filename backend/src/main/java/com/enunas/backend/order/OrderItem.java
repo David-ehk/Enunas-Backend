@@ -34,6 +34,19 @@ public class OrderItem {
     @JoinColumn(name = "variant_id", nullable = false)
     private ProductVariant variant;
 
+    /**
+     * The {@link com.enunas.backend.product.productlisting.ProductListing} id the buyer actually
+     * ordered against — frozen at purchase time, same reasoning as the snapshot fields below: a
+     * listing can be deactivated or deleted without touching order history, so this is a plain id
+     * reference (no FK constraint), not a live join. Null on rows persisted before this field
+     * existed (V28) — there is no way to reconstruct the true value for those retroactively, since
+     * a variant can have had several listings over time and nothing recorded which one was live at
+     * purchase. NOT the variant id — see OrderItemResponseDto/OrderPreviewResponseDto history for
+     * why that distinction matters (a client resolving a line back to its listing needs the real
+     * listing id, and silently got the variant id instead for every order before this field existed).
+     */
+    private Long listingIdSnapshot;
+
     // --- Purchase snapshot (immutable, prevents future changes from affecting history) ---
     @Column(nullable = false)
     private String productSnapshotName;

@@ -7,12 +7,18 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 
 @Repository
 public interface OrderItemRepository extends JpaRepository<OrderItem, Long> {
 
     List<OrderItem> findByVariantId(Long variantId);
+
+    /** True once any variant of this product has ever been ordered. Guards product deletion: the
+     *  order record has to outlive the catalogue entry it was sold from (§257 HGB), and the money
+     *  snapshots on OrderItem are only readable while the row survives. */
+    boolean existsByVariant_Product_Id(Long productId);
 
     /**
      * Line items of a brand's completed sales (not PENDING/CANCELLED) whose order falls in the
@@ -45,5 +51,5 @@ public interface OrderItemRepository extends JpaRepository<OrderItem, Long> {
             """)
     List<CustomerBrandSpendingDto> findBrandSpendingByUserId(
             @Param("userId") Long userId,
-            @Param("statuses") List<OrderStatus> statuses);
+            @Param("statuses") Collection<OrderStatus> statuses);
 }

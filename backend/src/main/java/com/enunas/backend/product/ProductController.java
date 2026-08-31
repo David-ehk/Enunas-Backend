@@ -35,19 +35,29 @@ public class ProductController {
 
     // ── Public storefront reads (no auth — see SecurityConfiguration GET /products/**) ──
 
+    // `viewer` is null for anonymous storefront traffic (these are permitAll); when present it
+    // exempts the product's own brand and admins from the active-listing gate — see
+    // ProductService.assertBrowsable.
+
     @GetMapping("/{id}")
-    public ResponseEntity<ProductResponseDto> getProduct(@PathVariable Long id) {
-        return ResponseEntity.ok(productService.getProductById(id));
+    public ResponseEntity<ProductResponseDto> getProduct(
+            @PathVariable Long id,
+            @AuthenticationPrincipal User viewer) {
+        return ResponseEntity.ok(productService.getProductById(id, viewer));
     }
 
     @GetMapping("/sku/{sku}")
-    public ResponseEntity<ProductResponseDto> getProductBySku(@PathVariable String sku) {
-        return ResponseEntity.ok(productService.getProductBySku(sku));
+    public ResponseEntity<ProductResponseDto> getProductBySku(
+            @PathVariable String sku,
+            @AuthenticationPrincipal User viewer) {
+        return ResponseEntity.ok(productService.getProductBySku(sku, viewer));
     }
 
     @GetMapping("/slug/{slug}")
-    public ResponseEntity<ProductResponseDto> getProductBySlug(@PathVariable String slug) {
-        return ResponseEntity.ok(productService.getProductBySlug(slug));
+    public ResponseEntity<ProductResponseDto> getProductBySlug(
+            @PathVariable String slug,
+            @AuthenticationPrincipal User viewer) {
+        return ResponseEntity.ok(productService.getProductBySlug(slug, viewer));
     }
 
     @GetMapping

@@ -102,11 +102,26 @@ public class Order {
 
     private String cancelledByAdminEmail;
 
-    // ===== Shipping (set by BrandPartner on confirmShipment) =====
+    // ===== Shipping — LEGACY, frozen. Pre-dates per-brand shipment tracking and could only ever
+    // hold ONE brand's carrier/tracking on a multi-brand order (the bug OrderShipment/V27 fixes).
+    // No longer written by OrderService — see OrderShipment for the real, per-brand data going
+    // forward. Kept in place (not dropped) because existing orders have real historical values
+    // here, unlike Customer.totalOrders/totalSpent which V26 could safely drop (see that migration)
+    // because nothing had ever written to them.
 
     private String shippingCarrier;
     private String trackingNumber;
     private LocalDateTime shippedAt;
+
+    /** True the moment any brand on this order has reported a shipping problem via
+     *  {@link OrderService#reportShippingProblem} — independent of {@link #status}, which stays an
+     *  honest per-brand shipment rollup (see {@link OrderService#syncShipmentStatus}) and must never
+     *  be faked into SHIPPING_PROBLEM by one brand's local issue on a multi-brand order. Never
+     *  cleared automatically — an admin resolving the underlying per-brand problem doesn't retroactively
+     *  erase that this order once needed attention. */
+    @Column(name = "has_shipping_problem", nullable = false)
+    @Builder.Default
+    private boolean shippingProblem = false;
 
     /**
      * Set once, the moment this order first reaches DELIVERED (the only path in:
@@ -125,7 +140,8 @@ public class Order {
     @Builder.Default
     private boolean discountUsageReleased = false;
 
-    // ===== Shipping problem (set by BrandPartner on reportShippingProblem) =====
+    // ===== Shipping problem — LEGACY, frozen. Same reasoning as shippingCarrier above: superseded
+    // by OrderShipment's per-brand problemDescription/problemReportedAt/problemReportedBy. =====
 
     @Column(length = 1000)
     private String problemDescription;

@@ -77,4 +77,13 @@ security/     — Security config, filters, JWT handling
 exception/    — Global exception handler (@RestControllerAdvice)
 ```
 
-`ddl-auto` is set to `update` — Hibernate manages schema changes automatically in development. Switch to `validate` or use Flyway/Liquibase before going to production.
+### Schema management
+
+Flyway owns the schema. Migrations live in `src/main/resources/db/migration` as `V<n>__<description>.sql` and run on startup (`spring.flyway.enabled: true`, `baseline-on-migrate: true`).
+
+`ddl-auto` is `validate`: Hibernate checks that the entity model matches the migrated schema and **never modifies the database**. A mapping that disagrees with the schema fails startup rather than silently altering a table.
+
+Two consequences worth internalising:
+
+- **Every schema change needs a new `V<n>` script.** Editing an already-applied migration changes its checksum, and Flyway then refuses to start the application against any database that ran the old version.
+- **Schema-generation-only annotations do nothing here.** `@Index`, `@ForeignKey`, and column `length` are read by DDL generation, which is off. They are documentation of what the migration created — useful, but keep them truthful, because nothing enforces that they match.

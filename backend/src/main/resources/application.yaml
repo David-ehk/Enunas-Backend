@@ -32,6 +32,12 @@ spring:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect
         format_sql: true
+        # Every association in the model is LAZY, so mapping a page of orders used to walk
+        # order -> items -> variant -> product -> brand/creator one proxy at a time: a 20-order
+        # page issued well over a hundred single-row SELECTs. With this, Hibernate initialises
+        # pending proxies of the same type in one IN (...) batch instead. It changes only how many
+        # round trips the same data takes, never which rows are returned.
+        default_batch_fetch_size: 50
 
   mail:
     # No code-level defaults: a missing MAIL_* var must fail app startup loudly, not silently fall

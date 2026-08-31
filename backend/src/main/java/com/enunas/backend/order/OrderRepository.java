@@ -1,6 +1,7 @@
 package com.enunas.backend.order;
 
 import com.enunas.backend.customer.dto.CustomerOrderStatsDto;
+import com.enunas.backend.customer.dto.CustomerOrderStatsRow;
 import com.enunas.backend.user.User;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
@@ -12,6 +13,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -45,6 +47,28 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
     List<Order> findByStatusAndCreatedAtBefore(OrderStatus status, LocalDateTime cutoff);
 
     /**
+     * True while this buyer has an order neither side is finished with — the gate on erasing their
+     * account (DSGVO Art. 17(3)(e): processing still needed to exercise or defend legal claims).
+     *
+     * <p>Settled means CANCELLED, REFUNDED, or DELIVERED with the 14-day Widerruf window closed.
+     * Everything else counts as in flight, which is deliberately wider than "unpaid or unshipped":
+     * a RETURN_REQUESTED order needs the customer's identity to refund against, and a DELIVERED
+     * one still inside its return window can become that at any moment. A null deliveredAt is
+     * treated as still open rather than assumed old.
+     */
+    @Query("""
+            SELECT COUNT(o) > 0 FROM Order o
+            WHERE o.buyer = :buyer
+              AND o.status <> com.enunas.backend.order.OrderStatus.CANCELLED
+              AND o.status <> com.enunas.backend.order.OrderStatus.REFUNDED
+              AND NOT (o.status = com.enunas.backend.order.OrderStatus.DELIVERED
+                       AND o.deliveredAt IS NOT NULL
+                       AND o.deliveredAt <= :returnWindowClosedBefore)
+            """)
+    boolean hasUnsettledOrders(@Param("buyer") User buyer,
+                               @Param("returnWindowClosedBefore") LocalDateTime returnWindowClosedBefore);
+
+    /**
      * Powers the customer-facing BESTELLUNGEN/AUSGEGEBEN tiles (GET /customer/me) — computed on
      * read, not a denormalized counter (see Customer entity / CustomerOrderStatsDto javadoc for
      * why). PENDING (never paid) and CANCELLED (only reachable from PENDING) are the only
@@ -58,8 +82,25 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
                 COUNT(o), COALESCE(SUM(o.total), 0))
             FROM Order o
             WHERE o.buyer = :buyer
-              AND o.status <> com.enunas.backend.order.OrderStatus.PENDING
-              AND o.status <> com.enunas.backend.order.OrderStatus.CANCELLED
+              AND o.status IN :statuses
             """)
-    CustomerOrderStatsDto getOrderStatsByBuyer(@Param("buyer") User buyer);
+    CustomerOrderStatsDto getOrderStatsByBuyer(@Param("buyer") User buyer,
+                                               @Param("statuses") Collection<OrderStatus> statuses);
+
+    /**
+     * Batch form of {@link #getOrderStatsByBuyer} for the admin customer list, which needs the
+     * same two figures for a whole page at once. GROUP BY drops buyers with no qualifying orders
+     * entirely, so callers must default a missing row to zero rather than expecting one row per
+     * customer.
+     */
+    @Query("""
+            SELECT new com.enunas.backend.customer.dto.CustomerOrderStatsRow(
+                o.buyer.id, COUNT(o), COALESCE(SUM(o.total), 0))
+            FROM Order o
+            WHERE o.buyer.id IN :buyerIds
+              AND o.status IN :statuses
+            GROUP BY o.buyer.id
+            """)
+    List<CustomerOrderStatsRow> getOrderStatsByBuyerIds(@Param("buyerIds") Collection<Long> buyerIds,
+                                                        @Param("statuses") Collection<OrderStatus> statuses);
 }

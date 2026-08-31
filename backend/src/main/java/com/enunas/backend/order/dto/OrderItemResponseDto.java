@@ -24,7 +24,10 @@ public class OrderItemResponseDto {
     public static OrderItemResponseDto from(OrderItem item) {
         return OrderItemResponseDto.builder()
                 .id(item.getId())
-                .listingId(item.getVariant() != null ? item.getVariant().getId() : null)
+                // NOT item.getVariant().getId() — that's the variant id, a different identifier
+                // the client never sent. listingIdSnapshot is null only for orders placed before
+                // this field existed (V28); see OrderItem.listingIdSnapshot javadoc.
+                .listingId(item.getListingIdSnapshot())
                 .productName(item.getProductSnapshotName())
                 .variantSku(item.getVariantSnapshotSku())
                 .variantColor(item.getVariantSnapshotColor())

@@ -15,4 +15,8 @@ public interface UserAddressRepository extends JpaRepository<UserAddress, Long> 
     Optional<UserAddress> findByIdAndUser(Long id, User user);
 
     boolean existsByUser(User user);
+
+    /** Erasure (DSGVO Art. 17): the saved-address book is a convenience copy, not a financial
+     *  record — an order's own ShippingAddress snapshot is what the retention rules cover. */
+    void deleteByUser(User user);
 }

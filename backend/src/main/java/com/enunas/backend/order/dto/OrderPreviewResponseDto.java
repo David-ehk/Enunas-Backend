@@ -54,7 +54,8 @@ public class OrderPreviewResponseDto {
     public static OrderPreviewResponseDto from(OrderPricingDraft draft) {
         List<PreviewItem> items = draft.orderItems().stream()
                 .map(i -> PreviewItem.builder()
-                        .listingId(i.getVariant() != null ? i.getVariant().getId() : null)
+                        // NOT i.getVariant().getId() — see OrderItem.listingIdSnapshot javadoc.
+                        .listingId(i.getListingIdSnapshot())
                         .productName(i.getProductSnapshotName())
                         .quantity(i.getQuantity())
                         .unitPrice(i.getPriceAtPurchase())

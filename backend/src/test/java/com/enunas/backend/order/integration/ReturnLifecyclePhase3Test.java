@@ -45,12 +45,18 @@ class ReturnLifecyclePhase3Test extends AbstractDiscountIntegrationTest {
         return f;
     }
 
+    /** See MultiBrandReturnTest.deliver — same fix, same reasoning (per-brand shipment: DELIVERED
+     *  is only reachable once every brand has shipped, so admin's bulk SHIPPED override completes
+     *  any brand this fixture didn't explicitly ship). */
     private void deliver(long orderId, String shippingBrandToken, String adminToken) {
         confirmPaid(orderId);
         ResponseEntity<Map> shipped = rest.exchange("/brand/orders/" + orderId + "/ship", HttpMethod.POST,
                 new HttpEntity<>(Map.of("carrier", "DHL", "trackingNumber", "TRACK-1"),
                         auth(shippingBrandToken)), Map.class);
         assertThat(shipped.getStatusCode().is2xxSuccessful()).as("ship: %s", shipped.getBody()).isTrue();
+        ResponseEntity<Map> allShipped = rest.exchange("/admin/orders/" + orderId + "/status?status=SHIPPED",
+                HttpMethod.PATCH, new HttpEntity<>(null, auth(adminToken)), Map.class);
+        assertThat(allShipped.getStatusCode().is2xxSuccessful()).as("bulk-ship: %s", allShipped.getBody()).isTrue();
         ResponseEntity<Map> delivered = rest.exchange("/admin/orders/" + orderId + "/status?status=DELIVERED",
                 HttpMethod.PATCH, new HttpEntity<>(null, auth(adminToken)), Map.class);
         assertThat(delivered.getStatusCode().is2xxSuccessful()).as("deliver: %s", delivered.getBody()).isTrue();

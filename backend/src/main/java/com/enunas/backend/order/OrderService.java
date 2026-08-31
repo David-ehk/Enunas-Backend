@@ -12,8 +12,11 @@ import com.enunas.backend.order.dto.CancelOrderDto;
 import com.enunas.backend.order.dto.CreateOrderDto;
 import com.enunas.backend.order.dto.OrderItemRequestDto;
 import com.enunas.backend.order.dto.OrderPreviewResponseDto;
+import com.enunas.backend.order.dto.OrderItemResponseDto;
 import com.enunas.backend.order.dto.OrderResponseDto;
+import com.enunas.backend.order.dto.OrderShipmentDto;
 import com.enunas.backend.order.dto.ReturnRequestDto;
+import com.enunas.backend.order.dto.ReturnSummaryDto;
 import com.enunas.backend.order.dto.ShipmentConfirmationDto;
 import com.enunas.backend.order.dto.ShippingAddressDto;
 import com.enunas.backend.order.dto.ShippingProblemDto;
@@ -48,6 +51,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -62,6 +66,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Predicate;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -89,6 +95,8 @@ public class OrderService {
     private final Validator validator;
     private final ShippingCostService shippingCostService;
     private final OrderShippingSnapshotRepository orderShippingSnapshotRepository;
+    private final OrderShipmentRepository orderShipmentRepository;
+    private final TransactionTemplate transactionTemplate;
 
     @Value("${app.frontend.base-url}")
     private String frontendBaseUrl;
@@ -104,9 +112,93 @@ public class OrderService {
 
     // ===== Customer =====
 
+    /**
+     * Places an order and opens a payment for it, in three steps with a hard rule between them:
+     * <b>our database is always ahead of the provider</b>.
+     *
+     * <ol>
+     *   <li>Everything that touches our own tables — pricing, the discount-usage reservation, the
+     *       order, its items, its shipping snapshots and a PENDING payment row — in one
+     *       transaction that COMMITS before anything leaves the process.</li>
+     *   <li>The Mollie call, holding no transaction and no database connection.</li>
+     *   <li>A second, single-row transaction attaching the provider's payment id.</li>
+     * </ol>
+     *
+     * <p>This method is deliberately NOT {@code @Transactional}. It used to be, and that was the
+     * bug: the Mollie call sat inside the same transaction as every write above it, so any failure
+     * after it — the payment-row insert, a constraint, a connection drop at commit — rolled the
+     * order away and left a live payment at Mollie belonging to an order that no longer existed,
+     * recoverable only by hand. Committing first inverts the failure: a payment can no longer
+     * outlive its order, because the order is already durable when the payment is created.
+     *
+     * <p>What each step now costs when it fails:
+     * <ul>
+     *   <li><b>Step 1</b> — nothing external has happened. The transaction rolls back whole,
+     *       including the discount usage it reserved. Unchanged from before.</li>
+     *   <li><b>Step 2</b> — no Mollie payment exists (or one does, and we never learned its id,
+     *       which for an unpaid payment is the same thing: it expires there untouched). The order
+     *       stays PENDING and {@link OrderExpiryService} cancels it within 30 minutes, releasing
+     *       the discount usage on the way out. Deliberately NOT cancelled inline here: if the call
+     *       actually reached Mollie and only the response was lost, destroying our side of it
+     *       immediately is the one move that could still strand a real payment.</li>
+     *   <li><b>Step 3</b> — a Mollie payment exists that our webhook cannot resolve by
+     *       transaction id. It is unreachable rather than orphaned: this method throws, so the
+     *       checkout URL never reaches the customer, nobody can pay it, and it expires at Mollie.
+     *       The order is cleaned up by expiry exactly as in step 2. The PAYMENT_LINK_FAILURE log
+     *       below carries the order number and payment id, which is all a human needs to attach it
+     *       by hand if one ever does need rescuing.</li>
+     * </ul>
+     */
     @PreAuthorize("hasRole('CUSTOMER')")
-    @Transactional
     public OrderResponseDto createOrder(CreateOrderDto dto, User buyer) {
+        PendingOrder pending = transactionTemplate.execute(status -> persistPendingOrder(dto, buyer));
+
+        Order saved = pending.order();
+        PaymentResult paymentResult;
+        try {
+            paymentResult = paymentProvider.createPayment(new CreatePaymentCommand(
+                    saved.getTotal(),
+                    saved.getCurrency(),
+                    "Enunas order " + saved.getOrderNumber(),
+                    orderLink(saved)));
+        } catch (Exception e) {
+            log.error("Payment creation failed for order {} (left PENDING for the expiry job): {}",
+                    saved.getOrderNumber(), e.getMessage());
+            throw new PaymentException("Could not initiate payment. Please try again.", e);
+        }
+
+        try {
+            transactionTemplate.executeWithoutResult(status ->
+                    attachProviderPayment(pending.paymentId(), paymentResult.paymentId()));
+        } catch (Exception e) {
+            // PAYMENT_LINK_FAILURE — stable marker for a log-based alert, same convention as
+            // EMAIL_DELIVERY_FAILURE. Everything needed to link the two by hand is on this line.
+            log.error("PAYMENT_LINK_FAILURE order={} paymentId={} reason={}",
+                    saved.getOrderNumber(), paymentResult.paymentId(), e.getMessage());
+            throw new PaymentException("Could not initiate payment. Please try again.", e);
+        }
+
+        log.info("Order created: {} for buyer: {} (brands: {}, paymentId: {})",
+                saved.getOrderNumber(), buyer.getEmail(), pending.shippingSnapshots().size(),
+                paymentResult.paymentId());
+
+        return OrderResponseDto.from(saved, paymentResult.checkoutUrl())
+                .toBuilder()
+                .shippingSnapshots(mapShippingSnapshots(saved, pending.shippingSnapshots()))
+                .build();
+    }
+
+    /** What step 1 of {@link #createOrder} leaves committed, carried into steps 2 and 3. */
+    private record PendingOrder(Order order, List<OrderShippingSnapshot> shippingSnapshots, Long paymentId) {}
+
+    /**
+     * Step 1 of {@link #createOrder}: every write this order needs on our side, including the
+     * payment row, which is inserted PENDING with no transaction id because there is nothing to
+     * put there yet — step 3 fills it in. Runs inside the caller's {@code transactionTemplate}
+     * rather than carrying its own {@code @Transactional}, since a self-call could not be
+     * intercepted by the proxy anyway.
+     */
+    private PendingOrder persistPendingOrder(CreateOrderDto dto, User buyer) {
         OrderPricingDraft draft = buildPricingDraft(dto, buyer, true);
 
         ShippingAddressDto resolvedAddress = draft.resolvedAddress();
@@ -164,38 +256,27 @@ public class OrderService {
                 .toList();
         orderShippingSnapshotRepository.saveAll(snapshots);
 
-        String redirectUrl = frontendBaseUrl + "/orders/" + saved.getOrderNumber() + "/confirmation";
-        PaymentResult paymentResult;
-        try {
-            paymentResult = paymentProvider.createPayment(new CreatePaymentCommand(
-                    saved.getTotal(),
-                    saved.getCurrency(),
-                    "Enunas order " + saved.getOrderNumber(),
-                    redirectUrl));
-        } catch (Exception e) {
-            log.error("Payment creation failed for order {}: {}", saved.getOrderNumber(), e.getMessage());
-            throw new PaymentException("Could not initiate payment. Please try again.", e);
-        }
-
-        // IMPORTANT: payment already created above. If this DB save fails and the
-        // transaction rolls back, the provider-side payment is orphaned. Manual reconciliation
-        // is required using the paymentId logged below.
-        log.info("Payment created: paymentId={} for order={}",
-                paymentResult.paymentId(), saved.getOrderNumber());
-        paymentRepository.save(Payment.builder()
+        Payment payment = paymentRepository.save(Payment.builder()
                 .order(saved)
                 .amount(saved.getTotal())
                 .currency(saved.getCurrency())
-                .transactionId(paymentResult.paymentId())
                 .build());
 
-        log.info("Order created: {} for buyer: {} (brands: {})",
-                saved.getOrderNumber(), buyer.getEmail(), draft.shippingLines().size());
+        return new PendingOrder(saved, snapshots, payment.getId());
+    }
 
-        return OrderResponseDto.from(saved, paymentResult.checkoutUrl())
-                .toBuilder()
-                .shippingSnapshots(mapShippingSnapshots(saved, snapshots))
-                .build();
+    /**
+     * Step 3 of {@link #createOrder}: links the committed payment row to the provider's payment.
+     * This id is the ONLY thing {@link com.enunas.backend.payment.MollieWebhookController} has to
+     * find the order by, so until it is written the payment cannot be settled — which is why it
+     * gets its own short transaction immediately after the call returns, rather than riding along
+     * with anything slower.
+     */
+    private void attachProviderPayment(Long paymentId, String providerPaymentId) {
+        Payment payment = paymentRepository.findById(paymentId)
+                .orElseThrow(() -> new IllegalStateException("Payment row " + paymentId + " vanished"));
+        payment.setTransactionId(providerPaymentId);
+        paymentRepository.save(payment);
     }
 
     @PreAuthorize("hasRole('CUSTOMER')")
@@ -258,6 +339,7 @@ public class OrderService {
 
             OrderItem item = OrderItem.builder()
                     .variant(variant)
+                    .listingIdSnapshot(pl.getId())
                     .productSnapshotName(pl.getProduct().getName())
                     .brandSnapshotName(brand != null ? brand.getBrandName() : null)
                     .variantSnapshotSku(variant.getSku())
@@ -353,9 +435,12 @@ public class OrderService {
     @Transactional(readOnly = true)
     @PreAuthorize("hasRole('CUSTOMER')")
     public Page<OrderResponseDto> getMyOrders(User buyer, Pageable pageable) {
-        return orderRepository.findByBuyerOrderByCreatedAtDesc(buyer, pageable).map(this::toDto);
+        Page<Order> page = orderRepository.findByBuyerOrderByCreatedAtDesc(buyer, pageable);
+        OrderRelations relations = loadRelations(page.getContent());
+        return page.map(order -> toDto(order, relations));
     }
 
+    @Transactional(readOnly = true)
     @PreAuthorize("hasRole('CUSTOMER')")
     public OrderResponseDto getMyOrderById(Long orderId, User buyer) {
         Order order = findById(orderId);
@@ -516,62 +601,119 @@ public class OrderService {
 
     // ===== BrandPartner =====
 
+    @Transactional(readOnly = true)
     @PreAuthorize("hasRole('BRAND_PARTNER')")
     public Page<OrderResponseDto> getMyBrandOrders(User brandPartner, Pageable pageable) {
-        return orderRepository.findByBrandPartnerCreatorId(brandPartner.getId(), pageable)
-                .map(this::toDto);
+        Page<Order> page = orderRepository.findByBrandPartnerCreatorId(brandPartner.getId(), pageable);
+        OrderRelations relations = loadRelations(page.getContent());
+        return page.map(order -> toBrandScopedDto(order, brandPartner, relations));
     }
 
+    /**
+     * Per-brand shipment confirmation (see {@link OrderShipment}). Used to flip the WHOLE order to
+     * SHIPPED — corrupting every other brand's still-pending shipment on the same multi-brand
+     * order. Now: finds-or-creates this brand's own {@link OrderShipment} row and recomputes
+     * {@link Order#getStatus()} as an honest rollup ({@link #syncShipmentStatus}) — never touches
+     * another brand's data.
+     */
     @PreAuthorize("hasRole('BRAND_PARTNER')")
     @Transactional
     public OrderResponseDto confirmShipment(Long orderId, ShipmentConfirmationDto dto, User brandPartner) {
         Order order = findById(orderId);
-        assertBrandOwnership(order, brandPartner);
+        BrandPartner brand = resolveOwnBrand(order, brandPartner);
 
-        if (order.getStatus() != OrderStatus.PAID) {
+        OrderShipment shipment = resolveOrCreateShipment(order, brand);
+        if (shipment.getStatus() == ShipmentStatus.SHIPPED) {
             throw new IllegalStateException(
-                    "Shipment can only be confirmed for PAID orders. Current status: " + order.getStatus());
+                    "Your items on order " + order.getOrderNumber() + " were already marked shipped.");
         }
+        assertInShippingWindow(order, "Shipment can only be confirmed");
+        shipment.setCarrier(dto.getCarrier());
+        shipment.setTrackingNumber(dto.getTrackingNumber());
+        shipment.setShippedAt(LocalDateTime.now());
+        shipment.setStatus(ShipmentStatus.SHIPPED);
+        orderShipmentRepository.save(shipment);
 
-        order.setShippingCarrier(dto.getCarrier());
-        order.setTrackingNumber(dto.getTrackingNumber());
-        order.setShippedAt(LocalDateTime.now());
-        order.setStatus(OrderStatus.SHIPPED);
-        Order saved = orderRepository.save(order);
+        Order saved = orderRepository.save(syncShipmentStatus(order));
 
         // Best-effort shipment-notification email, dispatched AFTER_COMMIT — never blocks/rolls
-        // back the already-committed PAID -> SHIPPED transition.
-        eventPublisher.publishEvent(new ShipmentConfirmedEvent(
-                order.getBuyer().getEmail(),
-                order.getOrderNumber(),
-                dto.getCarrier(),
-                dto.getTrackingNumber(),
-                dto.getNote()));
+        // back the already-committed shipment record.
+        publishShipmentConfirmed(order, brand, dto.getCarrier(), dto.getTrackingNumber(), dto.getNote());
 
-        log.info("BrandPartner {} confirmed shipment for order {} via {}",
+        log.info("BrandPartner {} confirmed shipment for their items on order {} via {}",
                 brandPartner.getEmail(), order.getOrderNumber(), dto.getCarrier());
-        return OrderResponseDto.from(saved);
+        return toBrandScopedDto(saved, brandPartner, loadRelations(List.of(saved)));
     }
 
+    /**
+     * Per-brand shipping-problem report — same fix as {@link #confirmShipment}: no longer flips the
+     * whole order to SHIPPING_PROBLEM (which would also have blocked every OTHER brand's
+     * confirmShipment, since that used to require the whole order still be PAID). Sets this brand's
+     * own {@link OrderShipment} row to PROBLEM and {@link Order#isShippingProblem()} for admin
+     * visibility — {@link Order#getStatus()} itself stays the honest per-brand rollup, never faked
+     * into SHIPPING_PROBLEM for brands whose own shipment is unaffected.
+     */
     @PreAuthorize("hasRole('BRAND_PARTNER')")
     @Transactional
     public OrderResponseDto reportShippingProblem(Long orderId, ShippingProblemDto dto, User brandPartner) {
         Order order = findById(orderId);
-        assertBrandOwnership(order, brandPartner);
+        BrandPartner brand = resolveOwnBrand(order, brandPartner);
 
-        if (order.getStatus() != OrderStatus.PAID) {
+        OrderShipment shipment = resolveOrCreateShipment(order, brand);
+        if (shipment.getStatus() == ShipmentStatus.SHIPPED) {
             throw new IllegalStateException(
-                    "Can only report shipping problems for PAID orders. Current status: " + order.getStatus());
+                    "Your items on order " + order.getOrderNumber() + " were already shipped — cannot report a problem.");
         }
+        assertInShippingWindow(order, "Shipping problems can only be reported");
+        shipment.setStatus(ShipmentStatus.PROBLEM);
+        shipment.setProblemDescription(dto.getDescription());
+        shipment.setProblemReportedAt(LocalDateTime.now());
+        shipment.setProblemReportedBy(brandPartner.getEmail());
+        orderShipmentRepository.save(shipment);
 
-        order.setProblemDescription(dto.getDescription());
-        order.setProblemReportedAt(LocalDateTime.now());
-        order.setProblemReportedBy(brandPartner.getEmail());
-        order.setStatus(OrderStatus.SHIPPING_PROBLEM);
+        order.setShippingProblem(true);
+        Order saved = orderRepository.save(syncShipmentStatus(order));
 
-        log.warn("BrandPartner {} reported shipping problem for order {}: {}",
+        log.warn("BrandPartner {} reported a shipping problem for their items on order {}: {}",
                 brandPartner.getEmail(), order.getOrderNumber(), dto.getDescription());
-        return OrderResponseDto.from(orderRepository.save(order));
+        return toBrandScopedDto(saved, brandPartner, loadRelations(List.of(saved)));
+    }
+
+    /**
+     * Tells the buyer that one brand's parcel is on its way. Every path that moves an
+     * {@link OrderShipment} to SHIPPED publishes through here — the brand's own
+     * {@link #confirmShipment} and the admin's order-wide override in
+     * {@link #bulkMarkAllBrandsShipped} — so whether the customer hears about a dispatch no longer
+     * depends on which of the two recorded it.
+     *
+     * <p>{@code carrier}/{@code trackingNumber} are null on the admin path, which has neither to
+     * offer; {@link ShipmentConfirmedEmailListener} renders that case explicitly instead of
+     * printing "null" at the customer.
+     */
+    private void publishShipmentConfirmed(Order order, BrandPartner brand,
+                                          String carrier, String trackingNumber, String note) {
+        eventPublisher.publishEvent(new ShipmentConfirmedEvent(
+                order.getBuyer().getEmail(),
+                order.getOrderNumber(),
+                brand.getBrandName(),
+                carrier,
+                trackingNumber,
+                note,
+                // Only THIS brand's articles: the mail describes one parcel, and listing the whole
+                // order would tell the customer that items still sitting at another brand are on
+                // their way.
+                order.getItems().stream()
+                        .filter(item -> brand.getId().equals(item.getBrandId()))
+                        .map(item -> "  - " + item.getQuantity() + "x " + item.getProductSnapshotName()
+                                + " (" + item.getVariantSnapshotColor() + ", "
+                                + item.getVariantSnapshotSize() + ")")
+                        .toList(),
+                orderLink(order)));
+    }
+
+    /** The order-detail page the customer is sent to from every mail about this order. */
+    private String orderLink(Order order) {
+        return frontendBaseUrl + "/orders/" + order.getOrderNumber() + "/confirmation";
     }
 
     // ===== Payment webhook (no role check — called server-to-server after amount verified) =====
@@ -667,7 +809,7 @@ public class OrderService {
                 + addr.getPostalCode() + " " + addr.getCity() + "\n"
                 + addr.getCountry();
 
-        String orderLink = frontendBaseUrl + "/orders/" + order.getOrderNumber() + "/confirmation";
+        String orderLink = orderLink(order);
 
         // Per-brand breakdown only when there's more than one shipping line — a single-brand
         // order's shipping is already fully explained by the one shippingTotal figure.
@@ -676,7 +818,7 @@ public class OrderService {
             Map<Long, String> brandNames = brandPartnerRepository
                     .findAllById(shippingSnapshots.stream().map(OrderShippingSnapshot::getBrandPartnerId).toList())
                     .stream()
-                    .collect(java.util.stream.Collectors.toMap(BrandPartner::getId, BrandPartner::getBrandName));
+                    .collect(Collectors.toMap(BrandPartner::getId, BrandPartner::getBrandName));
             shippingBreakdown = shippingSnapshots.stream()
                     .map(s -> "  - " + brandNames.getOrDefault(s.getBrandPartnerId(), "Marke")
                             + ": " + s.getAmount() + " " + s.getCurrency())
@@ -699,24 +841,38 @@ public class OrderService {
 
     // ===== Admin: forward flow =====
 
+    @Transactional(readOnly = true)
     @PreAuthorize("hasRole('ADMIN')")
     public Page<OrderResponseDto> getAllOrders(Pageable pageable) {
-        return orderRepository.findAllByOrderByCreatedAtDesc(pageable).map(this::toDto);
+        Page<Order> page = orderRepository.findAllByOrderByCreatedAtDesc(pageable);
+        OrderRelations relations = loadRelations(page.getContent());
+        return page.map(order -> toDto(order, relations));
     }
 
+    @Transactional(readOnly = true)
     @PreAuthorize("hasRole('ADMIN')")
     public Page<OrderResponseDto> getOrdersByStatus(OrderStatus status, Pageable pageable) {
-        return orderRepository.findByStatus(status, pageable).map(this::toDto);
+        Page<Order> page = orderRepository.findByStatus(status, pageable);
+        OrderRelations relations = loadRelations(page.getContent());
+        return page.map(order -> toDto(order, relations));
     }
 
     /**
      * Admin-driven status transitions:
-     * PENDING           → PAID
-     * PAID              → SHIPPED (fallback; BrandPartner normally does this via confirmShipment)
-     * SHIPPED           → DELIVERED
-     * SHIPPING_PROBLEM  → AWAITING_ADMIN | MANUAL_REVIEW | PAID | CANCELLED
-     * AWAITING_ADMIN    → MANUAL_REVIEW | PAID | CANCELLED
-     * MANUAL_REVIEW     → PAID | CANCELLED
+     * PENDING            → PAID
+     * PAID               → SHIPPED (bulk fallback; BrandPartners normally ship individually via
+     *                       confirmShipment, each producing their own PARTIALLY_SHIPPED → SHIPPED
+     *                       progress — see syncShipmentStatus) | CANCELLED
+     * PARTIALLY_SHIPPED  → SHIPPED (same bulk fallback, force the remaining brands' rows too)
+     * SHIPPED            → DELIVERED
+     * SHIPPING_PROBLEM   → AWAITING_ADMIN | MANUAL_REVIEW | PAID | CANCELLED
+     * AWAITING_ADMIN     → MANUAL_REVIEW | PAID | CANCELLED
+     * MANUAL_REVIEW      → PAID | CANCELLED
+     *
+     * Note: SHIPPING_PROBLEM/AWAITING_ADMIN/MANUAL_REVIEW here are the admin's own deliberate,
+     * order-wide escalation levers — distinct from a single brand's local shipping-problem report
+     * (see reportShippingProblem), which never touches this field; it only ever moves the
+     * per-brand OrderShipment.status and Order.isShippingProblem().
      */
     @PreAuthorize("hasRole('ADMIN')")
     @Transactional
@@ -756,6 +912,18 @@ public class OrderService {
                  current == OrderStatus.SHIPPING_PROBLEM ||
                  current == OrderStatus.AWAITING_ADMIN ||
                  current == OrderStatus.MANUAL_REVIEW);
+        // Cancelling restores stock for EVERY item and reverses the whole order's ledger — which is
+        // wrong once goods are physically out the door. Escalation states are reachable from
+        // PARTIALLY_SHIPPED, so without this an admin could escalate a part-shipped order and then
+        // cancel it, restoring stock for items a brand already dispatched. Same reasoning that
+        // keeps CANCELLED off SHIPPED and PARTIALLY_SHIPPED in validateForwardTransition; a return
+        // or refund is the correct instrument once anything has shipped.
+        if (newStatus == OrderStatus.CANCELLED && anyBrandHasShipped(order)) {
+            throw new IllegalStateException(
+                    "Order " + order.getOrderNumber() + " cannot be cancelled — at least one brand has "
+                    + "already shipped. Use a return/refund instead.");
+        }
+
         if (postPaymentCancel) {
             restoreVariantStock(order);
         }
@@ -765,8 +933,25 @@ public class OrderService {
             order.setDeliveredAt(LocalDateTime.now());
         }
 
+        // Admin's order-wide SHIPPED override — brands normally ship individually via
+        // confirmShipment, each recording their own OrderShipment row. This bulk path bypasses
+        // that, so backfill a SHIPPED row for every brand that hasn't recorded one, keeping the
+        // per-brand shipments list consistent with the order-wide status this call just set.
+        if (newStatus == OrderStatus.SHIPPED) {
+            bulkMarkAllBrandsShipped(order);
+        }
+
         order.setStatus(newStatus);
-        log.info("Order {} status: {} → {}", order.getOrderNumber(), current, newStatus);
+
+        // Coming back from an escalation, PAID means "return to the normal shipping flow", not
+        // "forget what already shipped" — re-derive the honest rollup from the brand rows, which
+        // escalation never touched. An order where one brand had shipped lands back on
+        // PARTIALLY_SHIPPED, not flatly on PAID.
+        if (newStatus == OrderStatus.PAID && isAdminEscalation(current)) {
+            syncShipmentStatus(order);
+        }
+
+        log.info("Order {} status: {} → {}", order.getOrderNumber(), current, order.getStatus());
         Order saved = orderRepository.save(order);
 
         // Record ledger entries for admin-forced payment confirmation.
@@ -992,14 +1177,34 @@ public class OrderService {
     // ===== Deprecated order-scoped entry points, for callers still addressing returns by order.
     // They resolve the order's single return and delegate; a multi-brand order raises 409. =====
 
+    // approveReturnByOrder/receiveReturnByOrder call approveReturn/receiveReturn as a plain
+    // in-class method call (this.foo(...)) — Spring's @Transactional is proxy-based and never
+    // intercepts that kind of self-invocation, so the callee's own @Transactional is silently
+    // inert here and each shim needs its OWN @Transactional to actually get one. Without it,
+    // receiveReturnByOrder 500s (InvalidDataAccessApiUsageException: "No active transaction for
+    // update or delete query" — ProductVariantRepository.restoreStock is a bare @Modifying query,
+    // which requires an active transaction and has none from a proxy-bypassing caller) and
+    // approveReturnByOrder silently loses atomicity between its two repository saves. See
+    // RefundPersistenceHelper's own javadoc for the same self-invocation pitfall, worked around
+    // there by being a genuinely separate bean.
+    //
+    // processRefundByOrder does NOT get @Transactional here — processRefund is deliberately NOT
+    // @Transactional itself (see its javadoc: the Mollie call must run outside any DB transaction),
+    // and its actual DB persistence goes through RefundPersistenceHelper, a separate bean whose own
+    // @Transactional fires correctly regardless of caller. Adding @Transactional to this shim would
+    // wrap the outbound Mollie HTTP call in a DB transaction — exactly the anti-pattern processRefund
+    // exists to avoid.
+
     @Deprecated
     @PreAuthorize("hasRole('ADMIN')")
+    @Transactional
     public OrderResponseDto approveReturnByOrder(Long orderId) {
         return approveReturn(resolveSoleReturn(orderId).getReturnNumber());
     }
 
     @Deprecated
     @PreAuthorize("hasRole('ADMIN')")
+    @Transactional
     public OrderResponseDto receiveReturnByOrder(Long orderId) {
         return receiveReturn(resolveSoleReturn(orderId).getReturnNumber());
     }
@@ -1056,7 +1261,7 @@ public class OrderService {
         Set<Long> returned = returns.stream()
                 .flatMap(r -> r.getItems().stream())
                 .map(ri -> ri.getOrderItem().getId())
-                .collect(java.util.stream.Collectors.toSet());
+                .collect(Collectors.toSet());
         return order.getItems().stream().allMatch(i -> returned.contains(i.getId()));
     }
 
@@ -1102,9 +1307,15 @@ public class OrderService {
 
     private void validateForwardTransition(OrderStatus from, OrderStatus to) {
         boolean valid = switch (from) {
-            case PENDING         -> to == OrderStatus.PAID;
-            case PAID            -> to == OrderStatus.SHIPPED || to == OrderStatus.CANCELLED;
-            case SHIPPED         -> to == OrderStatus.DELIVERED;
+            case PENDING            -> to == OrderStatus.PAID;
+            case PAID               -> to == OrderStatus.SHIPPED || to == OrderStatus.CANCELLED
+                                        || isAdminEscalation(to);
+            // CANCELLED is deliberately absent here, same as on SHIPPED below: once any brand has
+            // physically shipped, a blanket cancel+refund+stock-restore across every brand isn't
+            // the right lever — a return/refund flow is. Escalation IS allowed, so a mixed-state
+            // order (one brand shipped, another stuck) still has an admin exit.
+            case PARTIALLY_SHIPPED  -> to == OrderStatus.SHIPPED || isAdminEscalation(to);
+            case SHIPPED            -> to == OrderStatus.DELIVERED;
             case SHIPPING_PROBLEM, AWAITING_ADMIN, MANUAL_REVIEW ->
                     to == OrderStatus.AWAITING_ADMIN ||
                     to == OrderStatus.MANUAL_REVIEW  ||
@@ -1118,20 +1329,170 @@ public class OrderService {
         }
     }
 
+    /**
+     * The admin's deliberate order-wide escalation states. Reachable only through
+     * {@link #updateOrderStatus} — a brand's own {@link #reportShippingProblem} never sets them
+     * (that only marks the brand's own OrderShipment row plus the order-wide
+     * {@code hasShippingProblem} visibility flag).
+     *
+     * Escalating does NOT touch any OrderShipment row: a brand that genuinely shipped keeps its
+     * SHIPPED row, carrier and tracking number untouched — escalation pauses the order-level
+     * rollup, it does not rewrite what physically happened. The way back is
+     * {@code -> PAID}, which re-runs {@link #syncShipmentStatus} so the order returns to the
+     * honest rollup of its brand rows (PARTIALLY_SHIPPED, or SHIPPED if every brand had shipped),
+     * never flatly to PAID — so escalation is a round trip, not a one-way street.
+     */
+    private boolean isAdminEscalation(OrderStatus to) {
+        return to == OrderStatus.SHIPPING_PROBLEM
+                || to == OrderStatus.AWAITING_ADMIN
+                || to == OrderStatus.MANUAL_REVIEW;
+    }
+
+    /** True once any brand on this order has actually dispatched its items. */
+    private boolean anyBrandHasShipped(Order order) {
+        return orderShipmentRepository.findByOrder_IdOrderByIdAsc(order.getId()).stream()
+                .anyMatch(s -> s.getStatus() == ShipmentStatus.SHIPPED);
+    }
+
     private void assertOwnership(Order order, User buyer) {
         if (!order.getBuyer().getId().equals(buyer.getId())) {
             throw new SecurityException("You do not own this order");
         }
     }
 
-    /** Brand owns the order if any line item's variant.product.creator is this user. */
-    private void assertBrandOwnership(Order order, User brandPartner) {
-        boolean isOwner = order.getItems().stream()
-                .anyMatch(item -> item.getVariant().getProduct().getCreator().getId()
-                        .equals(brandPartner.getId()));
-        if (!isOwner) {
-            throw new SecurityException("This order does not contain any of your products");
+    /** Brand owns the order if any line item's variant.product.creator is this user — returns the
+     *  matched {@link BrandPartner} entity itself (needed as the FK on {@link OrderShipment}),
+     *  rather than just asserting ownership and discarding it. */
+    private BrandPartner resolveOwnBrand(Order order, User brandPartner) {
+        return order.getItems().stream()
+                .filter(item -> item.getVariant().getProduct().getCreator().getId().equals(brandPartner.getId()))
+                .map(item -> item.getVariant().getProduct().getBrand())
+                .findFirst()
+                .orElseThrow(() -> new SecurityException("This order does not contain any of your products"));
+    }
+
+    /** Finds this brand's existing shipment row on the order, or a new unsaved one defaulted to
+     *  AWAITING_SHIPMENT — callers set fields and save. Never more than one row per (order, brand);
+     *  the DB unique index (V27) backs that up. */
+    private OrderShipment resolveOrCreateShipment(Order order, BrandPartner brand) {
+        return orderShipmentRepository.findByOrder_IdAndBrand_Id(order.getId(), brand.getId())
+                .orElseGet(() -> OrderShipment.awaiting(order, brand));
+    }
+
+    /**
+     * Rolls up per-brand {@link OrderShipment} progress onto {@link Order#getStatus()} — mirrors
+     * {@link #syncOrderStatus} for returns. Only advances the order while it is genuinely in the
+     * shipping phase (PAID → PARTIALLY_SHIPPED → SHIPPED) and only ever forward: an order already
+     * moved into a RETURN_-prefixed status, REFUNDED, or CANCELLED, or an admin's own order-wide
+     * SHIPPING_PROBLEM/AWAITING_ADMIN/MANUAL_REVIEW escalation, is left untouched — those remain a deliberate,
+     * order-wide admin lever, never overridden by one brand's local shipment event.
+     */
+    private Order syncShipmentStatus(Order order) {
+        if (shippingPhaseRank(order.getStatus()) < 0) return order;
+
+        Set<Long> orderBrandIds = brandsOnOrder(order).keySet();
+        if (orderBrandIds.isEmpty()) return order;
+
+        Map<Long, ShipmentStatus> byBrand = orderShipmentRepository.findByOrder_IdOrderByIdAsc(order.getId())
+                .stream()
+                .collect(Collectors.toMap(s -> s.getBrand().getId(), OrderShipment::getStatus));
+
+        boolean allShipped = orderBrandIds.stream().allMatch(id -> byBrand.get(id) == ShipmentStatus.SHIPPED);
+        // Specifically SHIPPED, not "has a row at all" — a brand that only reported a PROBLEM has a
+        // row but has dispatched nothing, and must never make the order read as partially shipped.
+        boolean anyShipped = orderBrandIds.stream().anyMatch(id -> byBrand.get(id) == ShipmentStatus.SHIPPED);
+        OrderStatus computed = allShipped ? OrderStatus.SHIPPED
+                : anyShipped ? OrderStatus.PARTIALLY_SHIPPED
+                : OrderStatus.PAID;
+
+        if (shippingPhaseRank(computed) > shippingPhaseRank(order.getStatus())) {
+            order.setStatus(computed);
         }
+        return order;
+    }
+
+    /**
+     * A brand may only record shipment progress while the order is genuinely awaiting dispatch:
+     * PAID, or PARTIALLY_SHIPPED because another brand already shipped. Deliberately NOT a bare
+     * {@code == PAID} check — that was the pre-per-brand-shipment guard, and once one brand ships,
+     * the order legitimately sits at PARTIALLY_SHIPPED while its remaining brands still need to
+     * ship. Widening it to "any shipping-phase status" is what this replaces; dropping it entirely
+     * (as an earlier revision did) let a brand mark items shipped on an unpaid PENDING order — and
+     * send the customer a dispatch email for an order nobody had paid for.
+     */
+    private void assertInShippingWindow(Order order, String action) {
+        OrderStatus status = order.getStatus();
+        if (status != OrderStatus.PAID && status != OrderStatus.PARTIALLY_SHIPPED) {
+            throw new IllegalStateException(
+                    action + " for a paid order awaiting dispatch. Current status: " + status);
+        }
+    }
+
+    /** PAID < PARTIALLY_SHIPPED < SHIPPED, -1 for anything outside the shipping phase (see
+     *  {@link #syncShipmentStatus}, which never runs outside this band). */
+    private int shippingPhaseRank(OrderStatus status) {
+        return switch (status) {
+            case PAID -> 0;
+            case PARTIALLY_SHIPPED -> 1;
+            case SHIPPED -> 2;
+            default -> -1;
+        };
+    }
+
+    /**
+     * Admin's order-wide SHIPPED override (the documented fallback in {@link #updateOrderStatus} —
+     * brands normally ship individually via {@link #confirmShipment}). Upserts a SHIPPED
+     * {@link OrderShipment} row for every brand on the order that hasn't already recorded one, so
+     * the per-brand shipments list stays consistent with {@code Order.status} instead of silently
+     * showing "not shipped yet" under an order the admin just marked SHIPPED.
+     *
+     * <p>The {@link BrandPartner} to attach is read straight off the order's own items rather than
+     * looked back up by the id they expose. That lookup needed an {@code orElse(null)} skip for a
+     * brand it couldn't resolve — a branch that would silently leave one brand un-shipped under a
+     * SHIPPED order, and that was unreachable anyway, since the id came from that very entity a
+     * line earlier.
+     *
+     * <p>Each brand this actually force-ships also gets a buyer notification, exactly as if it had
+     * confirmed the shipment itself. Without that, an admin resolving a stalled brand left the
+     * customer with an order reading SHIPPED and no mail ever sent for that part of it.
+     */
+    private void bulkMarkAllBrandsShipped(Order order) {
+        Map<Long, OrderShipment> existing = orderShipmentRepository.findByOrder_IdOrderByIdAsc(order.getId())
+                .stream()
+                .collect(Collectors.toMap(s -> s.getBrand().getId(), s -> s));
+
+        for (Map.Entry<Long, BrandPartner> entry : brandsOnOrder(order).entrySet()) {
+            OrderShipment shipment = existing.get(entry.getKey());
+            if (shipment == null) {
+                shipment = OrderShipment.awaiting(order, entry.getValue());
+            }
+            if (shipment.getStatus() != ShipmentStatus.SHIPPED) {
+                shipment.setStatus(ShipmentStatus.SHIPPED);
+                shipment.setShippedAt(LocalDateTime.now());
+                orderShipmentRepository.save(shipment);
+                // Only rows this call actually transitions. A brand that had already shipped got
+                // its dispatch mail from confirmShipment and must not be told a second time; a
+                // brand force-shipped here has had no mail at all, which is the gap this closes.
+                publishShipmentConfirmed(order, entry.getValue(),
+                        shipment.getCarrier(), shipment.getTrackingNumber(), null);
+            }
+        }
+    }
+
+    /**
+     * Every brand with at least one line item on this order, in first-seen order. Read from the
+     * items' own {@code variant.product.brand} — already loaded alongside the order — so a caller
+     * that needs the entity, not just the id, never has to look it back up.
+     */
+    private Map<Long, BrandPartner> brandsOnOrder(Order order) {
+        Map<Long, BrandPartner> brands = new LinkedHashMap<>();
+        for (OrderItem item : order.getItems()) {
+            BrandPartner brand = item.getVariant().getProduct().getBrand();
+            if (brand != null && brand.getId() != null) {
+                brands.putIfAbsent(brand.getId(), brand);
+            }
+        }
+        return brands;
     }
 
     private Order findById(Long id) {
@@ -1179,27 +1540,94 @@ public class OrderService {
     }
 
     private String generateOrderNumber() {
-        StringBuilder suffix = new StringBuilder(6);
-        for (int i = 0; i < 6; i++) {
-            suffix.append(ORDER_NUM_CHARS.charAt(RANDOM.nextInt(ORDER_NUM_CHARS.length())));
-        }
-        String year = String.valueOf(LocalDateTime.now().getYear());
-        String candidate = "ENS-" + year + "-" + suffix;
-        return orderRepository.findByOrderNumber(candidate).isPresent()
-                ? generateOrderNumber()
-                : candidate;
+        return generateUniqueNumber("ENS", c -> orderRepository.findByOrderNumber(c).isPresent());
     }
 
     private String generateReturnNumber() {
-        StringBuilder suffix = new StringBuilder(6);
-        for (int i = 0; i < 6; i++) {
-            suffix.append(ORDER_NUM_CHARS.charAt(RANDOM.nextInt(ORDER_NUM_CHARS.length())));
-        }
+        return generateUniqueNumber("RET", c -> returnOrderRepository.findByReturnNumber(c).isPresent());
+    }
+
+    /**
+     * {@code PREFIX-<year>-<6 random chars>} over a 36-character alphabet (2.2 billion suffixes per
+     * year), re-drawn until {@code taken} reports the candidate free.
+     *
+     * <p>This is a collision check, not a lock: two concurrent callers can both see the same
+     * candidate as free. The unique constraints on {@code orders.order_number} and
+     * {@code return_orders.return_number} are what actually guarantee uniqueness — this loop only
+     * keeps them from ever realistically firing. Iterating rather than recursing (as both
+     * generators used to) keeps a pathological run off the call stack.
+     */
+    private String generateUniqueNumber(String prefix, Predicate<String> taken) {
         String year = String.valueOf(LocalDateTime.now().getYear());
-        String candidate = "RET-" + year + "-" + suffix;
-        return returnOrderRepository.findByReturnNumber(candidate).isPresent()
-                ? generateReturnNumber()
-                : candidate;
+        String candidate;
+        do {
+            StringBuilder suffix = new StringBuilder(6);
+            for (int i = 0; i < 6; i++) {
+                suffix.append(ORDER_NUM_CHARS.charAt(RANDOM.nextInt(ORDER_NUM_CHARS.length())));
+            }
+            candidate = prefix + "-" + year + "-" + suffix;
+        } while (taken.test(candidate));
+        return candidate;
+    }
+
+    /**
+     * The three side tables every order DTO needs — shipping snapshots, per-brand shipments and
+     * per-brand returns — pre-grouped by order id. Both mappers read only from here, so a page of
+     * N orders costs a fixed 2-3 queries instead of 2-3 per order (a 20-order list page was 40-60
+     * round trips). Single-order callers pass {@code loadRelations(List.of(order))}, which issues
+     * exactly the same queries the mappers used to issue inline.
+     */
+    private record OrderRelations(
+            Map<Long, List<OrderShippingSnapshot>> snapshots,
+            Map<Long, List<OrderShipment>> shipments,
+            Map<Long, List<ReturnOrder>> returns) {
+
+        List<OrderShippingSnapshot> snapshotsOf(Long orderId) {
+            return snapshots.getOrDefault(orderId, List.of());
+        }
+
+        List<OrderShipment> shipmentsOf(Long orderId) {
+            return shipments.getOrDefault(orderId, List.of());
+        }
+
+        List<ReturnOrder> returnsOf(Long orderId) {
+            return returns.getOrDefault(orderId, List.of());
+        }
+    }
+
+    /**
+     * One batched load of everything {@link #toDto} / {@link #toBrandScopedDto} need for a whole
+     * page of orders. Returns are only fetched when at least one order on the page is actually in
+     * a return-like status — same condition the mappers apply per order, so a page of ordinary
+     * orders pays for two queries, not three.
+     *
+     * <p>Every {@code getOrder().getId()} below reads an already-managed Order (the page query
+     * loaded them in this same persistence context), so grouping never triggers a proxy load.
+     */
+    private OrderRelations loadRelations(List<Order> orders) {
+        List<Long> orderIds = orders.stream().map(Order::getId).toList();
+        if (orderIds.isEmpty()) {
+            return new OrderRelations(Map.of(), Map.of(), Map.of());
+        }
+
+        Map<Long, List<OrderShippingSnapshot>> snapshots = orderShippingSnapshotRepository
+                .findByOrderIdInOrderByIdAsc(orderIds).stream()
+                .collect(Collectors.groupingBy(OrderShippingSnapshot::getOrderId));
+        Map<Long, List<OrderShipment>> shipments = orderShipmentRepository
+                .findByOrder_IdInOrderByIdAsc(orderIds).stream()
+                .collect(Collectors.groupingBy(s -> s.getOrder().getId()));
+
+        boolean anyReturnLike = orders.stream().anyMatch(o -> isReturnLikeStatus(o.getStatus()));
+        Map<Long, List<ReturnOrder>> returns = anyReturnLike
+                ? returnOrderRepository.findByOrder_IdInOrderByIdAsc(orderIds).stream()
+                        .collect(Collectors.groupingBy(r -> r.getOrder().getId()))
+                : Map.of();
+
+        return new OrderRelations(snapshots, shipments, returns);
+    }
+
+    private OrderResponseDto toDto(Order order) {
+        return toDto(order, loadRelations(List.of(order)));
     }
 
     /**
@@ -1207,19 +1635,121 @@ public class OrderService {
      * customer sees which items go where. Each return carries its own snapshotted ship-to address;
      * nothing is re-derived from the order's items here.
      */
-    private OrderResponseDto toDto(Order order) {
+    private OrderResponseDto toDto(Order order, OrderRelations relations) {
         OrderResponseDto base;
-        if (order.getStatus() == OrderStatus.RETURN_REQUESTED
-                || order.getStatus() == OrderStatus.RETURN_APPROVED
-                || order.getStatus() == OrderStatus.RETURN_RECEIVED
-                || order.getStatus() == OrderStatus.REFUNDED) {
-            List<ReturnOrder> returns = returnOrderRepository.findByOrder_IdOrderByIdAsc(order.getId());
+        if (isReturnLikeStatus(order.getStatus())) {
+            List<ReturnOrder> returns = relations.returnsOf(order.getId());
             base = !returns.isEmpty() ? OrderResponseDto.withReturns(order, returns) : OrderResponseDto.from(order);
         } else {
             base = OrderResponseDto.from(order);
         }
 
-        List<OrderShippingSnapshot> snapshots = orderShippingSnapshotRepository.findByOrderIdOrderByIdAsc(order.getId());
-        return base.toBuilder().shippingSnapshots(mapShippingSnapshots(order, snapshots)).build();
+        return base.toBuilder()
+                .shippingSnapshots(mapShippingSnapshots(order, relations.snapshotsOf(order.getId())))
+                .shipments(relations.shipmentsOf(order.getId()).stream().map(OrderShipmentDto::from).toList())
+                .build();
+    }
+
+    private boolean isReturnLikeStatus(OrderStatus status) {
+        return status == OrderStatus.RETURN_REQUESTED
+                || status == OrderStatus.RETURN_APPROVED
+                || status == OrderStatus.RETURN_RECEIVED
+                || status == OrderStatus.REFUNDED;
+    }
+
+    /**
+     * Scopes an order to exactly what one brand partner may see on a (possibly multi-brand) order:
+     * their own line items, their own shipping snapshot, their own return (if any), and an order
+     * total recomputed from just those — never another brand's items, shipping revenue, return
+     * details, or unit prices. Every /brand/orders/** endpoint must use this, never {@link #toDto}
+     * (which is the full, unfiltered view — correct for the customer's own GET /orders and for
+     * admin oversight, both of which are allowed to see the whole order).
+     *
+     * total = subtotal − discountAmount + shippingTotal, same formula as {@link Order#computeTotal()},
+     * just re-derived from this brand's own items/snapshot instead of the whole order's.
+     */
+    private OrderResponseDto toBrandScopedDto(Order order, User brandPartner, OrderRelations relations) {
+        List<OrderItem> ownItems = order.getItems().stream()
+                .filter(item -> item.getVariant().getProduct().getCreator().getId().equals(brandPartner.getId()))
+                .toList();
+        if (ownItems.isEmpty()) {
+            throw new SecurityException("This order does not contain any of your products");
+        }
+        Long brandId = ownItems.get(0).getBrandId();
+
+        List<OrderShippingSnapshot> ownSnapshots = relations.snapshotsOf(order.getId()).stream()
+                .filter(s -> brandId.equals(s.getBrandPartnerId()))
+                .toList();
+
+        BigDecimal subtotal = ownItems.stream()
+                .map(OrderItem::getLineTotal).reduce(BigDecimal.ZERO, BigDecimal::add);
+        // customerGrossAfterDiscount is null on pre-V5 legacy rows (see OrderItem) — falls back to
+        // the pre-discount lineTotal, same as those rows always did for the whole-order total.
+        BigDecimal customerGrossAfterDiscount = ownItems.stream()
+                .map(i -> i.getCustomerGrossAfterDiscount() != null ? i.getCustomerGrossAfterDiscount() : i.getLineTotal())
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal discountAmount = subtotal.subtract(customerGrossAfterDiscount);
+        BigDecimal shippingTotal = ownSnapshots.stream()
+                .map(OrderShippingSnapshot::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
+        // Same result as Order.computeTotal()'s subtotal − discount + shipping, stated directly:
+        // customerGrossAfterDiscount IS subtotal minus this brand's discount share.
+        BigDecimal total = customerGrossAfterDiscount.add(shippingTotal);
+
+        // Always exactly one entry: this brand's own shipment row if it exists, or a synthesized
+        // AWAITING_SHIPMENT placeholder if it doesn't — a row only gets created the moment this
+        // brand first ships or reports a problem (same convention as ReturnOrder: no row = nothing
+        // has happened yet), but the caller shouldn't have to distinguish "no row" from "confirmed
+        // not shipped" themselves.
+        OrderShipmentDto ownShipment = relations.shipmentsOf(order.getId()).stream()
+                .filter(s -> brandId.equals(s.getBrand().getId()))
+                .findFirst()
+                .map(OrderShipmentDto::from)
+                .orElseGet(() -> OrderShipmentDto.awaiting(brandId, ownItems.get(0).getBrandSnapshotName()));
+        List<OrderShipmentDto> ownShipments = List.of(ownShipment);
+
+        var builder = OrderResponseDto.builder()
+                .id(order.getId())
+                .orderNumber(order.getOrderNumber())
+                .buyerId(order.getBuyer().getId())
+                .buyerEmail(order.getBuyer().getEmail())
+                .status(order.getStatus())
+                .shippingAddress(order.getShippingAddress())
+                .items(ownItems.stream().map(OrderItemResponseDto::from).toList())
+                .subtotal(subtotal)
+                .discountCode(order.getDiscountCode())
+                .discountType(order.getDiscountType())
+                .discountPercent(order.getDiscountPercent())
+                .discountAmount(discountAmount)
+                .shippingTotal(shippingTotal)
+                .shippingSnapshots(mapShippingSnapshots(order, ownSnapshots))
+                .shipments(ownShipments)
+                // Scoped to THIS brand's own shipment row, not Order.isShippingProblem() — that
+                // order-wide flag is true if ANY brand had a problem, and exposing it raw here
+                // would leak "some other brand on this order has an issue" to a brand that has no
+                // business knowing that.
+                .hasShippingProblem(ownShipments.stream().anyMatch(s -> s.getStatus() == ShipmentStatus.PROBLEM))
+                .total(total)
+                .currency(order.getCurrency())
+                .notes(order.getNotes())
+                .createdAt(order.getCreatedAt())
+                .updatedAt(order.getUpdatedAt());
+
+        if (isReturnLikeStatus(order.getStatus())) {
+            List<ReturnOrder> ownReturns = relations.returnsOf(order.getId()).stream()
+                    .filter(r -> r.getBrand() != null && brandId.equals(r.getBrand().getId()))
+                    .toList();
+            if (!ownReturns.isEmpty()) {
+                builder.returns(ownReturns.stream().map(ReturnSummaryDto::from).toList());
+                if (ownReturns.size() == 1) {
+                    ReturnOrder ret = ownReturns.get(0);
+                    builder.returnNumber(ret.getReturnNumber())
+                            .returnReason(ret.getReason() != null ? ret.getReason().name() : null)
+                            .returnDescription(ret.getDescription())
+                            .returnRequestedAt(ret.getRequestedAt())
+                            .returnShipToAddress(ret.getShipToFormatted());
+                }
+            }
+        }
+        return builder.build();
     }
 }

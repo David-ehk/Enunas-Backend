@@ -29,4 +29,16 @@ public class CustomerController {
             @AuthenticationPrincipal User user) {
         return ResponseEntity.ok(customerService.updateMyProfile(dto, user));
     }
+
+    /**
+     * Erasure request under DSGVO Art. 17 — see {@code CustomerService.eraseMyAccount} for exactly
+     * what goes and what is kept. Irreversible. 409 while the customer still has an order in
+     * flight; the caller's token stops working immediately afterwards, since the identity it was
+     * issued for no longer exists.
+     */
+    @DeleteMapping("/me")
+    public ResponseEntity<Void> eraseMyAccount(@AuthenticationPrincipal User user) {
+        customerService.eraseMyAccount(user);
+        return ResponseEntity.noContent().build();
+    }
 }

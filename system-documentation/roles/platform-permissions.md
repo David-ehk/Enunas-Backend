@@ -179,9 +179,15 @@ A platform operator with cross-tenant authority.
 | Orders | Filter orders by status | `GET /admin/orders?status=X` |
 | Orders | Update order status | `PATCH /admin/orders/{id}/status` |
 | Orders | Cancel PENDING order | `POST /admin/orders/{id}/cancel` |
-| Returns | Approve return | `POST /admin/orders/{id}/return/approve` |
-| Returns | Confirm goods received | `POST /admin/orders/{id}/return/receive` |
-| Returns | Process refund via Mollie | `POST /admin/orders/{id}/return/refund` |
+| Returns | Approve return | `POST /admin/returns/{returnNumber}/approve` |
+| Returns | Confirm goods received | `POST /admin/returns/{returnNumber}/receive` |
+| Returns | Process refund via Mollie | `POST /admin/returns/{returnNumber}/refund` |
+
+Returns are addressed by `returnNumber`, not order id, because a multi-brand order produces one
+return per brand — the order id alone can't say which one. The order-scoped forms above
+(`POST /admin/orders/{id}/return/approve|receive|refund`) still exist as `@Deprecated` aliases for
+callers not yet migrated: they resolve the order's single return and delegate, or reject with 409
+if the order has more than one. Prefer the `returnNumber`-addressed routes for anything new.
 | Payouts | Generate payout records | `POST /admin/payouts/generate` |
 | Payouts | List payouts | `GET /admin/payouts` |
 | Payouts | Approve payout | `PATCH /admin/payouts/{id}/approve` |

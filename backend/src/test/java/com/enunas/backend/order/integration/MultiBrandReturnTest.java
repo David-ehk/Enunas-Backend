@@ -67,13 +67,24 @@ class MultiBrandReturnTest extends AbstractDiscountIntegrationTest {
         return jdbc.queryForList("SELECT * FROM returns WHERE order_id = ? ORDER BY id", orderId);
     }
 
-    /** Drives an order all the way to DELIVERED, the only status a return can be requested from. */
+    /**
+     * Drives an order all the way to DELIVERED, the only status a return can be requested from.
+     * Ships via {@code shippingBrandToken} first (exercising the real per-brand confirmShipment
+     * path this fixture cares about), then admin's bulk SHIPPED override completes any OTHER brand
+     * on the order — DELIVERED is only reachable once every brand has genuinely shipped (see
+     * OrderService.syncShipmentStatus/validateForwardTransition), and these fixtures only ever
+     * ship one brand explicitly since the return/refund behavior under test is orthogonal to
+     * shipment mechanics.
+     */
     private void deliver(long orderId, String shippingBrandToken, String adminToken) {
         confirmPaid(orderId);
         ResponseEntity<Map> shipped = rest.exchange("/brand/orders/" + orderId + "/ship", HttpMethod.POST,
                 new HttpEntity<>(Map.of("carrier", "DHL", "trackingNumber", "TRACK-1"),
                         auth(shippingBrandToken)), Map.class);
         assertThat(shipped.getStatusCode().is2xxSuccessful()).as("ship: %s", shipped.getBody()).isTrue();
+        ResponseEntity<Map> allShipped = rest.exchange("/admin/orders/" + orderId + "/status?status=SHIPPED",
+                HttpMethod.PATCH, new HttpEntity<>(null, auth(adminToken)), Map.class);
+        assertThat(allShipped.getStatusCode().is2xxSuccessful()).as("bulk-ship: %s", allShipped.getBody()).isTrue();
         ResponseEntity<Map> delivered = rest.exchange("/admin/orders/" + orderId + "/status?status=DELIVERED",
                 HttpMethod.PATCH, new HttpEntity<>(null, auth(adminToken)), Map.class);
         assertThat(delivered.getStatusCode().is2xxSuccessful()).as("deliver: %s", delivered.getBody()).isTrue();
@@ -484,7 +495,10 @@ class MultiBrandReturnTest extends AbstractDiscountIntegrationTest {
                 .filter(r -> "BrandA".equals(r.get("brandName"))).findFirst().orElseThrow().get("returnNumber");
         adminReturnAction(adminToken, returnA, "approve");
 
-        assertThat(uploadLabel(brandBToken, returnA).getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+        // 403, not 500: uploadReturnLabel throws SecurityException for a brand that doesn't own the
+        // return, and GlobalExceptionHandler maps that to FORBIDDEN. This asserted 500 back when the
+        // exception fell through to the generic handler.
+        assertThat(uploadLabel(brandBToken, returnA).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
     }
 
     private ResponseEntity<Map> uploadLabel(String brandToken, String returnNumber) {

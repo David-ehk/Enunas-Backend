@@ -192,13 +192,16 @@ class GoogleAuthIntegrationTest extends AbstractDiscountIntegrationTest {
         assertThat(userRepository.findByEmail("unverified-new@example.com")).isEmpty();
     }
 
-    /** I3 — /auth/set-password must be rejected by Spring Security before the controller NPEs. */
+    /** I3 — /auth/set-password must be rejected by Spring Security before the controller NPEs.
+     *  401, not 403: the caller sent no credentials at all, so the honest answer is "who are you?"
+     *  rather than "you may not". Spring Security's default entry point answered 403 for anonymous
+     *  callers too; SecurityConfiguration now distinguishes the two. */
     @Test
     void setPassword_unauthenticated_isRejectedBySecurity_notA500() {
         ResponseEntity<Map> resp = rest.exchange("/auth/set-password", HttpMethod.POST,
                 new HttpEntity<>(Map.of("newPassword", "brandNewPassword1")), Map.class);
 
-        assertThat(resp.getStatusCode().value()).isEqualTo(403);
+        assertThat(resp.getStatusCode().value()).isEqualTo(401);
     }
 
     /** I3 — the same defense applies to the pre-existing /auth/change-password. */
@@ -208,7 +211,7 @@ class GoogleAuthIntegrationTest extends AbstractDiscountIntegrationTest {
                 new HttpEntity<>(Map.of("currentPassword", "oldPassword1", "newPassword", "newPassword1")),
                 Map.class);
 
-        assertThat(resp.getStatusCode().value()).isEqualTo(403);
+        assertThat(resp.getStatusCode().value()).isEqualTo(401);
     }
 
     /** I3 — the blanket rule must NOT have broken unauthenticated login/signup. */

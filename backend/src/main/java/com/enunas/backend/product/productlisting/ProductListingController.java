@@ -6,6 +6,9 @@ import com.enunas.backend.product.productlisting.dto.UpdateListingDto;
 import com.enunas.backend.user.User;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -32,20 +35,29 @@ public class ProductListingController {
 
     // Public storefront reads (no auth — see SecurityConfiguration GET /products|listings/**)
 
+    // `viewer` is null for anonymous storefront traffic; when present it exempts the owning brand
+    // and admins from the storefront gate, exactly as ProductController does for products.
+
     @GetMapping("/products/{productId}/listings")
-    public ResponseEntity<List<ListingResponseDto>> getListingsByProduct(@PathVariable Long productId) {
-        return ResponseEntity.ok(productListingService.getActiveListingsByProduct(productId));
+    public ResponseEntity<List<ListingResponseDto>> getListingsByProduct(
+            @PathVariable Long productId,
+            @AuthenticationPrincipal User viewer) {
+        return ResponseEntity.ok(productListingService.getActiveListingsByProduct(productId, viewer));
     }
 
     @GetMapping("/listings/{listingId}")
-    public ResponseEntity<ListingResponseDto> getListing(@PathVariable Long listingId) {
-        return ResponseEntity.ok(productListingService.getListingById(listingId));
+    public ResponseEntity<ListingResponseDto> getListing(
+            @PathVariable Long listingId,
+            @AuthenticationPrincipal User viewer) {
+        return ResponseEntity.ok(productListingService.getListingById(listingId, viewer));
     }
 
+    /** Paged: with no region this spans the whole catalogue. */
     @GetMapping("/listings")
-    public ResponseEntity<List<ListingResponseDto>> getListingsByRegion(
-            @RequestParam(required = false) String region) {
-        return ResponseEntity.ok(productListingService.getActiveListingsByRegion(region));
+    public ResponseEntity<Page<ListingResponseDto>> getListingsByRegion(
+            @RequestParam(required = false) String region,
+            @PageableDefault(size = 20) Pageable pageable) {
+        return ResponseEntity.ok(productListingService.getActiveListingsByRegion(region, pageable));
     }
 
     @PutMapping("/products/{productId}/listings/{listingId}")

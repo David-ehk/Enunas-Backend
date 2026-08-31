@@ -4,14 +4,17 @@ import com.enunas.backend.brandpartner.BrandPartner;
 import com.enunas.backend.brandpartner.BrandPartnerRepository;
 import com.enunas.backend.exception.ProductNotFoundException;
 import com.enunas.backend.media.storage.MediaUrlResolver;
+import com.enunas.backend.order.OrderItemRepository;
 import com.enunas.backend.product.dto.*;
 import com.enunas.backend.product.productlisting.ProductListingRepository;
+import com.enunas.backend.product.productlisting.ProductPriceRow;
 import com.enunas.backend.product.productvariant.ProductColor;
 import com.enunas.backend.product.productvariant.ProductColorRepository;
 import com.enunas.backend.product.productvariant.ProductVariant;
 import com.enunas.backend.product.productvariant.ProductVariantRepository;
 import com.enunas.backend.product.productvariant.ColorFamily;
 import com.enunas.backend.product.productvariant.ProductVariantService;
+import com.enunas.backend.user.Role;
 import com.enunas.backend.user.User;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
@@ -34,6 +37,7 @@ public class ProductService {
     private final ProductVariantService variantService;
     private final BrandPartnerRepository brandPartnerRepository;
     private final MediaUrlResolver mediaUrlResolver;
+    private final OrderItemRepository orderItemRepository;
 
     @Transactional
     public ProductResponseDto createProduct(CreateProductDto dto, User creator) {
@@ -80,54 +84,83 @@ public class ProductService {
     }
 
     @Transactional(readOnly = true)
-    public ProductResponseDto getProductById(Long id) {
-        return toResponse(findById(id));
-    }
-
-    @Transactional(readOnly = true)
-    public ProductResponseDto getProductBySku(String sku) {
-        ProductColor color = productColorRepository.findBySku(sku)
-                .orElseThrow(() -> new ProductNotFoundException("No product found with SKU: " + sku));
-        return toResponse(color.getProduct());
-    }
-
-    @Transactional(readOnly = true)
-    public ProductResponseDto getProductBySlug(String slug) {
-        Product product = productRepository.findBySlug(slug)
-                .orElseThrow(() -> new ProductNotFoundException("No product found with slug: " + slug));
+    public ProductResponseDto getProductById(Long id, User viewer) {
+        Product product = findById(id);
+        assertBrowsable(product, viewer);
         return toResponse(product);
     }
 
     @Transactional(readOnly = true)
-    public Page<ProductResponseDto> getAllProducts(Pageable pageable) {
-        return productRepository.findAll(pageable).map(this::toResponse);
+    public ProductResponseDto getProductBySku(String sku, User viewer) {
+        ProductColor color = productColorRepository.findBySku(sku)
+                .orElseThrow(() -> new ProductNotFoundException("No product found with SKU: " + sku));
+        Product product = color.getProduct();
+        assertBrowsable(product, viewer);
+        return toResponse(product);
     }
 
     @Transactional(readOnly = true)
+    public ProductResponseDto getProductBySlug(String slug, User viewer) {
+        Product product = productRepository.findBySlug(slug)
+                .orElseThrow(() -> new ProductNotFoundException("No product found with slug: " + slug));
+        assertBrowsable(product, viewer);
+        return toResponse(product);
+    }
+
+    /**
+     * The single-product (PDP) mirror of the browse-list gate in {@link ProductRepository} — same
+     * "ACTIVE status AND at least one currently-active listing" definition, just as a not-found
+     * guard instead of a filter predicate (a list silently omits; a direct lookup 404s).
+     *
+     * The product's own brand and admins are exempt: {@code createProduct} persists a product with
+     * variants but NO listing (listings are created separately via /listings), so gating the owner
+     * too would 404 a brand on the detail page of the product they just created — the gate exists
+     * to keep unbuyable products off the storefront, not to hide a brand's own catalogue from it.
+     * {@code viewer} is null for anonymous storefront traffic (GET /products/** is permitAll).
+     */
+    private void assertBrowsable(Product product, User viewer) {
+        if (viewer != null && (viewer.getRole() == Role.ADMIN
+                || (product.getCreator() != null && product.getCreator().getId().equals(viewer.getId())))) {
+            return;
+        }
+        boolean hasActiveListing = listingRepository.existsCurrentlyActiveListingByProductId(product.getId());
+        if (product.getStatus() != ProductStatus.ACTIVE || !hasActiveListing) {
+            throw new ProductNotFoundException("No product found with id: " + product.getId());
+        }
+    }
+
+    // NOTE: there is deliberately no ungated "all products" method here. One existed, calling
+    // productRepository.findAll straight through, and nothing called it — ProductController's
+    // GET /products maps to getActiveProducts. Left in place it was a loaded gun: a public method
+    // named getAllProducts, on a service whose every other browse method applies the
+    // ACTIVE-plus-sellable-listing gate, returning SUSPENDED, REJECTED and unlisted products to
+    // whoever called it next. Admin oversight has its own path (AdminService.getAllProducts).
+
+    @Transactional(readOnly = true)
     public Page<ProductResponseDto> getProductsByCategory(ProductCategory category, Pageable pageable) {
-        return productRepository.findByCategory(category, pageable).map(this::toResponse);
+        return toResponsePage(productRepository.findByCategory(category, pageable));
     }
 
     @Transactional(readOnly = true)
     public Page<ProductResponseDto> getActiveProducts(Pageable pageable) {
-        return productRepository.findByStatus(ProductStatus.ACTIVE, pageable).map(this::toResponse);
+        return toResponsePage(productRepository.findByStatus(ProductStatus.ACTIVE, pageable));
     }
 
     @Transactional(readOnly = true)
     public Page<ProductResponseDto> search(String keyword, Pageable pageable) {
-        return productRepository.search(keyword, pageable).map(this::toResponse);
+        return toResponsePage(productRepository.search(keyword, pageable));
     }
 
     @Transactional(readOnly = true)
     public Page<ProductResponseDto> getProductsByColorFamily(ColorFamily colorFamily, Pageable pageable) {
-        return productRepository.findByColorFamily(colorFamily, pageable).map(this::toResponse);
+        return toResponsePage(productRepository.findByColorFamily(colorFamily, pageable));
     }
 
     @Transactional(readOnly = true)
     public List<ProductResponseDto> getMyProducts(User creator) {
-        return productRepository.findByCreator(creator).stream()
-                .map(this::toResponse)
-                .toList();
+        List<Product> products = productRepository.findByCreator(creator);
+        Map<Long, BigDecimal> prices = lowestActivePrices(priceLookupIds(products));
+        return products.stream().map(product -> toResponse(product, prices)).toList();
     }
 
     @Transactional
@@ -140,10 +173,33 @@ public class ProductService {
         return toResponse(productRepository.save(product));
     }
 
+    /**
+     * Hard-deletes a product the brand created by mistake. Refuses once the product has a history
+     * worth keeping, because the alternative is worse than a refusal: the delete cascades to
+     * variants and colours, and the foreign keys from {@code order_items} and {@code listings} then
+     * abort it as a bare "Data integrity violation" 409 that tells the brand nothing about which of
+     * their products is stuck or what to do instead.
+     *
+     * <p>Order history is the hard stop — {@link com.enunas.backend.order.OrderItem} rows carry the
+     * frozen money snapshots behind the commercial record, and they are only readable while the
+     * variant they point at survives. Archiving is the operation for a product that has sold.
+     */
     @Transactional
     public void deleteProduct(Long id, User creator) {
         Product product = findById(id);
         verifyOwnership(product, creator);
+
+        if (orderItemRepository.existsByVariant_Product_Id(id)) {
+            throw new IllegalStateException(
+                    "Product " + id + " has already been ordered and cannot be deleted — its order"
+                    + " history depends on it. Set its status to ARCHIVED instead.");
+        }
+        if (!listingRepository.findByProductId(id).isEmpty()) {
+            throw new IllegalStateException(
+                    "Product " + id + " still has listings. Remove them first, or set the product's"
+                    + " status to ARCHIVED to take it off the storefront.");
+        }
+
         productRepository.delete(product);
     }
 
@@ -272,17 +328,55 @@ public class ProductService {
     }
 
     /**
-     * Maps a Product to a response DTO with CTL card prices populated from the listing table.
-     * Each CTL product gets its lowest currently-active listing price (null if no active listing).
+     * Maps a Product to a response DTO with its own price and its CTL card prices, all read from
+     * one batched aggregate.
+     *
+     * <p>This used to collect the CTL prices with {@code Collectors.toMap(id, price, ...)} over
+     * {@code findLowestActivePriceByProductId(...).orElse(null)}. That throws: {@code toMap} is
+     * backed by {@code HashMap.merge}, which rejects a null VALUE outright, and a CTL target with
+     * no sellable listing produces exactly that. It was reachable from the ordinary path —
+     * createProduct returns through here, and a brand-new product has no listing yet (listings are
+     * created separately, see assertBrowsable), so pointing Complete-The-Look at anything not yet
+     * on sale answered 500 having already saved the product. Reading from a map that simply has no
+     * entry for those products is both the fix and the reason there is nothing left to null-check.
      */
     private ProductResponseDto toResponse(Product product) {
-        BigDecimal price = listingRepository.findLowestActivePriceByProductId(product.getId()).orElse(null);
-        Map<Long, BigDecimal> ctlPrices = product.getCompleteTheLookProducts().stream()
-                .collect(Collectors.toMap(
-                    Product::getId,
-                    p -> listingRepository.findLowestActivePriceByProductId(p.getId()).orElse(null),
-                    (a, b) -> a));
-        return ProductResponseDto.from(product, price, ctlPrices::get, mediaUrlResolver);
+        return toResponse(product, lowestActivePrices(priceLookupIds(List.of(product))));
+    }
+
+    private ProductResponseDto toResponse(Product product, Map<Long, BigDecimal> prices) {
+        return ProductResponseDto.from(product, prices.get(product.getId()), prices::get, mediaUrlResolver);
+    }
+
+    /** Every product id a response needs a price for: the products themselves, plus their CTL
+     *  targets, which are rendered as cards with their own prices. */
+    private Set<Long> priceLookupIds(Collection<Product> products) {
+        Set<Long> ids = new HashSet<>();
+        for (Product product : products) {
+            ids.add(product.getId());
+            for (Product related : product.getCompleteTheLookProducts()) {
+                ids.add(related.getId());
+            }
+        }
+        return ids;
+    }
+
+    /**
+     * Lowest sellable price per product, in one query. Ids with no sellable listing are absent from
+     * the map, and {@code map.get} then yields the same null the DTO has always rendered as "no
+     * price" — so absence is carried, never a null value.
+     */
+    private Map<Long, BigDecimal> lowestActivePrices(Set<Long> productIds) {
+        if (productIds.isEmpty()) return Map.of();
+        return listingRepository.findLowestActivePricesByProductIds(productIds).stream()
+                .filter(row -> row.price() != null)
+                .collect(Collectors.toMap(ProductPriceRow::productId, ProductPriceRow::price));
+    }
+
+    /** Page mapping with the prices for the whole page (and its CTL targets) fetched once. */
+    private Page<ProductResponseDto> toResponsePage(Page<Product> page) {
+        Map<Long, BigDecimal> prices = lowestActivePrices(priceLookupIds(page.getContent()));
+        return page.map(product -> toResponse(product, prices));
     }
 
     /**

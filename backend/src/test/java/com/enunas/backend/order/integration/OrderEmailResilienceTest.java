@@ -46,7 +46,10 @@ class OrderEmailResilienceTest extends AbstractDiscountIntegrationTest {
         // confirmPaid() above also triggers OrderConfirmationEmailListener's "Bestellbestätigung"
         // email to the same customer — match on subject, not just recipient, to isolate the
         // shipment email specifically (same fix ReturnLifecyclePhase3Test needed for the same reason).
-        verify(emailService).sendPlainTextEmail(eq("customer@it.local"), contains("wurde versendet"), anyString());
+        // "Teilsendung": shipment emails are per-brand now (one brand ships its own parcel and
+        // triggers its own email), so the subject names the part rather than claiming the whole
+        // order shipped — see ShipmentConfirmedEmailListener.
+        verify(emailService).sendPlainTextEmail(eq("customer@it.local"), contains("Teilsendung"), anyString());
     }
 
     @Test

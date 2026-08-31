@@ -70,6 +70,46 @@ class BrandPartnerVerificationFlowIntegrationTest extends AbstractDiscountIntegr
         assertThat(userRepository.findByEmail(email).orElseThrow().isEnabled()).isFalse();
     }
 
+    /**
+     * The other half of the same two-gate system, broken the other way: a May 2026 commit
+     * (unrelated to this area — bundled into a SKU/ProductColor refactor) made AdminService.
+     * approveBrand() also force User.enabled = true, so an admin approving an applicant who never
+     * verified their email silently granted them a working login anyway. Reverted — approve only
+     * ever flips adminApproved; enabled stays exactly what verifyBrandApplicant() last set it to.
+     */
+    @Test
+    void adminApprovingBeforeVerification_doesNotEnableLogin() {
+        seedAdmin();
+        String adminToken = login("admin@it.local", "Admin123!");
+        Map<String, Object> body = baseApply();
+        ResponseEntity<Map> applyResp = apply(body);
+        long brandId = ((Number) applyResp.getBody().get("id")).longValue();
+        String email = (String) body.get("email");
+
+        ResponseEntity<Map> approveResp = rest.exchange("/admin/brands/" + brandId + "/approve",
+                HttpMethod.POST, new HttpEntity<>(auth(adminToken)), Map.class);
+        assertThat(approveResp.getStatusCode().value()).as("approve: %s", approveResp.getBody()).isEqualTo(200);
+
+        User afterApprove = userRepository.findByEmail(email).orElseThrow();
+        assertThat(afterApprove.isAdminApproved()).as("adminApproved after approve").isTrue();
+        assertThat(afterApprove.isEnabled()).as("enabled must stay false — never verified").isFalse();
+
+        ResponseEntity<Map> loginResp = rest.postForEntity("/auth/login",
+                Map.of("email", email, "password", body.get("password")), Map.class);
+        assertThat(loginResp.getStatusCode().value()).as("login before verify: %s", loginResp.getBody())
+                .isNotEqualTo(200);
+
+        // Now actually verify — login must succeed only once BOTH gates are satisfied.
+        String realCode = userRepository.findByEmail(email).orElseThrow().getVerificationCode();
+        rest.exchange("/brandpartner/verify", HttpMethod.POST,
+                new HttpEntity<>(Map.of("email", email, "verificationCode", realCode)), String.class);
+
+        ResponseEntity<Map> loginAfterVerify = rest.postForEntity("/auth/login",
+                Map.of("email", email, "password", body.get("password")), Map.class);
+        assertThat(loginAfterVerify.getStatusCode().value())
+                .as("login after both gates: %s", loginAfterVerify.getBody()).isEqualTo(200);
+    }
+
     @Test
     void verifyingTwice_withTheSameCode_rejectsTheSecondAttempt() {
         // This is the guard's actual job once enabled correctly starts false: reject a REPEAT

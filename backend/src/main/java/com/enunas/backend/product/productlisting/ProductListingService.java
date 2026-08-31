@@ -9,9 +9,12 @@ import com.enunas.backend.product.productlisting.dto.ListingResponseDto;
 import com.enunas.backend.product.productlisting.dto.UpdateListingDto;
 import com.enunas.backend.product.productvariant.ProductVariant;
 import com.enunas.backend.product.productvariant.ProductVariantRepository;
+import com.enunas.backend.user.Role;
 import com.enunas.backend.user.User;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -59,9 +62,21 @@ public class ProductListingService {
         return ListingResponseDto.from(productListingRepository.save(productListing));
     }
 
+    /**
+     * A single listing. Gated exactly like the PDP: the owning brand and admins see it whatever
+     * state it is in, everyone else only if it is storefront-visible. It used to be an ungated
+     * {@code findById}, so an anonymous caller walking listing ids could read the name, SKU, live
+     * stock, price breakdown and launch time of a product that was suspended, rejected, or simply
+     * not released yet.
+     */
     @Transactional(readOnly = true)
-    public ListingResponseDto getListingById(Long listingId) {
-        return ListingResponseDto.from(findById(listingId));
+    public ListingResponseDto getListingById(Long listingId, User viewer) {
+        ProductListing listing = findById(listingId);
+        if (!canSeeUnpublished(listing.getProduct(), viewer)
+                && productListingRepository.findStorefrontVisibleById(listingId).isEmpty()) {
+            throw new ProductNotFoundException("Listing not found with id: " + listingId);
+        }
+        return ListingResponseDto.from(listing);
     }
 
     @Transactional(readOnly = true)
@@ -71,18 +86,47 @@ public class ProductListingService {
                 .toList();
     }
 
+    /**
+     * One product's listings. The owning brand and admins keep the management view (every active
+     * listing, window or not) that the vendor dashboard renders; storefront traffic gets only what
+     * is genuinely buyable. An empty list is the intended answer for a hidden product — the PDP
+     * deliberately still renders and shows "price unavailable" rather than 404ing.
+     */
     @Transactional(readOnly = true)
-    public List<ListingResponseDto> getActiveListingsByProduct(Long productId) {
-        return productListingRepository.findByProductIdAndActive(productId, true).stream()
-                .map(ListingResponseDto::from)
-                .toList();
+    public List<ListingResponseDto> getActiveListingsByProduct(Long productId, User viewer) {
+        Product product = productRepository.findById(productId)
+                .orElseThrow(() -> new ProductNotFoundException("Product not found with id: " + productId));
+        List<ProductListing> listings = canSeeUnpublished(product, viewer)
+                ? productListingRepository.findByProductIdAndActive(productId, true)
+                : productListingRepository.findStorefrontVisibleByProductId(productId);
+        return listings.stream().map(ListingResponseDto::from).toList();
     }
 
+    /**
+     * The public listing feed, optionally narrowed to a region.
+     *
+     * <p>A missing {@code region} means "any region". It previously fell through to
+     * {@code findByRegionAndActive(null, true)}, which compiles to SQL {@code region = NULL} and so
+     * matched nothing at all — the default form of this endpoint returned an empty list. The two
+     * nulls are different questions: the caller not filtering, versus a listing sold in every
+     * region.
+     */
     @Transactional(readOnly = true)
-    public List<ListingResponseDto> getActiveListingsByRegion(String region) {
-        return productListingRepository.findByRegionAndActive(region, true).stream()
-                .map(ListingResponseDto::from)
-                .toList();
+    public Page<ListingResponseDto> getActiveListingsByRegion(String region, Pageable pageable) {
+        return productListingRepository.findStorefrontVisible(region, pageable)
+                .map(ListingResponseDto::from);
+    }
+
+    /**
+     * The owning brand and admins see listings the storefront hides. Mirrors the exemption in
+     * {@code ProductService.assertBrowsable}: the gate exists to keep unbuyable products off the
+     * storefront, not to hide a brand's own catalogue from it. {@code viewer} is null for anonymous
+     * traffic (these reads are permitAll).
+     */
+    private boolean canSeeUnpublished(Product product, User viewer) {
+        if (viewer == null) return false;
+        return viewer.getRole() == Role.ADMIN
+                || (product.getCreator() != null && product.getCreator().getId().equals(viewer.getId()));
     }
 
     @Transactional

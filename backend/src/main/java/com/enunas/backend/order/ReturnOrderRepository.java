@@ -5,6 +5,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -16,6 +17,13 @@ public interface ReturnOrderRepository extends JpaRepository<ReturnOrder, Long> 
      * order-level view (status aggregation, the deprecated single-return endpoints) are deterministic.
      */
     List<ReturnOrder> findByOrder_IdOrderByIdAsc(Long orderId);
+
+    /**
+     * Batch variant of {@link #findByOrder_IdOrderByIdAsc} for list endpoints: every return across
+     * a whole page of orders in one query, grouped by order id in
+     * {@code OrderService.loadRelations}.
+     */
+    List<ReturnOrder> findByOrder_IdInOrderByIdAsc(Collection<Long> orderIds);
 
     Optional<ReturnOrder> findByReturnNumber(String returnNumber);
 

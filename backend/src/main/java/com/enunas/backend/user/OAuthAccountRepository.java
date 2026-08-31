@@ -13,4 +13,9 @@ public interface OAuthAccountRepository extends JpaRepository<OAuthAccount, Long
     Optional<OAuthAccount> findByProviderAndProviderUserId(OAuthProvider provider, String providerUserId);
 
     boolean existsByUser(User user);
+
+    /** Erasure (DSGVO Art. 17). Without this an erased account is not actually erased: the Google
+     *  link survives, and the next "sign in with Google" resolves the same provider id straight
+     *  back onto the anonymised user, reviving it under the tombstone address. */
+    void deleteByUser(User user);
 }

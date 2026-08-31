@@ -68,6 +68,15 @@ public class AdminService {
     /**
      * Approve a brand application — flips BrandPartner.status=ACTIVE, BrandPartner.approved=true,
      * and User.adminApproved=true (defensive: ensures role is BRAND_PARTNER) in one transaction.
+     *
+     * Deliberately does NOT touch User.enabled. Login is gated on BOTH independent conditions —
+     * email verification (enabled, flipped by BrandPartnerService.verifyBrandApplicant) AND
+     * operator approval (adminApproved, flipped here) — see
+     * AuthenticationService.assertAccountActive. A May 2026 commit had this method also force
+     * enabled=true, silently bypassing email verification for any applicant an admin approved
+     * before they verified; there is no admin-side brand-creation path that skips
+     * /brandpartner/apply (every brand this method ever runs against already started
+     * enabled=false there), so there was never a legitimate reason for this method to touch it.
      */
     @Transactional
     public BrandPartnerResponseDto approveBrand(Long brandId) {
@@ -77,9 +86,6 @@ public class AdminService {
         brand.setStatus(BrandStatus.ACTIVE);
 
         user.setAdminApproved(true);
-        // Operator approval is the sole gate: ensure the account is enabled regardless of whether
-        // email verification ever happened (onboarding no longer depends on it).
-        user.setEnabled(true);
         if (user.getRole() != Role.BRAND_PARTNER) {
             user.setRole(Role.BRAND_PARTNER);
         }
