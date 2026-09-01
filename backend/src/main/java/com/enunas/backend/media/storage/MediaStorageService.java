@@ -1,21 +1,20 @@
 package com.enunas.backend.media.storage;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
+import software.amazon.awssdk.services.s3.model.DeleteObjectTaggingRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectResponse;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
-import software.amazon.awssdk.services.s3.model.PutObjectTaggingRequest;
 import software.amazon.awssdk.services.s3.model.S3Exception;
-import software.amazon.awssdk.services.s3.model.Tagging;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 import software.amazon.awssdk.services.s3.presigner.model.PresignedPutObjectRequest;
 import software.amazon.awssdk.services.s3.presigner.model.PutObjectPresignRequest;
 
 import java.time.Instant;
-import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
@@ -26,6 +25,7 @@ import java.util.stream.Collectors;
  */
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class MediaStorageService {
 
     /** Signed tag every presigned PUT carries; cleared on confirm. A bucket lifecycle rule expires
@@ -42,7 +42,7 @@ public class MediaStorageService {
         String key = purpose.generateKey(resourceId, contentType);
 
         PutObjectRequest putObjectRequest = PutObjectRequest.builder()
-                .bucket(properties.getBucket())
+                .bucket(properties.bucketFor(purpose.scope()))
                 .key(key)
                 .contentType(contentType)
                 .contentLength(contentLength)
@@ -69,13 +69,19 @@ public class MediaStorageService {
     public void verifyUploaded(String key, MediaPurpose purpose, long resourceId) {
         String expectedPrefix = purpose.keyPrefix(resourceId);
         if (!key.startsWith(expectedPrefix)) {
+            // GlobalExceptionHandler already logs the SecurityException, but only its message —
+            // which names no key, purpose or resource. This is an attempt to claim another
+            // resource's object, the one event here actually worth investigating later, so the
+            // identifying detail has to be logged where it still exists.
+            log.warn("Rejected storageKey '{}' for {} on resource {} — expected prefix '{}'",
+                    key, purpose, resourceId, expectedPrefix);
             throw new SecurityException("storageKey does not belong to this resource");
         }
 
         HeadObjectResponse head;
         try {
             head = s3Client.headObject(HeadObjectRequest.builder()
-                    .bucket(properties.getBucket())
+                    .bucket(properties.bucketFor(purpose.scope()))
                     .key(key)
                     .build());
         } catch (S3Exception e) {
@@ -97,11 +103,21 @@ public class MediaStorageService {
                     "Uploaded object exceeds the " + purpose.maxBytes() + " byte limit for " + purpose);
         }
 
-        s3Client.putObjectTagging(PutObjectTaggingRequest.builder()
-                .bucket(properties.getBucket())
+        // DeleteObjectTagging, not PutObjectTagging with an empty TagSet: removing the whole tag
+        // set is what this step means, and it is the operation AWS documents for it. The empty-
+        // TagSet form is also not universally accepted — S3Mock rejects `<Tagging><TagSet/></Tagging>`
+        // outright with a 400, which is what broke the media integration tests. Requires
+        // s3:DeleteObjectTagging on the bucket policy — see docs/aws-media-setup.md.
+        s3Client.deleteObjectTagging(DeleteObjectTaggingRequest.builder()
+                .bucket(properties.bucketFor(purpose.scope()))
                 .key(key)
-                .tagging(Tagging.builder().tagSet(List.of()).build())
                 .build());
+
+        // Logged at info, not debug: one line per confirmed upload is a low-volume, permanent
+        // record of what the server actually saw (as opposed to what the client claimed), which is
+        // what makes a later "why is this image wrong/missing" answerable.
+        log.info("Media confirmed: key={} purpose={} resourceId={} contentType={} bytes={}",
+                key, purpose, resourceId, head.contentType(), head.contentLength());
     }
 
     public void delete(String key) {
@@ -109,9 +125,12 @@ public class MediaStorageService {
             return;
         }
         s3Client.deleteObject(DeleteObjectRequest.builder()
-                .bucket(properties.getBucket())
+                .bucket(properties.bucketForKey(key))
                 .key(key)
                 .build());
+        // Deletion is irreversible and leaves no trace in the bucket — without this line there is
+        // nothing left to tell a deliberate delete apart from an object that never existed.
+        log.info("Media deleted: key={}", key);
     }
 
     public record PresignedUpload(String key, String uploadUrl, Instant expiresAt, Map<String, String> requiredHeaders) {}

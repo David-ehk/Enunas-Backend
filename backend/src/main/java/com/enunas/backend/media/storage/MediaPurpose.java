@@ -21,7 +21,39 @@ public enum MediaPurpose {
     BRAND_HERO(Scope.BRAND, "brands/%d/hero/", "",
             imageTypes(), 10L * 1024 * 1024);
 
-    public enum Scope { PRODUCT, BRAND }
+    /**
+     * Which of the two media buckets a purpose lives in, and the key root that identifies it.
+     * Every {@code keyPrefixTemplate} above starts with its scope's root — enforced by
+     * {@code MediaPurposeTest}, since the two are written out separately — so a stored key alone is
+     * enough to find its bucket again. That is what {@code MediaStorageService.delete} and
+     * {@code MediaUrlResolver} rely on: both only ever receive a key, never a purpose.
+     */
+    public enum Scope {
+        PRODUCT("products/"),
+        BRAND("brands/");
+
+        private final String keyRoot;
+
+        Scope(String keyRoot) {
+            this.keyRoot = keyRoot;
+        }
+
+        public String keyRoot() {
+            return keyRoot;
+        }
+
+        /** Every key is server-generated from a {@code keyPrefixTemplate}, so exactly one root matches. */
+        public static Scope fromKey(String key) {
+            if (key != null) {
+                for (Scope scope : values()) {
+                    if (key.startsWith(scope.keyRoot)) {
+                        return scope;
+                    }
+                }
+            }
+            throw new IllegalArgumentException("Key belongs to no known media scope: " + key);
+        }
+    }
 
     private static final Map<String, String> EXTENSIONS_BY_CONTENT_TYPE = Map.of(
             "image/jpeg", "jpg",

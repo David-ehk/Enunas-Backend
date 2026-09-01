@@ -44,14 +44,17 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Testcontainers
 class MediaEndToEndIntegrationTest {
 
-    private static final String BUCKET = "enunas-media-e2e";
+    private static final String PRODUCT_BUCKET = "enunas-media-e2e-products";
+    private static final String BRAND_BUCKET = "enunas-media-e2e-brands";
 
     @Container
-    static final S3MockContainer S3_MOCK = new S3MockContainer("latest").withInitialBuckets(BUCKET);
+    static final S3MockContainer S3_MOCK =
+            new S3MockContainer("latest").withInitialBuckets(PRODUCT_BUCKET + "," + BRAND_BUCKET);
 
     @DynamicPropertySource
     static void mediaProperties(DynamicPropertyRegistry registry) {
-        registry.add("enunas.media.bucket", () -> BUCKET);
+        registry.add("enunas.media.buckets.product", () -> PRODUCT_BUCKET);
+        registry.add("enunas.media.buckets.brand", () -> BRAND_BUCKET);
         registry.add("enunas.media.endpoint", S3_MOCK::getHttpEndpoint);
         registry.add("enunas.media.cdn-base-url", () -> "https://cdn.it.local");
     }

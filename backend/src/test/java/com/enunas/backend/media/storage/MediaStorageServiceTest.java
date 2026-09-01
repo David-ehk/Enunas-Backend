@@ -11,7 +11,7 @@ import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectResponse;
-import software.amazon.awssdk.services.s3.model.PutObjectTaggingRequest;
+import software.amazon.awssdk.services.s3.model.DeleteObjectTaggingRequest;
 import software.amazon.awssdk.services.s3.model.S3Exception;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
@@ -26,6 +26,9 @@ import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
 class MediaStorageServiceTest {
+
+    private static final String PRODUCT_BUCKET = "enunas-clothing-images";
+    private static final String BRAND_BUCKET = "enunas-brand-previews";
 
     @Mock private S3Client s3Client;
 
@@ -42,7 +45,8 @@ class MediaStorageServiceTest {
                 .build();
 
         MediaStorageProperties properties = new MediaStorageProperties();
-        properties.setBucket("enunas-media");
+        properties.getBuckets().setProduct(PRODUCT_BUCKET);
+        properties.getBuckets().setBrand(BRAND_BUCKET);
         properties.setRegion("eu-central-1");
         properties.setPresignTtl(Duration.ofMinutes(10));
 
@@ -55,7 +59,7 @@ class MediaStorageServiceTest {
                 service.presignUpload(MediaPurpose.PRODUCT_IMAGE, 42L, "image/jpeg", 1024L);
 
         assertThat(upload.key()).matches("products/42/images/[0-9a-f-]{36}\\.jpg");
-        assertThat(upload.uploadUrl()).contains("enunas-media").contains(upload.key());
+        assertThat(upload.uploadUrl()).contains(PRODUCT_BUCKET).contains(upload.key());
 
         // TTL precision: expiresAt must fall within the configured 10-minute window, not just
         // "sometime after now" (which a hardcoded-different duration would also satisfy).
@@ -112,7 +116,7 @@ class MediaStorageServiceTest {
         assertThatThrownBy(() ->
                 service.verifyUploaded("products/42/images/abc.jpg", MediaPurpose.PRODUCT_IMAGE, 42L))
                 .isInstanceOf(IllegalArgumentException.class);
-        verify(s3Client, never()).putObjectTagging(any(PutObjectTaggingRequest.class));
+        verify(s3Client, never()).deleteObjectTagging(any(DeleteObjectTaggingRequest.class));
     }
 
     @Test
@@ -132,10 +136,9 @@ class MediaStorageServiceTest {
 
         service.verifyUploaded("products/42/images/abc.jpg", MediaPurpose.PRODUCT_IMAGE, 42L);
 
-        verify(s3Client).putObjectTagging(argThat((PutObjectTaggingRequest req) ->
-                req.bucket().equals("enunas-media")
-                        && req.key().equals("products/42/images/abc.jpg")
-                        && req.tagging().tagSet().isEmpty()));
+        verify(s3Client).deleteObjectTagging(argThat((DeleteObjectTaggingRequest req) ->
+                req.bucket().equals(PRODUCT_BUCKET)
+                        && req.key().equals("products/42/images/abc.jpg")));
     }
 
     @Test
@@ -143,12 +146,52 @@ class MediaStorageServiceTest {
         service.delete("products/42/images/abc.jpg");
 
         verify(s3Client).deleteObject(DeleteObjectRequest.builder()
-                .bucket("enunas-media").key("products/42/images/abc.jpg").build());
+                .bucket(PRODUCT_BUCKET).key("products/42/images/abc.jpg").build());
     }
 
     @Test
     void delete_nullKey_isNoOp() {
         service.delete(null);
+        verifyNoInteractions(s3Client);
+    }
+
+    // ===== Bucket routing — product media and brand previews live in different buckets =====
+
+    @Test
+    void presignUpload_brandPurpose_signsAgainstTheBrandBucket() {
+        MediaStorageService.PresignedUpload upload =
+                service.presignUpload(MediaPurpose.BRAND_LOGO, 7L, "image/png", 1024L);
+
+        assertThat(upload.key()).startsWith("brands/7/logo/");
+        assertThat(upload.uploadUrl()).contains(BRAND_BUCKET).doesNotContain(PRODUCT_BUCKET);
+    }
+
+    @Test
+    void verifyUploaded_brandPurpose_headsAndUntagsInTheBrandBucket() {
+        when(s3Client.headObject(any(HeadObjectRequest.class))).thenReturn(HeadObjectResponse.builder()
+                .contentType("image/png").contentLength(1024L).build());
+
+        service.verifyUploaded("brands/7/logo/abc.png", MediaPurpose.BRAND_LOGO, 7L);
+
+        verify(s3Client).headObject(argThat((HeadObjectRequest req) -> req.bucket().equals(BRAND_BUCKET)));
+        verify(s3Client).deleteObjectTagging(
+                argThat((DeleteObjectTaggingRequest req) -> req.bucket().equals(BRAND_BUCKET)));
+    }
+
+    /** delete() only ever gets a key, so the bucket has to come back out of the key's prefix. */
+    @Test
+    void delete_brandKey_targetsTheBrandBucket() {
+        service.delete("brands/7/logo/abc.png");
+
+        verify(s3Client).deleteObject(DeleteObjectRequest.builder()
+                .bucket(BRAND_BUCKET).key("brands/7/logo/abc.png").build());
+    }
+
+    @Test
+    void delete_keyWithUnknownPrefix_throwsRatherThanGuessingABucket() {
+        assertThatThrownBy(() -> service.delete("elsewhere/1/abc.png"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("no known media scope");
         verifyNoInteractions(s3Client);
     }
 }

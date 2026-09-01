@@ -12,6 +12,7 @@ import software.amazon.awssdk.services.s3.S3Configuration;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 
 import java.net.URI;
+import java.time.Duration;
 
 /**
  * Prod = IAM role via {@link DefaultCredentialsProvider}, no static keys anywhere. Dev/test point
@@ -29,8 +30,20 @@ public class S3Config {
                 .region(Region.of(properties.getRegion()))
                 .credentialsProvider(DefaultCredentialsProvider.create())
                 // Presigning (S3Presigner below) needs no HTTP client — this one is for the real
-                // calls S3Client makes: HeadObject, PutObjectTagging, DeleteObject.
-                .httpClient(UrlConnectionHttpClient.create());
+                // calls S3Client makes: HeadObject, DeleteObjectTagging, DeleteObject.
+                //
+                // Timeouts are set explicitly, and the socket timeout is deliberately tighter than
+                // the SDK's own default. The SDK defaults are already finite (2s connect, 30s
+                // read — SdkHttpConfigurationOption.DEFAULT_*), so this is not a fix for a hang;
+                // it is about where these calls run. HeadObject and DeleteObjectTagging happen
+                // inside the user's confirm request, on a same-region object of known small size,
+                // and should finish in tens of milliseconds. At the 30s default, one unhealthy S3
+                // connection times up to ~90s of a blocked request thread once the SDK's default
+                // three attempts are counted in. 10s is still generous and fails visibly sooner.
+                .httpClient(UrlConnectionHttpClient.builder()
+                        .connectionTimeout(Duration.ofSeconds(2))
+                        .socketTimeout(Duration.ofSeconds(10))
+                        .build());
         if (usesCustomEndpoint()) {
             builder.endpointOverride(URI.create(properties.getEndpoint()))
                     .serviceConfiguration(S3Configuration.builder().pathStyleAccessEnabled(true).build());

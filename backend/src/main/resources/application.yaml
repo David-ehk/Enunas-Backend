@@ -93,8 +93,14 @@ enunas:
   shipping:
     default-rate: 4.99
   media:
-    bucket: ${S3_BUCKET:enunas-media}
+    # Two independently provisioned buckets, no default: the old ${S3_BUCKET:enunas-media} fallback
+    # named a bucket that does not exist, so a missing variable failed per-request with NoSuchBucket
+    # instead of at startup. MediaStorageProperties.validate now refuses to boot without both.
+    buckets:
+      product: ${S3_BUCKET_PRODUCTS}
+      brand: ${S3_BUCKET_BRAND_PREVIEWS}
     region: ${AWS_REGION:eu-central-1}
+    # Optional. Blank today (no CloudFront) — MediaUrlResolver then emits direct S3 URLs.
     cdn-base-url: ${MEDIA_CDN_BASE_URL:}
     endpoint: ${S3_ENDPOINT:}
     presign-ttl: ${MEDIA_PRESIGN_TTL:PT10M}

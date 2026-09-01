@@ -76,7 +76,8 @@ jobs:
               -e JWT_EXPIRATION="${{ secrets.JWT_EXPIRATION }}" \
               -e ADMIN_EMAIL="${{ secrets.ADMIN_EMAIL }}" \
               -e ADMIN_PASSWORD="${{ secrets.ADMIN_PASSWORD }}" \
-              -e S3_BUCKET="${{ secrets.S3_BUCKET }}" \
+              -e S3_BUCKET_PRODUCTS="${{ secrets.S3_BUCKET_PRODUCTS }}" \
+              -e S3_BUCKET_BRAND_PREVIEWS="${{ secrets.S3_BUCKET_BRAND_PREVIEWS }}" \
               -e AWS_REGION="${{ env.AWS_REGION }}" \
               -e MEDIA_CDN_BASE_URL="${{ secrets.MEDIA_CDN_BASE_URL }}" \
               -e MOLLIE_API_KEY="${{ secrets.MOLLIE_API_KEY }}" \

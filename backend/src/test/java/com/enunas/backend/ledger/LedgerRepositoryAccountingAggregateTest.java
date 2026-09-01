@@ -6,6 +6,7 @@ import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
 import org.springframework.test.context.ActiveProfiles;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -37,8 +38,14 @@ class LedgerRepositoryAccountingAggregateTest {
 
     @Test
     void splitsProductAndShippingNetOfTheirOwnRefunds() {
-        LocalDateTime start = LocalDateTime.of(2026, 8, 1, 0, 0);
-        LocalDateTime end = LocalDateTime.of(2026, 9, 1, 0, 0);
+        // Derived from the same clock LedgerEntry's @PrePersist uses, not a hardcoded month: the
+        // entries below are stamped createdAt = LocalDateTime.now() and the query filters on
+        // createdAt, so a fixed [2026-08-01, 2026-09-01) window silently stopped matching anything
+        // on 1 September — the test aggregated zero rows and failed for reasons of the calendar
+        // rather than the code. The window still has to be a real month boundary, because that is
+        // the shape the production query is called with.
+        LocalDateTime start = LocalDate.now().withDayOfMonth(1).atStartOfDay();
+        LocalDateTime end = start.plusMonths(1);
 
         // Product sale: 119 gross, 18.00 net commission, 3.42 VAT, 97.58 to brand.
         ledgerRepository.save(entry(LedgerEntryType.ORDER_PAYMENT,

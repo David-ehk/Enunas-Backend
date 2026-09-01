@@ -57,9 +57,10 @@ All secrets are externalized. Copy `.env` and fill in values before running loca
 | `ADMIN_EMAIL` | `admin@enunas.com` | Email for the seeded admin account |
 | `ADMIN_PASSWORD` | — | Password for the seeded admin account (required) |
 | `GOOGLE_OAUTH_CLIENT_ID` | — | Google OAuth 2.0 Client ID (`*.apps.googleusercontent.com`) that `POST /auth/google` validates ID tokens' `aud` claim against (required) |
-| `S3_BUCKET` | `enunas-media` | S3 bucket for product/brand media |
+| `S3_BUCKET_PRODUCTS` | — (required) | Bucket for product media (`products/*` keys). No default — the app fails to start without it |
+| `S3_BUCKET_BRAND_PREVIEWS` | — (required) | Bucket for brand logo/hero (`brands/*` keys). No default, same reason |
 | `AWS_REGION` | `eu-central-1` | S3 bucket region |
-| `MEDIA_CDN_BASE_URL` | — | CloudFront hostname; required unless `S3_ENDPOINT` is set — see `docs/aws-media-setup.md` |
+| `MEDIA_CDN_BASE_URL` | — | Optional CDN hostname. Empty today (no CloudFront): URLs resolve directly to each bucket's S3 host — see `docs/aws-media-setup.md` |
 | `S3_ENDPOINT` | — | LocalStack/S3Mock endpoint for local dev; leave empty for real AWS |
 | `MEDIA_PRESIGN_TTL` | `PT10M` | Presigned upload URL TTL (ISO-8601 duration) |
 

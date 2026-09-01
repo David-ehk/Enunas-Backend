@@ -31,14 +31,17 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @Testcontainers
 class MediaStorageServiceS3MockIntegrationTest {
 
-    private static final String BUCKET = "enunas-media-test";
+    private static final String PRODUCT_BUCKET = "enunas-media-test-products";
+    private static final String BRAND_BUCKET = "enunas-media-test-brands";
 
     @Container
-    static final S3MockContainer S3_MOCK = new S3MockContainer("latest").withInitialBuckets(BUCKET);
+    static final S3MockContainer S3_MOCK =
+            new S3MockContainer("latest").withInitialBuckets(PRODUCT_BUCKET + "," + BRAND_BUCKET);
 
     @DynamicPropertySource
     static void mediaProperties(DynamicPropertyRegistry registry) {
-        registry.add("enunas.media.bucket", () -> BUCKET);
+        registry.add("enunas.media.buckets.product", () -> PRODUCT_BUCKET);
+        registry.add("enunas.media.buckets.brand", () -> BRAND_BUCKET);
         registry.add("enunas.media.endpoint", S3_MOCK::getHttpEndpoint);
         registry.add("enunas.media.cdn-base-url", () -> "https://cdn.it.local");
     }
@@ -87,12 +90,12 @@ class MediaStorageServiceS3MockIntegrationTest {
         mediaStorageService.verifyUploaded(upload.key(), MediaPurpose.PRODUCT_IMAGE, 7L);
 
         var tags = s3Client.getObjectTagging(GetObjectTaggingRequest.builder()
-                .bucket(BUCKET).key(upload.key()).build());
+                .bucket(PRODUCT_BUCKET).key(upload.key()).build());
         assertThat(tags.tagSet()).isEmpty();
 
         mediaStorageService.delete(upload.key());
         assertThatThrownBy(() -> s3Client.headObject(HeadObjectRequest.builder()
-                        .bucket(BUCKET).key(upload.key()).build()))
+                        .bucket(PRODUCT_BUCKET).key(upload.key()).build()))
                 .isInstanceOfAny(NoSuchKeyException.class, S3Exception.class);
     }
 }

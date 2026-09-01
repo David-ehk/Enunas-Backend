@@ -48,7 +48,9 @@ enunas:
   shipping:
     default-rate: 4.99
   media:
-    bucket: test-media-bucket
+    buckets:
+      product: test-product-bucket
+      brand: test-brand-bucket
     region: eu-central-1
     cdn-base-url: http://localhost:1/cdn
     # Dead endpoint by default — plain @SpringBootTest/@DataJpaTest classes never call S3, so this

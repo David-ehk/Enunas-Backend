@@ -95,4 +95,30 @@ class MediaPurposeTest {
     void validate_allowedTypeWithinLimit_doesNotThrow() {
         MediaPurpose.PRODUCT_IMAGE.validate("image/webp", 1024);
     }
+
+    // ===== Scope: a stored key must always lead back to its bucket =====
+
+    /**
+     * The key prefixes and the scope roots are written out separately, so nothing but this test
+     * stops them drifting apart. If they ever did, {@code Scope.fromKey} would route a key to the
+     * wrong bucket — or to none — and deletes and image URLs would silently break.
+     */
+    @Test
+    void everyPurposeKeyStartsWithItsScopeRoot() {
+        for (MediaPurpose purpose : MediaPurpose.values()) {
+            String key = purpose.generateKey(42L, purpose.allowedContentTypes().iterator().next());
+
+            assertThat(key).startsWith(purpose.scope().keyRoot());
+            assertThat(MediaPurpose.Scope.fromKey(key)).isEqualTo(purpose.scope());
+        }
+    }
+
+    @Test
+    void fromKey_unknownPrefix_throws() {
+        assertThatThrownBy(() -> MediaPurpose.Scope.fromKey("elsewhere/1/abc.jpg"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("no known media scope");
+        assertThatThrownBy(() -> MediaPurpose.Scope.fromKey(null))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
 }

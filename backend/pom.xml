@@ -179,7 +179,7 @@
             <artifactId>s3</artifactId>
             <exclusions>
                 <!-- Presigning needs no HTTP transport (pure local SigV4 computation); the S3Client
-                     that DOES make real calls (HeadObject/PutObjectTagging/DeleteObject) uses
+                     that DOES make real calls (HeadObject/DeleteObjectTagging/DeleteObject) uses
                      url-connection-client below. s3's default runtime transitives (apache5-client, netty-nio-client)
                      are excluded — verified via dependency:tree that they're the actual pulled-in clients. -->
                 <exclusion>
@@ -228,6 +228,19 @@
 							<artifactId>lombok</artifactId>
 						</exclude>
 					</excludes>
+				</configuration>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-surefire-plugin</artifactId>
+				<configuration>
+					<!-- Tests boot a Spring context without going through BackendApplication.main, and
+					     plain unit tests build no context at all, so TimezoneConfig cannot be the only
+					     thing pinning the clock. Timestamps are written in the JVM default zone while
+					     the monthly reports slice on UTC bounds — on a developer machine set to
+					     Europe/Berlin that mismatch fails the §22f export test in the last hours of a
+					     month and passes every other day of it. -->
+					<argLine>-Duser.timezone=UTC</argLine>
 				</configuration>
 			</plugin>
 			<plugin>
