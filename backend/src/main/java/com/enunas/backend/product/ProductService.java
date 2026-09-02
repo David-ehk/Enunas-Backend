@@ -2,12 +2,15 @@ package com.enunas.backend.product;
 
 import com.enunas.backend.brandpartner.BrandPartner;
 import com.enunas.backend.brandpartner.BrandPartnerRepository;
+import com.enunas.backend.exception.ErrorCode;
+import com.enunas.backend.exception.ProductDeletionBlockedException;
 import com.enunas.backend.exception.ProductNotFoundException;
 import com.enunas.backend.media.storage.MediaUrlResolver;
 import com.enunas.backend.order.OrderItemRepository;
 import com.enunas.backend.product.dto.*;
 import com.enunas.backend.product.productlisting.ProductListingRepository;
-import com.enunas.backend.product.productlisting.ProductPriceRow;
+import com.enunas.backend.product.dto.DisplayPrice;
+import com.enunas.backend.product.productlisting.ListingPriceRow;
 import com.enunas.backend.product.productvariant.ProductColor;
 import com.enunas.backend.product.productvariant.ProductColorRepository;
 import com.enunas.backend.product.productvariant.ProductVariant;
@@ -160,7 +163,7 @@ public class ProductService {
     @Transactional(readOnly = true)
     public List<ProductResponseDto> getMyProducts(User creator) {
         List<Product> products = productRepository.findByCreator(creator);
-        Map<Long, BigDecimal> prices = lowestActivePrices(priceLookupIds(products));
+        Map<Long, DisplayPrice> prices = lowestActivePrices(priceLookupIds(products));
         return products.stream().map(product -> toResponse(product, prices)).toList();
     }
 
@@ -228,12 +231,12 @@ public class ProductService {
         verifyOwnership(product, creator);
 
         if (orderItemRepository.existsByVariant_Product_Id(id)) {
-            throw new IllegalStateException(
+            throw new ProductDeletionBlockedException(ErrorCode.PRODUCT_HAS_ORDERS,
                     "Product " + id + " has already been ordered and cannot be deleted — its order"
                     + " history depends on it. Set its status to ARCHIVED instead.");
         }
         if (!listingRepository.findByProductId(id).isEmpty()) {
-            throw new IllegalStateException(
+            throw new ProductDeletionBlockedException(ErrorCode.PRODUCT_HAS_LISTINGS,
                     "Product " + id + " still has listings. Remove them first, or set the product's"
                     + " status to ARCHIVED to take it off the storefront.");
         }
@@ -288,7 +291,7 @@ public class ProductService {
             // Something references the product that neither the guards above nor this purge knows
             // about. Name the product and the way out: the generic handler's bare "Data integrity
             // violation" is what sent brands round the delete-then-archive loop with no exit.
-            throw new IllegalStateException(
+            throw new ProductDeletionBlockedException(ErrorCode.PRODUCT_REFERENCED,
                     "Product " + id + " is still referenced by other records and cannot be deleted."
                     + " Set its status to ARCHIVED to take it off the storefront.", ex);
         }
@@ -435,7 +438,7 @@ public class ProductService {
         return toResponse(product, lowestActivePrices(priceLookupIds(List.of(product))));
     }
 
-    private ProductResponseDto toResponse(Product product, Map<Long, BigDecimal> prices) {
+    private ProductResponseDto toResponse(Product product, Map<Long, DisplayPrice> prices) {
         return ProductResponseDto.from(product, prices.get(product.getId()), prices::get, mediaUrlResolver);
     }
 
@@ -453,20 +456,33 @@ public class ProductService {
     }
 
     /**
-     * Lowest sellable price per product, in one query. Ids with no sellable listing are absent from
-     * the map, and {@code map.get} then yields the same null the DTO has always rendered as "no
-     * price" — so absence is carried, never a null value.
+     * The price to display per product, in one query: the cheapest sellable listing's current
+     * price, paired with that same listing's list price when it is a reduction.
+     *
+     * <p>Reducing in Java rather than in SQL is what keeps the pair honest — the strikethrough has
+     * to be the chosen listing's own list price, not the lowest list price across all of them (see
+     * {@link ListingPriceRow}). Ids with no sellable listing are absent from the map, and
+     * {@code map.get} then yields the null the DTO renders as "no price".
      */
-    private Map<Long, BigDecimal> lowestActivePrices(Set<Long> productIds) {
+    private Map<Long, DisplayPrice> lowestActivePrices(Set<Long> productIds) {
         if (productIds.isEmpty()) return Map.of();
-        return listingRepository.findLowestActivePricesByProductIds(productIds).stream()
-                .filter(row -> row.price() != null)
-                .collect(Collectors.toMap(ProductPriceRow::productId, ProductPriceRow::price));
+
+        Map<Long, ListingPriceRow> cheapest = new HashMap<>();
+        for (ListingPriceRow row : listingRepository.findSellableListingPricesByProductIds(productIds)) {
+            if (row.price() == null) continue;
+            cheapest.merge(row.productId(), row,
+                    (a, b) -> b.current().compareTo(a.current()) < 0 ? b : a);
+        }
+
+        Map<Long, DisplayPrice> prices = new HashMap<>();
+        cheapest.forEach((productId, row) -> prices.put(productId,
+                new DisplayPrice(row.current(), row.isDiscounted() ? row.price() : null)));
+        return prices;
     }
 
     /** Page mapping with the prices for the whole page (and its CTL targets) fetched once. */
     private Page<ProductResponseDto> toResponsePage(Page<Product> page) {
-        Map<Long, BigDecimal> prices = lowestActivePrices(priceLookupIds(page.getContent()));
+        Map<Long, DisplayPrice> prices = lowestActivePrices(priceLookupIds(page.getContent()));
         return page.map(product -> toResponse(product, prices));
     }
 

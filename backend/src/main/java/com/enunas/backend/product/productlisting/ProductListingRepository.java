@@ -97,19 +97,19 @@ public interface ProductListingRepository extends JpaRepository<ProductListing, 
     Optional<BigDecimal> findLowestActivePriceByProductId(@Param("productId") Long productId);
 
     /**
-     * {@link #findLowestActivePriceByProductId} for many products in one query, for list responses
-     * and for the Complete-The-Look prices on a detail page. Rendering a page of products used to
-     * run this aggregate once per product and once more per CTL target — up to five queries per
-     * card — which is what this replaces.
+     * Every sellable listing for these products, as (product, price, discountPrice) rows — one
+     * query for a whole page of products and their Complete-The-Look targets, replacing the
+     * per-product aggregate that used to run once per card.
      *
-     * <p>Products without a sellable listing are simply missing from the result; see
-     * {@link ProductPriceRow}.
+     * <p>Returns rows rather than a MIN() aggregate on purpose: the caller picks the cheapest
+     * listing and keeps <em>that</em> listing's list price for the strikethrough. See
+     * {@link ListingPriceRow} for why two aggregates cannot do this correctly. A product with no
+     * sellable listing contributes no rows, which the caller reads as "no price".
      */
-    @Query("SELECT new com.enunas.backend.product.productlisting.ProductPriceRow("
-           + "l.product.id, MIN(CASE WHEN l.discountPrice IS NOT NULL THEN l.discountPrice ELSE l.price END)) "
-           + "FROM ProductListing l WHERE l.product.id IN :productIds AND " + CURRENTLY_SELLABLE
-           + " GROUP BY l.product.id")
-    List<ProductPriceRow> findLowestActivePricesByProductIds(@Param("productIds") Collection<Long> productIds);
+    @Query("SELECT new com.enunas.backend.product.productlisting.ListingPriceRow("
+           + "l.product.id, l.price, l.discountPrice) "
+           + "FROM ProductListing l WHERE l.product.id IN :productIds AND " + CURRENTLY_SELLABLE)
+    List<ListingPriceRow> findSellableListingPricesByProductIds(@Param("productIds") Collection<Long> productIds);
 
     /** Backs the storefront PDP gate (ProductService.assertBrowsable) — true iff this product has
      *  at least one currently-active, in-window listing. Same predicate as

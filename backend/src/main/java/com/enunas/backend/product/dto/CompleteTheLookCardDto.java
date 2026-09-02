@@ -24,15 +24,19 @@ public class CompleteTheLookCardDto {
     private String brandName;
     /** First primary image URL, or the first image if no primary is set, or null. */
     private String image;
-    /** Lowest active listing price; null when no active listing exists. */
+    /** What the customer pays; null when no active listing exists. */
     private BigDecimal price;
+
+    /** The price to strike through, or null when this card is not on sale — same contract as
+     *  {@code ProductResponseDto.originalPrice}. */
+    private BigDecimal originalPrice;
 
     /** Convenience overload — price will be null. */
     public static CompleteTheLookCardDto from(Product product, MediaUrlResolver resolver) {
         return from(product, null, resolver);
     }
 
-    public static CompleteTheLookCardDto from(Product product, BigDecimal lowestActivePrice, MediaUrlResolver resolver) {
+    public static CompleteTheLookCardDto from(Product product, DisplayPrice price, MediaUrlResolver resolver) {
         String firstImage = product.getImages().stream()
                 .filter(img -> img.isPrimary())
                 .findFirst()
@@ -46,7 +50,8 @@ public class CompleteTheLookCardDto {
                 .name(product.getName())
                 .brandName(product.getBrand() != null ? product.getBrand().getBrandName() : null)
                 .image(firstImage)
-                .price(lowestActivePrice)
+                .price(price != null ? price.current() : null)
+                .originalPrice(price != null ? price.original() : null)
                 .build();
     }
 }

@@ -3,6 +3,7 @@ package com.enunas.backend.product.integration;
 import com.enunas.backend.admin.AdminService;
 import com.enunas.backend.brandpartner.BrandPartner;
 import com.enunas.backend.discount.integration.AbstractDiscountIntegrationTest;
+import com.enunas.backend.exception.ErrorCode;
 import com.enunas.backend.product.Product;
 import com.enunas.backend.product.ProductStatus;
 import com.enunas.backend.product.dto.UpdateProductDto;
@@ -134,6 +135,8 @@ class ProductDeletionIntegrationTest extends AbstractDiscountIntegrationTest {
         ResponseEntity<Map> resp = delete("/products/delete/" + productId, token);
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        // The code is the contract the frontend branches on; the message is free to be reworded.
+        assertThat(resp.getBody().get("code")).isEqualTo(ErrorCode.PRODUCT_HAS_LISTINGS.name());
         assertThat((String) resp.getBody().get("message"))
                 .contains("still has listings")
                 .contains("ARCHIVED");
@@ -158,6 +161,9 @@ class ProductDeletionIntegrationTest extends AbstractDiscountIntegrationTest {
         ResponseEntity<Map> resp = delete("/products/delete/" + productId, token);
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        // PRODUCT_HAS_ORDERS is the one a client must never offer "remove the listings" for: no
+        // amount of removing anything makes this product deletable.
+        assertThat(resp.getBody().get("code")).isEqualTo(ErrorCode.PRODUCT_HAS_ORDERS.name());
         assertThat((String) resp.getBody().get("message"))
                 .contains("already been ordered")
                 .contains("ARCHIVED");
@@ -213,6 +219,9 @@ class ProductDeletionIntegrationTest extends AbstractDiscountIntegrationTest {
         assertThat((String) resp.getBody().get("message"))
                 .doesNotContain("Unknown field")
                 .contains("admin moderation");
+        // An error with nothing to branch on carries no code key at all — codes are additive, so
+        // every response that never had one keeps the exact body it had.
+        assertThat(resp.getBody()).doesNotContainKey("code");
         assertThat(statusOf(productId)).isEqualTo(ProductStatus.ACTIVE.name());
     }
 

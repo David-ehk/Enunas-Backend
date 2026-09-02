@@ -9,6 +9,7 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -184,5 +185,49 @@ class StorefrontListingVisibilityIntegrationTest extends AbstractDiscountIntegra
 
         assertThat(resp.getStatusCode().value()).isEqualTo(200);
         assertThat(resp.getBody()).hasSize(1);
+    }
+
+    // ── The brand's own management view ──────────────────────────────────────────────────────
+
+    /**
+     * A brand builds a drop before it opens, so the owner read must not apply the availability
+     * window — {@code findByProductIdAndActive} deliberately checks the active flag only. Anonymous
+     * traffic still gets nothing until the window opens.
+     */
+    @Test
+    void productListings_ofFutureDatedDrop_stayVisibleToTheOwningBrand() {
+        Fixture f = seedSellable();
+        f.listing().setAvailableFrom(LocalDateTime.now().plusDays(14));
+        productListingRepository.saveAndFlush(f.listing());
+        String token = login("acme@it.local", "Brand123!");
+
+        ResponseEntity<List> ownerResp = rest.exchange("/products/" + f.product().getId() + "/listings",
+                HttpMethod.GET, new HttpEntity<>(auth(token)), List.class);
+        ResponseEntity<List> anonResp = rest.getForEntity(
+                "/products/" + f.product().getId() + "/listings", List.class);
+
+        assertThat(ownerResp.getBody()).as("the brand manages its unopened drop").hasSize(1);
+        assertThat(anonResp.getBody()).as("the storefront waits for the window").isEmpty();
+    }
+
+    /**
+     * The gap this pair documents: {@code active = false} hides a listing from its own brand too.
+     * {@code getActiveListingsByProduct} sends the owner to {@code findByProductIdAndActive(id, true)},
+     * so a brand that deactivates a listing can no longer see it on this endpoint — the repository's
+     * unfiltered {@code findByProductId} is labelled "the brand-facing management view" but the
+     * service method that uses it ({@code getListingsByProduct}) is not wired to any route.
+     */
+    @Test
+    void productListings_ofDeactivatedListing_areHiddenFromTheOwningBrandToo() {
+        Fixture f = seedSellable();
+        f.listing().setActive(false);
+        productListingRepository.saveAndFlush(f.listing());
+        String token = login("acme@it.local", "Brand123!");
+
+        ResponseEntity<List> resp = rest.exchange("/products/" + f.product().getId() + "/listings",
+                HttpMethod.GET, new HttpEntity<>(auth(token)), List.class);
+
+        assertThat(resp.getStatusCode().value()).isEqualTo(200);
+        assertThat(resp.getBody()).isEmpty();
     }
 }

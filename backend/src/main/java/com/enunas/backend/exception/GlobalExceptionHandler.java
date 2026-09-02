@@ -73,7 +73,7 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     public ResponseEntity<Map<String, Object>> handleIllegalArgument(
             IllegalArgumentException ex, HttpServletRequest request) {
         log.warn("IllegalArgumentException: {}", ex.getMessage());
-        return buildResponse(HttpStatus.BAD_REQUEST, ex.getMessage(), request);
+        return buildResponse(HttpStatus.BAD_REQUEST, ex.getMessage(), codeOf(ex), request);
     }
 
     /**
@@ -85,7 +85,7 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     public ResponseEntity<Map<String, Object>> handleIllegalState(
             IllegalStateException ex, HttpServletRequest request) {
         log.warn("IllegalStateException: {}", ex.getMessage());
-        return buildResponse(HttpStatus.CONFLICT, ex.getMessage(), request);
+        return buildResponse(HttpStatus.CONFLICT, ex.getMessage(), codeOf(ex), request);
     }
 
     @ExceptionHandler({OrderNotFoundException.class, BrandNotFoundException.class,
@@ -340,20 +340,40 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 
     private ResponseEntity<Map<String, Object>> buildResponse(
             HttpStatus status, String message, HttpServletRequest request) {
+        return buildResponse(status, message, null, request);
+    }
+
+    private ResponseEntity<Map<String, Object>> buildResponse(
+            HttpStatus status, String message, ErrorCode code, HttpServletRequest request) {
         return ResponseEntity.status(status)
-                .body(errorBody(status, message, request != null ? request.getRequestURI() : null));
+                .body(errorBody(status, message, code, request != null ? request.getRequestURI() : null));
     }
 
     private Map<String, Object> errorBody(HttpStatusCode status, String message, String path) {
+        return errorBody(status, message, null, path);
+    }
+
+    private Map<String, Object> errorBody(
+            HttpStatusCode status, String message, ErrorCode code, String path) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("timestamp", LocalDateTime.now());
         body.put("status", status.value());
         body.put("error", reasonPhrase(status));
+        // Absent rather than null when there is no code: every response that never had one keeps
+        // exactly the body it had, so adding codes is additive for existing consumers.
+        if (code != null) {
+            body.put("code", code.name());
+        }
         // ex.getMessage() is null for exceptions constructed without one; the reason phrase is a
         // truthful fallback and keeps "message" a String for every consumer.
         body.put("message", message != null ? message : reasonPhrase(status));
         body.put("path", path);
         return body;
+    }
+
+    /** The stable code an exception carries, or null for the ones that carry none. */
+    private ErrorCode codeOf(Throwable ex) {
+        return ex instanceof ErrorCoded coded ? coded.getErrorCode() : null;
     }
 
     private String reasonPhrase(HttpStatusCode status) {

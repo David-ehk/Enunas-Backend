@@ -20,8 +20,16 @@ public class ProductResponseDto {
     private Long id;
     private String name;
     private String slug;
-    /** Lowest currently-active listing price; null when the product has no active listing. */
+    /** What the customer pays: the cheapest currently-active listing's price, after any discount
+     *  on that listing. Null when the product has no active listing. */
     private BigDecimal price;
+
+    /**
+     * The price {@link #price} was reduced from — the same listing's undiscounted price — for the
+     * storefront to strike through. Null whenever the product is not on sale, so "on sale" is
+     * exactly "originalPrice is present"; it is never equal to {@code price}.
+     */
+    private BigDecimal originalPrice;
     private Long brandId;
     private String brandName;
     private String description;
@@ -54,7 +62,7 @@ public class ProductResponseDto {
     }
 
     /** Back-compat overload: CTL prices only, own price = null. */
-    public static ProductResponseDto from(Product product, Function<Long, BigDecimal> ctlPriceProvider, MediaUrlResolver resolver) {
+    public static ProductResponseDto from(Product product, Function<Long, DisplayPrice> ctlPriceProvider, MediaUrlResolver resolver) {
         return from(product, null, ctlPriceProvider, resolver);
     }
 
@@ -63,12 +71,13 @@ public class ProductResponseDto {
      * CTL card prices supplied by {@code ctlPriceProvider}. The provider receives the related
      * product's id and returns its lowest active price, or null when no active listing exists.
      */
-    public static ProductResponseDto from(Product product, BigDecimal price, Function<Long, BigDecimal> ctlPriceProvider, MediaUrlResolver resolver) {
+    public static ProductResponseDto from(Product product, DisplayPrice price, Function<Long, DisplayPrice> ctlPriceProvider, MediaUrlResolver resolver) {
         return ProductResponseDto.builder()
                 .id(product.getId())
                 .name(product.getName())
                 .slug(product.getSlug())
-                .price(price)
+                .price(price != null ? price.current() : null)
+                .originalPrice(price != null ? price.original() : null)
                 .brandId(product.getBrand() != null ? product.getBrand().getId() : null)
                 .brandName(product.getBrand() != null ? product.getBrand().getBrandName() : null)
                 .description(product.getDescription())
