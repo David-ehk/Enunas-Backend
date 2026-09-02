@@ -17,6 +17,7 @@ import com.enunas.backend.product.productvariant.ProductVariantService;
 import com.enunas.backend.user.Role;
 import com.enunas.backend.user.User;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -163,6 +164,17 @@ public class ProductService {
         return products.stream().map(product -> toResponse(product, prices)).toList();
     }
 
+    /**
+     * The statuses a brand owns for its own product. SUSPENDED and REJECTED are admin moderation
+     * verdicts and are reachable only through the admin endpoints (hide / reject / approve) — a
+     * brand able to set its own status would otherwise just set ACTIVE and undo them.
+     */
+    private static final Set<ProductStatus> BRAND_SETTABLE_STATUSES =
+            EnumSet.of(ProductStatus.ACTIVE, ProductStatus.INACTIVE, ProductStatus.ARCHIVED);
+
+    private static final Set<ProductStatus> MODERATION_STATUSES =
+            EnumSet.of(ProductStatus.SUSPENDED, ProductStatus.REJECTED);
+
     @Transactional
     public ProductResponseDto updateProduct(Long id, UpdateProductDto dto, User creator) {
         Product product = findById(id);
@@ -170,15 +182,41 @@ public class ProductService {
 
         applyProductUpdates(product, dto);
 
+        // Status is applied here rather than in the shared applyProductUpdates because the brand
+        // and admin routes disagree about what may be set: AdminService accepts any status.
+        if (dto.getStatus() != null) {
+            applyBrandStatusChange(product, dto.getStatus());
+        }
+
         return toResponse(productRepository.save(product));
     }
 
     /**
+     * ARCHIVED is the exit {@link #deleteProduct} points a brand at when a product cannot be hard
+     * deleted, and {@code ProductListingRepository.STOREFRONT_VISIBLE} requires ACTIVE, so archiving
+     * genuinely takes the product off the storefront. Until this existed the DTO had no status field
+     * at all, so that advice named a field the same service rejected as an unknown property.
+     */
+    private void applyBrandStatusChange(Product product, ProductStatus target) {
+        if (!BRAND_SETTABLE_STATUSES.contains(target)) {
+            throw new IllegalArgumentException(
+                    "A brand may only set a product's status to " + BRAND_SETTABLE_STATUSES
+                    + ". " + target + " is set by admin moderation.");
+        }
+        if (target == ProductStatus.ACTIVE && MODERATION_STATUSES.contains(product.getStatus())) {
+            throw new IllegalStateException(
+                    "Product " + product.getId() + " is " + product.getStatus()
+                    + " by admin moderation and cannot be reactivated by the brand.");
+        }
+        product.setStatus(target);
+    }
+
+    /**
      * Hard-deletes a product the brand created by mistake. Refuses once the product has a history
-     * worth keeping, because the alternative is worse than a refusal: the delete cascades to
-     * variants and colours, and the foreign keys from {@code order_items} and {@code listings} then
-     * abort it as a bare "Data integrity violation" 409 that tells the brand nothing about which of
-     * their products is stuck or what to do instead.
+     * worth keeping, and names what is in the way when it refuses — {@code order_items} and
+     * {@code listings} both reach the product through its variants, and letting their foreign keys
+     * abort the delete instead produces a bare "Data integrity violation" 409 that tells the brand
+     * nothing about what to remove.
      *
      * <p>Order history is the hard stop — {@link com.enunas.backend.order.OrderItem} rows carry the
      * frozen money snapshots behind the commercial record, and they are only readable while the
@@ -200,7 +238,60 @@ public class ProductService {
                     + " status to ARCHIVED to take it off the storefront.");
         }
 
-        productRepository.delete(product);
+        purgeProduct(product);
+    }
+
+    /**
+     * Deletes a product together with everything that references it, in foreign-key order. Shared
+     * with {@code AdminService.deleteProduct}, which reaches the same rows by a different route.
+     *
+     * <p>Two of those references are invisible from {@link Product}'s cascade rules, and they are
+     * why a brand could not delete <em>any</em> product that had ever had a variant:
+     *
+     * <ul>
+     *   <li>{@code product_colors} has no mapped collection on {@link Product} at all, so nothing
+     *       cascaded to it — and no other code path ever deleted a {@link ProductColor}. Deleting
+     *       the variants first did not help, because creating a variant is what creates the colour
+     *       ({@code ProductVariantService.findOrCreateColor}) and deleting one leaves it behind. The
+     *       orphan row then aborted the delete as an opaque "Data integrity violation" 409, with
+     *       nothing left for the brand to remove.
+     *   <li>{@code product_complete_the_look} carries two foreign keys to {@code products}.
+     *       Hibernate clears only the owning side ({@code product_id}), so a row where <em>another</em>
+     *       product names this one as {@code related_product_id} survives and aborts the delete the
+     *       same opaque way.
+     * </ul>
+     *
+     * <p>The order is load-bearing and the flushes are what enforce it: {@code product_variants}
+     * points at {@code product_colors}, so the variants must be gone before the colours. Doing this
+     * explicitly, rather than by hanging another {@code cascade = ALL} collection off the entity, is
+     * deliberate — JPA cascade order follows field declaration order, and an implicit contract of
+     * exactly that kind is what let this through in the first place.
+     */
+    @Transactional
+    public void purgeProduct(Product product) {
+        Long id = product.getId();
+
+        for (Product referrer : productRepository.findReferencingCompleteTheLook(id)) {
+            referrer.getCompleteTheLookProducts().remove(product);
+        }
+
+        variantRepository.deleteAll(variantRepository.findByProductId(id));
+        variantRepository.flush();
+
+        productColorRepository.deleteAll(productColorRepository.findByProductId(id));
+        productColorRepository.flush();
+
+        try {
+            productRepository.delete(product);
+            productRepository.flush();
+        } catch (DataIntegrityViolationException ex) {
+            // Something references the product that neither the guards above nor this purge knows
+            // about. Name the product and the way out: the generic handler's bare "Data integrity
+            // violation" is what sent brands round the delete-then-archive loop with no exit.
+            throw new IllegalStateException(
+                    "Product " + id + " is still referenced by other records and cannot be deleted."
+                    + " Set its status to ARCHIVED to take it off the storefront.", ex);
+        }
     }
 
     public Product findById(Long id) {

@@ -139,13 +139,27 @@ public class AdminService {
     public AdminProductResponseDto updateProduct(Long productId, UpdateProductDto dto) {
         Product product = findProduct(productId);
         productService.applyProductUpdates(product, dto);
+
+        // Admins are the moderation authority, so unlike the brand route (which is restricted to
+        // ACTIVE/INACTIVE/ARCHIVED) every status is settable here — including back out of SUSPENDED
+        // or REJECTED. approve/reject/hide remain the endpoints that also record who moderated.
+        if (dto.getStatus() != null) {
+            product.setStatus(dto.getStatus());
+        }
         return AdminProductResponseDto.from(productRepository.save(product), mediaUrlResolver);
     }
 
+    /**
+     * Delegates to {@code ProductService.purgeProduct} rather than deleting straight through the
+     * repository: the product's colours and the inverse side of its complete-the-look rows are not
+     * covered by any cascade, so a bare {@code productRepository.delete} failed here with the same
+     * opaque "Data integrity violation" 409 the brand route hit. Admins deliberately keep the
+     * override — none of deleteProduct's brand-facing guards (order history, listings) apply.
+     */
     @Transactional
     public void deleteProduct(Long productId) {
         Product product = findProduct(productId);
-        productRepository.delete(product);
+        productService.purgeProduct(product);
         log.info("Product deleted by admin: id={}", productId);
     }
 

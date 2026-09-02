@@ -24,6 +24,19 @@ public interface ProductRepository extends JpaRepository<Product, Long> {
 
     boolean existsByCollectionName(String collectionName);
 
+    /**
+     * The products that name {@code relatedProductId} in their complete-the-look set — i.e. the
+     * inverse side of the self-referential join table.
+     *
+     * <p>{@code product_complete_the_look} has a foreign key to {@code products} on both of its
+     * columns, but {@code Product.completeTheLookProducts} is the owning side, so deleting a product
+     * clears only the rows where it is {@code product_id}. Rows naming it as {@code related_product_id}
+     * survive and abort the delete. ProductService.purgeProduct uses this to clear them from the
+     * owning side first.
+     */
+    @Query("SELECT p FROM Product p JOIN p.completeTheLookProducts r WHERE r.id = :relatedProductId")
+    List<Product> findReferencingCompleteTheLook(@Param("relatedProductId") Long relatedProductId);
+
     // ===== Public storefront browse (PLP) — every method below requires BOTH ACTIVE moderation
     // status AND at least one currently-active listing (active=true, within its availability
     // window). A product whose only listing(s) a brand deactivated must disappear from every one

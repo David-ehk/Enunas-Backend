@@ -3,6 +3,7 @@ package com.enunas.backend.product.dto;
 import com.enunas.backend.product.Gender;
 import com.enunas.backend.product.ProductCatalogueCategory;
 import com.enunas.backend.product.ProductCategory;
+import com.enunas.backend.product.ProductStatus;
 import com.enunas.backend.product.ProductType;
 import com.enunas.backend.validation.NoHtml;
 import jakarta.validation.constraints.*;
@@ -64,4 +65,13 @@ public class UpdateProductDto {
     private Boolean completeTheLookEnabled;
 
     private Set<Long> completeTheLookProductIds;
+
+    /**
+     * Optional lifecycle change. A brand may set ACTIVE, INACTIVE or ARCHIVED — see
+     * {@code ProductService.applyBrandStatusChange}, which also refuses to reactivate a product an
+     * admin suspended or rejected. The admin route ({@code AdminService.updateProduct}) accepts any
+     * status. Absent this field, the ARCHIVED that {@code deleteProduct}'s own 409 recommends was
+     * rejected as an unknown property.
+     */
+    private ProductStatus status;
 }
