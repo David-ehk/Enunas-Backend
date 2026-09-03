@@ -48,8 +48,9 @@ class OrderEmailResilienceTest extends AbstractDiscountIntegrationTest {
         // shipment email specifically (same fix ReturnLifecyclePhase3Test needed for the same reason).
         // "Teilsendung": shipment emails are per-brand now (one brand ships its own parcel and
         // triggers its own email), so the subject names the part rather than claiming the whole
-        // order shipped — see ShipmentConfirmedEmailListener.
-        verify(emailService).sendPlainTextEmail(eq("customer@it.local"), contains("Teilsendung"), anyString());
+        // order shipped — see ShipmentConfirmedEmailListener. Both this and the order-confirmation
+        // email are HTML now (sendHtmlEmail), not plain text.
+        verify(emailService).sendHtmlEmail(eq("customer@it.local"), contains("Teilsendung"), anyString());
     }
 
     @Test
@@ -62,7 +63,7 @@ class OrderEmailResilienceTest extends AbstractDiscountIntegrationTest {
         long orderId = orderId(postOrder(customerToken, null, List.of(item(listingId, 1))));
         confirmPaid(orderId);
         doThrow(new RuntimeException("smtp down")).when(emailService)
-                .sendPlainTextEmail(anyString(), anyString(), anyString());
+                .sendHtmlEmail(anyString(), anyString(), anyString());
 
         ResponseEntity<Map> resp = rest.exchange("/brand/orders/" + orderId + "/ship", HttpMethod.POST,
                 new HttpEntity<>(Map.of("carrier", "DHL", "trackingNumber", "TRACK-RESILIENT"), auth(brandToken)),

@@ -18,8 +18,9 @@ public record ShipmentConfirmedEvent(
         // The order's line items belonging to THIS brand — already filtered by the publisher, so
         // the listener never sees another brand's articles. Without it the mail can only say "the
         // articles from X", which on a multi-brand order leaves the customer guessing which of
-        // their things are actually in the parcel this tracking number covers.
-        List<String> itemLines,
+        // their things are actually in the parcel this tracking number covers. lineTotal is always
+        // null here — a shipment mail describes what's in the parcel, not what was paid for it.
+        List<OrderItemLine> items,
         // Same order-detail URL the confirmation mail links to.
         String orderLink
 ) {

@@ -704,9 +704,9 @@ public class OrderService {
                 // their way.
                 order.getItems().stream()
                         .filter(item -> brand.getId().equals(item.getBrandId()))
-                        .map(item -> "  - " + item.getQuantity() + "x " + item.getProductSnapshotName()
-                                + " (" + item.getVariantSnapshotColor() + ", "
-                                + item.getVariantSnapshotSize() + ")")
+                        .map(item -> new OrderItemLine(item.getProductSnapshotName(),
+                                item.getVariantSnapshotColor(), item.getVariantSnapshotSize(),
+                                item.getQuantity(), null))
                         .toList(),
                 orderLink(order)));
     }
@@ -794,10 +794,10 @@ public class OrderService {
      * already-committed PENDING → PAID transition (see that class for the best-effort contract).
      */
     private void sendOrderConfirmationEmail(Order order, List<OrderShippingSnapshot> shippingSnapshots) {
-        List<String> itemLines = order.getItems().stream()
-                .map(item -> "  - " + item.getQuantity() + "x " + item.getProductSnapshotName()
-                        + " (" + item.getVariantSnapshotColor() + ", " + item.getVariantSnapshotSize() + ")"
-                        + " – " + item.getLineTotal() + " " + order.getCurrency())
+        List<OrderItemLine> items = order.getItems().stream()
+                .map(item -> new OrderItemLine(item.getProductSnapshotName(),
+                        item.getVariantSnapshotColor(), item.getVariantSnapshotSize(),
+                        item.getQuantity(), item.getLineTotal()))
                 .toList();
 
         ShippingAddress addr = order.getShippingAddress();
@@ -828,7 +828,7 @@ public class OrderService {
         eventPublisher.publishEvent(new OrderConfirmationEvent(
                 order.getBuyer().getEmail(),
                 order.getOrderNumber(),
-                itemLines,
+                items,
                 order.getSubtotal(),
                 order.getShippingTotal(),
                 shippingBreakdown,

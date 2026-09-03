@@ -214,7 +214,7 @@ class BrandShipmentIsolationIntegrationTest extends AbstractDiscountIntegrationT
 
         ArgumentCaptor<String> subject = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
-        verify(emailService).sendPlainTextEmail(eq("customer@it.local"), subject.capture(), body.capture());
+        verify(emailService).sendHtmlEmail(eq("customer@it.local"), subject.capture(), body.capture());
 
         assertThat(subject.getValue()).contains("Teilsendung").contains("Beta");
         // The admin path has no carrier or tracking number to offer. The mail must say so rather
@@ -232,7 +232,7 @@ class BrandShipmentIsolationIntegrationTest extends AbstractDiscountIntegrationT
         ship(o.tokenA(), o.orderId(), "TRACK-A");
 
         ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
-        verify(emailService).sendPlainTextEmail(eq("customer@it.local"), anyString(), body.capture());
+        verify(emailService).sendHtmlEmail(eq("customer@it.local"), anyString(), body.capture());
         assertThat(body.getValue()).contains("TRACK-A").contains("DHL");
         assertThat(body.getValue()).contains("/orders/");
         assertThat(body.getValue()).doesNotContain("null");

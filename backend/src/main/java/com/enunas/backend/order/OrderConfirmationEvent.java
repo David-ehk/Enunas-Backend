@@ -13,7 +13,7 @@ import java.util.List;
 public record OrderConfirmationEvent(
         String buyerEmail,
         String orderNumber,
-        List<String> itemLines,
+        List<OrderItemLine> items,
         BigDecimal subtotal,
         BigDecimal shippingTotal,
         List<String> shippingBreakdown,

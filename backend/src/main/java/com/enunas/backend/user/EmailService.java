@@ -25,11 +25,13 @@ public class EmailService {
     @Value("${enunas.mail.from-address}")
     private String fromEmail;
 
-    // ✅ Spezifische Verifizierungs-Email (aus Enunas)
+    // Only for the footer's "Konto"/"Bestellungen" links — same property OrderService already uses
+    // to build the order-confirmation link, so both stay pointed at the same frontend.
+    @Value("${app.frontend.base-url}")
+    private String frontendBaseUrl;
+
     public void sendVerificationEmail(String to, String verificationCode) {
-        String subject = "Enunas – Verify your account";
-        String html = buildVerificationHtml(verificationCode);
-        sendHtmlEmail(to, subject, html);
+        sendHtmlEmail(to, "Enunas – E-Mail-Adresse bestätigen", buildVerificationHtml(verificationCode));
     }
 
     // ✅ Generische HTML-Methode (aus Enunas)
@@ -49,16 +51,20 @@ public class EmailService {
         }
     }
 
+    // `name` is unused in the current template — the welcome design (matching the brand's reference
+    // file) is deliberately impersonal, not "Welcome, X!". Kept in the signature so callers/tests
+    // that already pass one (today, the caller's own email — see WelcomeEmailListener) don't need
+    // to change; a future personalized redesign has somewhere to put it.
     public void sendWelcomeEmail(String to, String name) {
-        sendHtmlEmail(to, "Welcome to Enunas! 🎉", buildWelcomeHtml(name));
+        sendHtmlEmail(to, "Willkommen bei Enunas", buildWelcomeHtml());
     }
 
     public void sendPendingApprovalEmail(String to) {
-        sendHtmlEmail(to, "Enunas – Account Pending Approval", buildPendingApprovalHtml());
+        sendHtmlEmail(to, "Enunas – Bewerbung wird geprüft", buildPendingApprovalHtml());
     }
 
     public void sendAccountApprovedEmail(String to) {
-        sendHtmlEmail(to, "Enunas – Your Account is Approved! ✅", buildAccountApprovedHtml());
+        sendHtmlEmail(to, "Enunas – Dein Account ist freigeschaltet", buildAccountApprovedHtml());
     }
 
     public void sendPlainTextEmail(String to, String subject, String content) {
@@ -77,164 +83,62 @@ public class EmailService {
     }
 
     public void sendPasswordResetEmail(String to, String code) {
-        sendHtmlEmail(to, "Enunas – Password Reset Code", buildPasswordResetHtml(code));
+        sendHtmlEmail(to, "Enunas – Passwort zurücksetzen", buildPasswordResetHtml(code));
+    }
+
+    // verificationCode/code are server-generated 6-digit strings (see BrandPartnerService /
+    // AuthenticationService) — never user input, so no HtmlUtils.htmlEscape needed on them here,
+    // unlike the order emails below which do carry customer/brand-entered text.
+
+    private String buildVerificationHtml(String verificationCode) {
+        String body = EmailTemplate.heroSection(
+                "E-Mail-Adresse bestätigen",
+                EmailTemplate.highlight("E-Mail-Adresse") + " bestätigen",
+                "Danke für deine Bewerbung. Nutze den Code unten, um deine E-Mail-Adresse zu bestätigen.")
+                + EmailTemplate.infoBox("Dein Code", verificationCode)
+                + EmailTemplate.note("Der Code ist 15 Minuten gültig. Falls du kein Konto erstellt hast, kannst du diese E-Mail ignorieren.");
+        return EmailTemplate.shell("Enunas — E-Mail-Adresse bestätigen",
+                "Bestätige deine E-Mail-Adresse.", body, frontendBaseUrl);
     }
 
     private String buildPasswordResetHtml(String code) {
-        return """
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <meta charset="UTF-8">
-                    <style>
-                        body { font-family: Arial, sans-serif; background-color: #f4f4f4; margin: 0; padding: 0; }
-                        .container { max-width: 600px; margin: 40px auto; background: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
-                        .header { background-color: #1a1a2e; color: white; padding: 30px; text-align: center; }
-                        .header h1 { margin: 0; font-size: 28px; letter-spacing: 2px; }
-                        .body { padding: 40px 30px; text-align: center; }
-                        .body p { color: #555; font-size: 16px; line-height: 1.6; }
-                        .code { display: inline-block; background-color: #f0f0f0; border: 2px dashed #1a1a2e; border-radius: 8px; padding: 16px 40px; font-size: 36px; font-weight: bold; letter-spacing: 8px; color: #1a1a2e; margin: 24px 0; }
-                        .expiry { color: #999; font-size: 13px; margin-top: 16px; }
-                        .footer { background-color: #f4f4f4; text-align: center; padding: 16px; color: #aaa; font-size: 12px; }
-                    </style>
-                </head>
-                <body>
-                    <div class="container">
-                        <div class="header"><h1>ENUNAS</h1></div>
-                        <div class="body">
-                            <p>We received a request to reset your password. Use the code below:</p>
-                            <div class="code">%s</div>
-                            <p class="expiry">This code expires in <strong>15 minutes</strong>.</p>
-                            <p>If you did not request a password reset, you can safely ignore this email.</p>
-                        </div>
-                        <div class="footer">&copy; 2025 Enunas. All rights reserved.</div>
-                    </div>
-                </body>
-                </html>
-                """.formatted(code);
+        String body = EmailTemplate.heroSection(
+                "Passwort zurücksetzen",
+                EmailTemplate.highlight("Passwort") + " zurücksetzen",
+                "Nutze den Code unten, um ein neues Passwort zu vergeben.")
+                + EmailTemplate.infoBox("Dein Code", code)
+                + EmailTemplate.note("Der Code ist 15 Minuten gültig. Falls du das nicht warst, kannst du diese E-Mail ignorieren.");
+        return EmailTemplate.shell("Enunas — Passwort zurücksetzen",
+                "Setze dein Passwort zurück.", body, frontendBaseUrl);
     }
 
-    private String buildVerificationHtml(String verificationCode) {
-        return """
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <meta charset="UTF-8">
-                    <style>
-                        body { font-family: Arial, sans-serif; background-color: #f4f4f4; margin: 0; padding: 0; }
-                        .container { max-width: 600px; margin: 40px auto; background: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
-                        .header { background-color: #1a1a2e; color: white; padding: 30px; text-align: center; }
-                        .header h1 { margin: 0; font-size: 28px; letter-spacing: 2px; }
-                        .body { padding: 40px 30px; text-align: center; }
-                        .body p { color: #555; font-size: 16px; line-height: 1.6; }
-                        .code { display: inline-block; background-color: #f0f0f0; border: 2px dashed #1a1a2e; border-radius: 8px; padding: 16px 40px; font-size: 36px; font-weight: bold; letter-spacing: 8px; color: #1a1a2e; margin: 24px 0; }
-                        .expiry { color: #999; font-size: 13px; margin-top: 16px; }
-                        .footer { background-color: #f4f4f4; text-align: center; padding: 16px; color: #aaa; font-size: 12px; }
-                    </style>
-                </head>
-                <body>
-                    <div class="container">
-                        <div class="header"><h1>ENUNAS</h1></div>
-                        <div class="body">
-                            <p>Thank you for registering. Use the code below to verify your account:</p>
-                            <div class="code">%s</div>
-                            <p class="expiry">This code expires in <strong>15 minutes</strong>.</p>
-                            <p>If you did not create an account, you can safely ignore this email.</p>
-                        </div>
-                        <div class="footer">&copy; 2025 Enunas. All rights reserved.</div>
-                    </div>
-                </body>
-                </html>
-                """.formatted(verificationCode);
-    }
-
-    private String buildWelcomeHtml(String name) {
-        return """
-                <!DOCTYPE html>
-                <html>
-                <head><meta charset="UTF-8">
-                <style>
-                    body { font-family: Arial, sans-serif; background-color: #f4f4f4; margin: 0; padding: 0; }
-                    .container { max-width: 600px; margin: 40px auto; background: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
-                    .header { background-color: #1a1a2e; color: white; padding: 30px; text-align: center; }
-                    .header h1 { margin: 0; font-size: 28px; letter-spacing: 2px; }
-                    .body { padding: 40px 30px; text-align: center; color: #555; font-size: 16px; line-height: 1.6; }
-                    .footer { background-color: #f4f4f4; text-align: center; padding: 16px; color: #aaa; font-size: 12px; }
-                </style>
-                </head>
-                <body>
-                    <div class="container">
-                        <div class="header"><h1>ENUNAS</h1></div>
-                        <div class="body">
-                            <p>Welcome to Enunas, <strong>%s</strong>! 🎉</p>
-                            <p>Your account has been created and is ready to use.</p>
-                            <p>Start exploring products and placing orders right away.</p>
-                        </div>
-                        <div class="footer">&copy; 2025 Enunas. All rights reserved.</div>
-                    </div>
-                </body>
-                </html>
-                """.formatted(name);
+    private String buildWelcomeHtml() {
+        String body = EmailTemplate.heroSection(
+                "Willkommen",
+                "Willkommen bei " + EmailTemplate.highlight("Enunas"),
+                "Du bist jetzt Teil einer kuratierten Auswahl unabhängiger Labels — Streetwear, Experimental, Athleisure, Culture.")
+                + EmailTemplate.button(frontendBaseUrl, "Kollektion entdecken");
+        return EmailTemplate.shell("Willkommen bei Enunas",
+                "Willkommen in der Enunas Community.", body, frontendBaseUrl);
     }
 
     private String buildPendingApprovalHtml() {
-        return """
-                <!DOCTYPE html>
-                <html>
-                <head><meta charset="UTF-8">
-                <style>
-                    body { font-family: Arial, sans-serif; background-color: #f4f4f4; margin: 0; padding: 0; }
-                    .container { max-width: 600px; margin: 40px auto; background: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
-                    .header { background-color: #1a1a2e; color: white; padding: 30px; text-align: center; }
-                    .header h1 { margin: 0; font-size: 28px; letter-spacing: 2px; }
-                    .body { padding: 40px 30px; text-align: center; color: #555; font-size: 16px; line-height: 1.6; }
-                    .badge { display: inline-block; background-color: #fff3cd; border: 1px solid #ffc107; border-radius: 6px; padding: 10px 24px; font-weight: bold; color: #856404; margin: 16px 0; }
-                    .footer { background-color: #f4f4f4; text-align: center; padding: 16px; color: #aaa; font-size: 12px; }
-                </style>
-                </head>
-                <body>
-                    <div class="container">
-                        <div class="header"><h1>ENUNAS</h1></div>
-                        <div class="body">
-                            <p>Your email has been verified successfully! ✅</p>
-                            <div class="badge">⏳ Pending Admin Approval</div>
-                            <p>Your Brand Partner account is currently under review. Our team will approve your account shortly.</p>
-                            <p>You will receive another email as soon as your account is activated.</p>
-                        </div>
-                        <div class="footer">&copy; 2025 Enunas. All rights reserved.</div>
-                    </div>
-                </body>
-                </html>
-                """;
+        String body = EmailTemplate.heroSection(
+                "Bewerbung eingegangen",
+                "Deine " + EmailTemplate.highlight("Bewerbung") + " wird geprüft",
+                "Deine E-Mail-Adresse wurde erfolgreich bestätigt. Dein Brand-Partner-Konto wird jetzt von unserem Team geprüft — du bekommst eine weitere E-Mail, sobald es freigeschaltet ist.")
+                + EmailTemplate.infoBox("Status", "In Prüfung");
+        return EmailTemplate.shell("Enunas — Bewerbung wird geprüft",
+                "Deine Bewerbung wird geprüft.", body, frontendBaseUrl);
     }
 
     private String buildAccountApprovedHtml() {
-        return """
-                <!DOCTYPE html>
-                <html>
-                <head><meta charset="UTF-8">
-                <style>
-                    body { font-family: Arial, sans-serif; background-color: #f4f4f4; margin: 0; padding: 0; }
-                    .container { max-width: 600px; margin: 40px auto; background: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
-                    .header { background-color: #1a1a2e; color: white; padding: 30px; text-align: center; }
-                    .header h1 { margin: 0; font-size: 28px; letter-spacing: 2px; }
-                    .body { padding: 40px 30px; text-align: center; color: #555; font-size: 16px; line-height: 1.6; }
-                    .badge { display: inline-block; background-color: #d4edda; border: 1px solid #28a745; border-radius: 6px; padding: 10px 24px; font-weight: bold; color: #155724; margin: 16px 0; }
-                    .footer { background-color: #f4f4f4; text-align: center; padding: 16px; color: #aaa; font-size: 12px; }
-                </style>
-                </head>
-                <body>
-                    <div class="container">
-                        <div class="header"><h1>ENUNAS</h1></div>
-                        <div class="body">
-                            <div class="badge">✅ Account Approved</div>
-                            <p>Congratulations! Your Brand Partner account has been approved.</p>
-                            <p>You can now log in and start managing your products on Enunas.</p>
-                        </div>
-                        <div class="footer">&copy; 2025 Enunas. All rights reserved.</div>
-                    </div>
-                </body>
-                </html>
-                """;
+        String body = EmailTemplate.heroSection(
+                "Account freigeschaltet",
+                "Dein Konto ist " + EmailTemplate.highlight("freigeschaltet"),
+                "Dein Brand-Partner-Konto wurde freigegeben. Du kannst dich jetzt einloggen und deine Produkte auf Enunas verwalten.")
+                + EmailTemplate.button(frontendBaseUrl + "/login", "Jetzt einloggen");
+        return EmailTemplate.shell("Enunas — Account freigeschaltet",
+                "Dein Account ist freigeschaltet.", body, frontendBaseUrl);
     }
 }
