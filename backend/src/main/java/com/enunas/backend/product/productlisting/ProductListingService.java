@@ -79,25 +79,25 @@ public class ProductListingService {
         return ListingResponseDto.from(listing);
     }
 
-    @Transactional(readOnly = true)
-    public List<ListingResponseDto> getListingsByProduct(Long productId) {
-        return productListingRepository.findByProductId(productId).stream()
-                .map(ListingResponseDto::from)
-                .toList();
-    }
-
     /**
-     * One product's listings. The owning brand and admins keep the management view (every active
-     * listing, window or not) that the vendor dashboard renders; storefront traffic gets only what
-     * is genuinely buyable. An empty list is the intended answer for a hidden product — the PDP
-     * deliberately still renders and shows "price unavailable" rather than 404ing.
+     * One product's listings. The owning brand and admins get the management view — <em>every</em>
+     * listing, active or not, in its window or not; storefront traffic gets only what is genuinely
+     * buyable. An empty list is the intended answer for a hidden product — the PDP deliberately
+     * still renders and shows "price unavailable" rather than 404ing.
+     *
+     * <p>The owner branch used to be {@code findByProductIdAndActive(id, true)}, which hid a
+     * deactivated listing from its own brand. Since {@code UpdateListingDto} exposes {@code active},
+     * that was a one-way trap: a brand could switch a listing off and then had no way to find it
+     * again, because reactivating it needs a listing id the dashboard no longer showed anywhere.
+     * {@link ListingResponseDto} carries {@code active}, so telling live and switched-off listings
+     * apart is the client's job, not something to enforce by withholding the row.
      */
     @Transactional(readOnly = true)
-    public List<ListingResponseDto> getActiveListingsByProduct(Long productId, User viewer) {
+    public List<ListingResponseDto> getListingsByProduct(Long productId, User viewer) {
         Product product = productRepository.findById(productId)
                 .orElseThrow(() -> new ProductNotFoundException("Product not found with id: " + productId));
         List<ProductListing> listings = canSeeUnpublished(product, viewer)
-                ? productListingRepository.findByProductIdAndActive(productId, true)
+                ? productListingRepository.findByProductId(productId)
                 : productListingRepository.findStorefrontVisibleByProductId(productId);
         return listings.stream().map(ListingResponseDto::from).toList();
     }

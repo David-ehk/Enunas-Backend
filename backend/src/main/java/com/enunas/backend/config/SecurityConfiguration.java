@@ -73,6 +73,11 @@ public class SecurityConfiguration {
                                 "/brandpartner/verify",
                                 "/brandpartner/resend-verification").permitAll()
 
+                        // Public storefront brand profile — distinct prefix from /brandpartner/**
+                        // (which is locked to BRAND_PARTNER/ADMIN below) so this doesn't inherit
+                        // that restriction.
+                        .requestMatchers(HttpMethod.GET, "/brands/**").permitAll()
+
                         // Health check — used by load balancers / uptime monitors, no auth
                         .requestMatchers("/actuator/health").permitAll()
 

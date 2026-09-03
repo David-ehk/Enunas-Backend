@@ -150,9 +150,16 @@ public class ProductService {
         return toResponsePage(productRepository.findByStatus(ProductStatus.ACTIVE, pageable));
     }
 
+    /**
+     * Trims before matching: a SKU arrives pasted, and a trailing space or newline picked up from a
+     * PDF or a spreadsheet cell would otherwise stop an otherwise-exact SKU matching anything.
+     * Blank input keeps its existing behaviour — it still matches everything; {@code GET /products}
+     * is the endpoint that means "list them all".
+     */
     @Transactional(readOnly = true)
     public Page<ProductResponseDto> search(String keyword, Pageable pageable) {
-        return toResponsePage(productRepository.search(keyword, pageable));
+        String trimmed = keyword == null ? "" : keyword.trim();
+        return toResponsePage(productRepository.search(trimmed, pageable));
     }
 
     @Transactional(readOnly = true)

@@ -63,12 +63,30 @@ public interface ProductRepository extends JpaRepository<Product, Long> {
             """)
     Page<Product> findByCategory(@Param("category") ProductCategory category, Pageable pageable);
 
+    /**
+     * Storefront search across name, brand, description and SKU.
+     *
+     * <p>SKU is matched as a substring, not by equality, and that is the point: someone searching a
+     * SKU has read it off a care label, an invoice or a parcel, so it arrives partial, in the wrong
+     * case, or with a stray character. {@code GET /products/sku/{sku}} stays the exact-match lookup
+     * for a caller that already knows it holds a whole SKU; this is the human path, where finding
+     * the product from most of one is worth more than being strict.
+     *
+     * <p>The SKU lives on {@link com.enunas.backend.product.productvariant.ProductColor}, one per
+     * colour, so this is an EXISTS over a product's colours rather than a column on Product.
+     *
+     * <p>Deliberately no relevance ordering. A SKU is unique, so an exact one already narrows to a
+     * single product; ranking would buy nothing here, and a CASE-based ORDER BY interacts badly
+     * with whatever sort the Pageable carries.
+     */
     @Query("""
             SELECT p FROM Product p
             WHERE p.status = 'ACTIVE'
               AND (LOWER(p.name) LIKE LOWER(CONCAT('%', :keyword, '%'))
                    OR LOWER(p.brand.brandName) LIKE LOWER(CONCAT('%', :keyword, '%'))
-                   OR LOWER(p.description) LIKE LOWER(CONCAT('%', :keyword, '%')))
+                   OR LOWER(p.description) LIKE LOWER(CONCAT('%', :keyword, '%'))
+                   OR EXISTS (SELECT 1 FROM ProductColor pc WHERE pc.product = p
+                              AND LOWER(pc.sku) LIKE LOWER(CONCAT('%', :keyword, '%'))))
               AND EXISTS (SELECT 1 FROM ProductListing l WHERE l.product = p AND l.active = true
                           AND (l.availableFrom IS NULL OR l.availableFrom <= CURRENT_TIMESTAMP)
                           AND (l.availableUntil IS NULL OR l.availableUntil >= CURRENT_TIMESTAMP))

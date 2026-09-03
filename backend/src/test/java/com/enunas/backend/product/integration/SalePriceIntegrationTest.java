@@ -95,6 +95,55 @@ class SalePriceIntegrationTest extends AbstractDiscountIntegrationTest {
         assertThat(body.get("originalPrice")).isNull();
     }
 
+    /**
+     * The per-variant view. A PDP that has a colour and size selected must price THAT listing, not
+     * the cheapest one on the product — so the listing carries its own currentPrice/originalPrice,
+     * with the same "null means not on sale" contract.
+     */
+    @SuppressWarnings("unchecked")
+    @Test
+    void listingCarriesItsOwnPricePair_independentOfTheProductLevelOne() {
+        BrandPartner brand = seedBrand("Alpha", "alpha", "0.15").brand();
+        long cheapListing = seedListing(brand, brand.getUser(), "40.00", 5);
+        long dearListing = seedListing(brand, brand.getUser(), "120.00", 5);
+        putOnSale(dearListing, "70.00");
+
+        long productId = productIdOfListing(cheapListing);
+        jdbc.update("UPDATE listings SET product_id = ? WHERE id = ?", productId, dearListing);
+
+        List<Map<String, Object>> listings = rest.getForObject(
+                "/products/" + productId + "/listings", List.class);
+
+        Map<String, Object> cheap = listings.stream()
+                .filter(l -> ((Number) l.get("id")).longValue() == cheapListing).findFirst().orElseThrow();
+        Map<String, Object> dear = listings.stream()
+                .filter(l -> ((Number) l.get("id")).longValue() == dearListing).findFirst().orElseThrow();
+
+        // The cheapest listing is not on sale, even though the product's other listing is.
+        assertThat(new BigDecimal(cheap.get("currentPrice").toString())).isEqualByComparingTo("40.00");
+        assertThat(cheap.get("originalPrice")).isNull();
+
+        // The discounted one prices itself, not the product-level figure.
+        assertThat(new BigDecimal(dear.get("currentPrice").toString())).isEqualByComparingTo("70.00");
+        assertThat(new BigDecimal(dear.get("originalPrice").toString())).isEqualByComparingTo("120.00");
+    }
+
+    /** A zero discountPrice is not a sale — the guard in ProductListing.getCurrentPrice(). */
+    @SuppressWarnings("unchecked")
+    @Test
+    void zeroDiscountPrice_isNotTreatedAsASale() {
+        BrandPartner brand = seedBrand("Alpha", "alpha", "0.15").brand();
+        long listing = seedListing(brand, brand.getUser(), "89.95", 5);
+        putOnSale(listing, "0.00");
+
+        List<Map<String, Object>> listings = rest.getForObject(
+                "/products/" + productIdOfListing(listing) + "/listings", List.class);
+
+        assertThat(new BigDecimal(listings.get(0).get("currentPrice").toString()))
+                .isEqualByComparingTo("89.95");
+        assertThat(listings.get(0).get("originalPrice")).isNull();
+    }
+
     /** Complete-The-Look cards carry the same pair, so a sale is visible on the card too. */
     @SuppressWarnings("unchecked")
     @Test

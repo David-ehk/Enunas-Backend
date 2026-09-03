@@ -4,6 +4,7 @@ import com.enunas.backend.brandpartner.brandeconomics.BrandEconomics;
 import com.enunas.backend.brandpartner.brandeconomics.BrandEconomicsRepository;
 import com.enunas.backend.brandpartner.dto.AdminBrandMasterDataDto;
 import com.enunas.backend.brandpartner.dto.BrandPartnerResponseDto;
+import com.enunas.backend.brandpartner.dto.BrandPublicProfileDto;
 import com.enunas.backend.brandpartner.dto.RegisterBrandPartnerDto;
 import com.enunas.backend.brandpartner.dto.UpdateBrandPartnerDto;
 import com.enunas.backend.exception.BrandNotFoundException;
@@ -310,6 +311,20 @@ public class BrandPartnerService {
                         .orElseThrow(() -> new BrandNotFoundException("Brand not found with id: " + id)),
                 mediaUrlResolver
         );
+    }
+
+    /**
+     * Public, unauthenticated brand-profile read (storefront brand page). Gated to ACTIVE brands
+     * only — {@code approved} is kept in sync with status by {@link BrandPartner#setStatus}, so
+     * checking status alone is sufficient. A pending, suspended or rejected brand 404s exactly like
+     * a nonexistent one, so this never leaks which brand IDs exist in the onboarding pipeline.
+     */
+    @Transactional(readOnly = true)
+    public BrandPublicProfileDto getPublicProfile(Long id) {
+        BrandPartner brand = brandPartnerRepository.findById(id)
+                .filter(b -> b.getStatus() == BrandStatus.ACTIVE)
+                .orElseThrow(() -> new BrandNotFoundException("Brand not found with id: " + id));
+        return BrandPublicProfileDto.from(brand, mediaUrlResolver);
     }
 
     public BrandPartner findByUser(User user) {

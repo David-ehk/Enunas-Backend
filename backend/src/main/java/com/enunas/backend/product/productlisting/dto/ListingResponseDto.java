@@ -23,6 +23,26 @@ public class ListingResponseDto {
     private String variantSize;
     /** Live stock pulled from the variant (the single source of truth). */
     private int variantStockQuantity;
+    /**
+     * What a customer pays for THIS listing, and the price to strike through.
+     *
+     * <p>Same contract as {@code ProductResponseDto.originalPrice}: {@code originalPrice} is null
+     * unless there is an actual reduction, so "on sale" is exactly "originalPrice is present".
+     * These exist so the rule for deciding that — {@code discountPrice} counts only when it is
+     * non-null AND greater than zero, see {@link ProductListing#getCurrentPrice()} — lives here
+     * rather than being reimplemented by every client reading the raw pair below.
+     *
+     * <p>Note the naming, which differs from {@code ProductResponseDto} by necessity: there,
+     * {@code price} IS the charged amount. Here {@code price} is the list price, because it has
+     * meant that since before this DTO had a charged-amount field, and renaming it would break
+     * every existing consumer. On this DTO, read {@code currentPrice}.
+     *
+     * <p>Use these per variant. The product-level pair is the cheapest sellable listing across the
+     * whole product — right for a card, wrong once the customer has picked a colour and size.
+     */
+    private BigDecimal currentPrice;
+    private BigDecimal originalPrice;
+
     // price/discountPrice are the GROSS (customer-facing) figures, kept for API stability.
     // The *Net / *Vat fields expose the Netto · USt · Brutto breakdown (vat = gross − net).
     private BigDecimal price;
@@ -54,6 +74,8 @@ public class ListingResponseDto {
                 .variantColorFamily(productListing.getVariant().getColorFamily())
                 .variantSize(productListing.getVariant().getSize())
                 .variantStockQuantity(productListing.getVariant().getStockQuantity())
+                .currentPrice(productListing.getCurrentPrice())
+                .originalPrice(isDiscounted(productListing) ? productListing.getPrice() : null)
                 .price(productListing.getPrice())
                 .discountPrice(productListing.getDiscountPrice())
                 .priceInputMode(productListing.getPriceInputMode())
@@ -72,6 +94,18 @@ public class ListingResponseDto {
                 .createdAt(productListing.getCreatedAt())
                 .updatedAt(productListing.getUpdatedAt())
                 .build();
+    }
+
+    /**
+     * True only when {@link ProductListing#getCurrentPrice()} is an actual reduction. Derived by
+     * comparing against the list price rather than by re-testing discountPrice, so this cannot
+     * drift from whatever getCurrentPrice() decides — including its {@code > 0} guard, which is
+     * what stops a zero discountPrice being advertised as a sale.
+     */
+    private static boolean isDiscounted(ProductListing listing) {
+        BigDecimal current = listing.getCurrentPrice();
+        return current != null && listing.getPrice() != null
+                && current.compareTo(listing.getPrice()) < 0;
     }
 
     /** VAT = gross − net; null when either side is missing (legacy listings without a stored net). */

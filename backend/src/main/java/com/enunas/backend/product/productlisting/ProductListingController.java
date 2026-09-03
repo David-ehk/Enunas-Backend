@@ -42,7 +42,7 @@ public class ProductListingController {
     public ResponseEntity<List<ListingResponseDto>> getListingsByProduct(
             @PathVariable Long productId,
             @AuthenticationPrincipal User viewer) {
-        return ResponseEntity.ok(productListingService.getActiveListingsByProduct(productId, viewer));
+        return ResponseEntity.ok(productListingService.getListingsByProduct(productId, viewer));
     }
 
     @GetMapping("/listings/{listingId}")

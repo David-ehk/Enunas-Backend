@@ -191,7 +191,7 @@ class StorefrontListingVisibilityIntegrationTest extends AbstractDiscountIntegra
 
     /**
      * A brand builds a drop before it opens, so the owner read must not apply the availability
-     * window — {@code findByProductIdAndActive} deliberately checks the active flag only. Anonymous
+     * window. Anonymous
      * traffic still gets nothing until the window opens.
      */
     @Test
@@ -211,23 +211,50 @@ class StorefrontListingVisibilityIntegrationTest extends AbstractDiscountIntegra
     }
 
     /**
-     * The gap this pair documents: {@code active = false} hides a listing from its own brand too.
-     * {@code getActiveListingsByProduct} sends the owner to {@code findByProductIdAndActive(id, true)},
-     * so a brand that deactivates a listing can no longer see it on this endpoint — the repository's
-     * unfiltered {@code findByProductId} is labelled "the brand-facing management view" but the
-     * service method that uses it ({@code getListingsByProduct}) is not wired to any route.
+     * A deactivated listing has to stay visible to its own brand, flagged rather than withheld.
+     * The owner branch used {@code findByProductIdAndActive(id, true)}, which made switching a
+     * listing off a one-way door: {@code UpdateListingDto} exposes {@code active}, so a brand could
+     * deactivate a listing and then had no way to reactivate it, because the id it needed had
+     * vanished from the only endpoint that lists them.
      */
     @Test
-    void productListings_ofDeactivatedListing_areHiddenFromTheOwningBrandToo() {
+    @SuppressWarnings("unchecked")
+    void productListings_ofDeactivatedListing_stayVisibleToTheOwningBrand_flaggedInactive() {
         Fixture f = seedSellable();
         f.listing().setActive(false);
         productListingRepository.saveAndFlush(f.listing());
         String token = login("acme@it.local", "Brand123!");
 
-        ResponseEntity<List> resp = rest.exchange("/products/" + f.product().getId() + "/listings",
+        ResponseEntity<List> ownerResp = rest.exchange("/products/" + f.product().getId() + "/listings",
                 HttpMethod.GET, new HttpEntity<>(auth(token)), List.class);
+        ResponseEntity<List> anonResp = rest.getForEntity(
+                "/products/" + f.product().getId() + "/listings", List.class);
 
-        assertThat(resp.getStatusCode().value()).isEqualTo(200);
-        assertThat(resp.getBody()).isEmpty();
+        assertThat(ownerResp.getStatusCode().value()).isEqualTo(200);
+        assertThat((List<Map<String, Object>>) ownerResp.getBody())
+                .as("the brand can still find the listing it switched off")
+                .singleElement()
+                .satisfies(row -> {
+                    assertThat(((Number) row.get("id")).longValue()).isEqualTo(f.listing().getId());
+                    assertThat(row.get("active")).as("and can tell it is switched off").isEqualTo(false);
+                });
+        assertThat(anonResp.getBody()).as("the storefront still gets nothing").isEmpty();
+    }
+
+    /** The window and the active flag are different switches; neither is applied to the owner. */
+    @Test
+    void productListings_ofClosedWindowListing_stayVisibleToTheOwningBrand() {
+        Fixture f = seedSellable();
+        f.listing().setAvailableUntil(LocalDateTime.now().minusDays(1));
+        productListingRepository.saveAndFlush(f.listing());
+        String token = login("acme@it.local", "Brand123!");
+
+        ResponseEntity<List> ownerResp = rest.exchange("/products/" + f.product().getId() + "/listings",
+                HttpMethod.GET, new HttpEntity<>(auth(token)), List.class);
+        ResponseEntity<List> anonResp = rest.getForEntity(
+                "/products/" + f.product().getId() + "/listings", List.class);
+
+        assertThat(ownerResp.getBody()).as("the brand sees its expired drop").hasSize(1);
+        assertThat(anonResp.getBody()).as("the storefront does not").isEmpty();
     }
 }

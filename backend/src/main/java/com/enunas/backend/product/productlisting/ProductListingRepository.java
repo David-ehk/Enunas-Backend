@@ -67,17 +67,20 @@ public interface ProductListingRepository extends JpaRepository<ProductListing, 
 
     /**
      * Every listing for a product, regardless of active flag or availability window — the
-     * brand-facing management view. Use {@link #findStorefrontVisibleByProductId} or
+     * brand-facing management view, and what {@code ProductListingService.getListingsByProduct}
+     * serves to the owning brand and to admins. Use {@link #findStorefrontVisibleByProductId} or
      * {@link #findLowestActivePriceByProductId} for anything a customer sees.
+     *
+     * <p>There was a {@code findByProductIdAndActive(id, true)} beside this one, and the owner view
+     * used it: a brand that switched a listing off could then no longer see it, so it could not be
+     * switched back on. Deleted rather than left available — the management view wants every row,
+     * and the next caller reaching for the narrower query would reintroduce the trap.
      */
     List<ProductListing> findByProductId(Long productId);
 
     List<ProductListing> findByVariantId(Long variantId);
 
     Optional<ProductListing> findByVariantIdAndActiveTrue(Long variantId);
-
-    /** Active flag only: still returns listings whose availability window has closed. */
-    List<ProductListing> findByProductIdAndActive(Long productId, boolean active);
 
     /** Active flag only: still returns listings whose availability window has closed. */
     List<ProductListing> findByRegionAndActive(String region, boolean active);
