@@ -393,4 +393,46 @@ class ReturnLifecyclePhase3Test extends AbstractDiscountIntegrationTest {
                 contains("Rückerstattung"),
                 contains(returnNumber));
     }
+
+    // ===== Refund idempotency =====
+
+    /** {@code processRefund} gates on {@code ReturnStatus.RECEIVED} before touching Mollie — a
+     *  second call finds the return already {@code REFUNDED} and must reject, not re-issue a
+     *  second refund against the same payment. */
+    @Test
+    @DisplayName("Refunding an already-refunded return is rejected, not re-processed")
+    void refundingAnAlreadyRefundedReturn_isRejected() {
+        BrandFixture a = brandWithReturnWarehouse("BrandA", "brand-a");
+        seedAdmin();
+        seedCustomer();
+        long listingA = seedListing(a.brand(), a.user(), "100.00", 5);
+
+        String customerToken = login("customer@it.local", "Customer123!");
+        String adminToken = login("admin@it.local", "Admin123!");
+        String brandAToken = login("brand-a@it.local", "Brand123!");
+
+        long orderId = orderId(postOrder(customerToken, null, List.of(item(listingA, 1))));
+        deliver(orderId, brandAToken, adminToken);
+        ResponseEntity<Map> requested = requestReturn(customerToken, orderId);
+        String returnNumber = (String) requested.getBody().get("returnNumber");
+
+        rest.exchange("/admin/returns/" + returnNumber + "/approve", HttpMethod.POST,
+                new HttpEntity<>(null, auth(adminToken)), Map.class);
+        rest.exchange("/admin/returns/" + returnNumber + "/receive", HttpMethod.POST,
+                new HttpEntity<>(null, auth(adminToken)), Map.class);
+
+        ResponseEntity<Map> firstRefund = rest.exchange("/admin/returns/" + returnNumber + "/refund",
+                HttpMethod.POST, new HttpEntity<>(null, auth(adminToken)), Map.class);
+        assertThat(firstRefund.getStatusCode().is2xxSuccessful())
+                .as("first refund: %s", firstRefund.getBody()).isTrue();
+
+        ResponseEntity<Map> secondRefund = rest.exchange("/admin/returns/" + returnNumber + "/refund",
+                HttpMethod.POST, new HttpEntity<>(null, auth(adminToken)), Map.class);
+        assertThat(secondRefund.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+
+        // Exactly one refund-confirmation email — the rejected second call never reaches the point
+        // that sends it.
+        verify(emailService).sendPlainTextEmail(
+                org.mockito.ArgumentMatchers.eq("customer@it.local"), contains("Rückerstattung"), anyString());
+    }
 }

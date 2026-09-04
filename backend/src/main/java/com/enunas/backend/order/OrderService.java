@@ -185,6 +185,8 @@ public class OrderService {
         return OrderResponseDto.from(saved, paymentResult.checkoutUrl())
                 .toBuilder()
                 .shippingSnapshots(mapShippingSnapshots(saved, pending.shippingSnapshots()))
+                // Straight off the just-created payment; no lookup needed on this path.
+                .molliePaymentId(paymentResult.paymentId())
                 .build();
     }
 
@@ -882,7 +884,7 @@ public class OrderService {
 
         // Idempotent: already in target state — return without side effects (CB-3).
         if (current == newStatus) {
-            return OrderResponseDto.from(order);
+            return withPaymentId(OrderResponseDto.from(order), order.getId());
         }
 
         validateForwardTransition(current, newStatus);
@@ -969,7 +971,7 @@ public class OrderService {
             releaseDiscountUsageOnce(saved);
         }
 
-        return OrderResponseDto.from(saved);
+        return withPaymentId(OrderResponseDto.from(saved), saved.getId());
     }
 
     /**
@@ -1012,7 +1014,7 @@ public class OrderService {
 
         log.info("Order {} cancelled by admin {} — reason: {}",
                 order.getOrderNumber(), admin.getEmail(), dto.getReason());
-        return OrderResponseDto.from(order);
+        return withPaymentId(OrderResponseDto.from(order), order.getId());
     }
 
     // ===== Admin: return flow =====
@@ -1580,7 +1582,8 @@ public class OrderService {
     private record OrderRelations(
             Map<Long, List<OrderShippingSnapshot>> snapshots,
             Map<Long, List<OrderShipment>> shipments,
-            Map<Long, List<ReturnOrder>> returns) {
+            Map<Long, List<ReturnOrder>> returns,
+            Map<Long, String> paymentIds) {
 
         List<OrderShippingSnapshot> snapshotsOf(Long orderId) {
             return snapshots.getOrDefault(orderId, List.of());
@@ -1592,6 +1595,11 @@ public class OrderService {
 
         List<ReturnOrder> returnsOf(Long orderId) {
             return returns.getOrDefault(orderId, List.of());
+        }
+
+        /** Null when the order has no payment row yet, or the provider has not issued an id. */
+        String paymentIdOf(Long orderId) {
+            return paymentIds.get(orderId);
         }
     }
 
@@ -1607,7 +1615,7 @@ public class OrderService {
     private OrderRelations loadRelations(List<Order> orders) {
         List<Long> orderIds = orders.stream().map(Order::getId).toList();
         if (orderIds.isEmpty()) {
-            return new OrderRelations(Map.of(), Map.of(), Map.of());
+            return new OrderRelations(Map.of(), Map.of(), Map.of(), Map.of());
         }
 
         Map<Long, List<OrderShippingSnapshot>> snapshots = orderShippingSnapshotRepository
@@ -1623,11 +1631,31 @@ public class OrderService {
                         .collect(Collectors.groupingBy(r -> r.getOrder().getId()))
                 : Map.of();
 
-        return new OrderRelations(snapshots, shipments, returns);
+        // payments.order_id is unique, so this is at most one row per order and never overwrites a
+        // sibling. transactionId is null until the provider issues one, hence the explicit filter —
+        // Collectors.toMap rejects null values.
+        Map<Long, String> paymentIds = paymentRepository.findByOrderIdIn(orderIds).stream()
+                .filter(p -> p.getTransactionId() != null)
+                .collect(Collectors.toMap(p -> p.getOrder().getId(), Payment::getTransactionId));
+
+        return new OrderRelations(snapshots, shipments, returns, paymentIds);
     }
 
     private OrderResponseDto toDto(Order order) {
         return toDto(order, loadRelations(List.of(order)));
+    }
+
+    /**
+     * Attaches the provider payment id to a DTO built by the plain {@code OrderResponseDto.from}
+     * mappers, which know nothing about payments. One extra lookup, and only on the single-order
+     * admin paths — page responses go through {@link #loadRelations}, which batches it.
+     */
+    private OrderResponseDto withPaymentId(OrderResponseDto dto, Long orderId) {
+        return dto.toBuilder()
+                .molliePaymentId(paymentRepository.findByOrderId(orderId)
+                        .map(Payment::getTransactionId)
+                        .orElse(null))
+                .build();
     }
 
     /**
@@ -1647,6 +1675,7 @@ public class OrderService {
         return base.toBuilder()
                 .shippingSnapshots(mapShippingSnapshots(order, relations.snapshotsOf(order.getId())))
                 .shipments(relations.shipmentsOf(order.getId()).stream().map(OrderShipmentDto::from).toList())
+                .molliePaymentId(relations.paymentIdOf(order.getId()))
                 .build();
     }
 

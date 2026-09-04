@@ -43,6 +43,19 @@ public class OrderResponseDto {
     private BigDecimal discountAmount;
     private String notes;
     private String checkoutUrl;
+
+    /**
+     * The payment provider's own id for this order's payment — Mollie's {@code tr_...} — copied from
+     * {@code Payment.transactionId}. It is what reconciles an order against the Mollie dashboard,
+     * a bank statement or a support ticket, and there was previously no way to get from an order to
+     * its Mollie payment through the API at all.
+     *
+     * <p>Null until the payment row exists and the provider has issued an id, and null on orders
+     * that never had one. Deliberately separate from {@link #orderNumber}: that is assigned at order
+     * creation, before any payment exists, and must stay stable — it is on invoices and in the
+     * customer's inbox — whereas a retried payment gets a fresh provider id.
+     */
+    private String molliePaymentId;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
