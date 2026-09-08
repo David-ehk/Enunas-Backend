@@ -56,6 +56,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.security.SecureRandom;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -1287,6 +1288,15 @@ public class OrderService {
             }
             if (pl.getAvailableUntil() != null && now.isAfter(pl.getAvailableUntil())) {
                 throw new IllegalStateException("Listing " + pl.getId() + " is no longer available");
+            }
+            // releaseDate is the storefront's master switch: a product with a future releaseDate is a
+            // "Coming Soon" preview and is never purchasable, whatever the listing window says. The
+            // browse/PDP side flags it preview=true with a null price; this is the matching buy-time
+            // block (see ProductService.assertBrowsable, ProductListingRepository.CURRENTLY_SELLABLE).
+            LocalDate releaseDate = pl.getProduct().getReleaseDate();
+            if (releaseDate != null && releaseDate.isAfter(LocalDate.now())) {
+                throw new IllegalStateException("Product " + pl.getProduct().getId()
+                        + " is not yet released (releases " + releaseDate + ")");
             }
 
             listings.add(pl);

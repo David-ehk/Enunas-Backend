@@ -38,6 +38,9 @@ public class AdminProductResponseDto {
     private String careInstructions;
     private String collectionName;
     private LocalDate releaseDate;
+    /** {@code releaseDate} is still in the future: the storefront shows this product as a
+     *  non-purchasable "Coming Soon" preview. Mirrors {@code ProductResponseDto.preview}. */
+    private boolean preview;
     private int returnPeriodDays;
     private ProductStatus status;
     private Long creatorId;
@@ -75,6 +78,8 @@ public class AdminProductResponseDto {
                 .careInstructions(product.getCareInstructions())
                 .collectionName(product.getCollectionName())
                 .releaseDate(product.getReleaseDate())
+                .preview(product.getReleaseDate() != null
+                        && product.getReleaseDate().isAfter(java.time.LocalDate.now()))
                 .returnPeriodDays(product.getReturnPeriodDays())
                 .status(product.getStatus())
                 .creatorId(product.getCreator().getId())

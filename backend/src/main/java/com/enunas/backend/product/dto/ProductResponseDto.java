@@ -44,6 +44,14 @@ public class ProductResponseDto {
     private String careInstructions;
     private String collectionName;
     private LocalDate releaseDate;
+
+    /**
+     * "Coming Soon": the product's {@link #releaseDate} is still in the future, so it is shown on the
+     * storefront but is not purchasable and carries no {@link #price}. Derived from {@code releaseDate}
+     * at mapping time — {@code releaseDate} is the single switch, overriding the listing's own
+     * availability window (see the checkout guard in {@code OrderService.resolveAndValidateListings}).
+     */
+    private boolean preview;
     private int returnPeriodDays;
     private ProductStatus status;
     private Long creatorId;
@@ -72,12 +80,15 @@ public class ProductResponseDto {
      * product's id and returns its lowest active price, or null when no active listing exists.
      */
     public static ProductResponseDto from(Product product, DisplayPrice price, Function<Long, DisplayPrice> ctlPriceProvider, MediaUrlResolver resolver) {
+        boolean preview = product.getReleaseDate() != null
+                && product.getReleaseDate().isAfter(LocalDate.now());
         return ProductResponseDto.builder()
                 .id(product.getId())
                 .name(product.getName())
                 .slug(product.getSlug())
-                .price(price != null ? price.current() : null)
-                .originalPrice(price != null ? price.original() : null)
+                .preview(preview)
+                .price(preview || price == null ? null : price.current())
+                .originalPrice(preview || price == null ? null : price.original())
                 .brandId(product.getBrand() != null ? product.getBrand().getId() : null)
                 .brandName(product.getBrand() != null ? product.getBrand().getBrandName() : null)
                 .description(product.getDescription())

@@ -27,6 +27,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -113,8 +114,12 @@ public class ProductService {
 
     /**
      * The single-product (PDP) mirror of the browse-list gate in {@link ProductRepository} — same
-     * "ACTIVE status AND at least one currently-active listing" definition, just as a not-found
-     * guard instead of a filter predicate (a list silently omits; a direct lookup 404s).
+     * definition, just as a not-found guard instead of a filter predicate (a list silently omits; a
+     * direct lookup 404s). A product is browsable when it is ACTIVE and has an active listing that
+     * is either currently in its availability window (live) or on a product whose {@code releaseDate}
+     * is still in the future (a "Coming Soon" preview — returned with {@code preview=true} and no
+     * price, and rejected by the checkout guard in
+     * {@code OrderService.resolveAndValidateListings}).
      *
      * The product's own brand and admins are exempt: {@code createProduct} persists a product with
      * variants but NO listing (listings are created separately via /listings), so gating the owner
@@ -127,8 +132,14 @@ public class ProductService {
                 || (product.getCreator() != null && product.getCreator().getId().equals(viewer.getId())))) {
             return;
         }
-        boolean hasActiveListing = listingRepository.existsCurrentlyActiveListingByProductId(product.getId());
-        if (product.getStatus() != ProductStatus.ACTIVE || !hasActiveListing) {
+        if (product.getStatus() != ProductStatus.ACTIVE) {
+            throw new ProductNotFoundException("No product found with id: " + product.getId());
+        }
+        boolean live = listingRepository.existsCurrentlyActiveListingByProductId(product.getId());
+        boolean preview = product.getReleaseDate() != null
+                && product.getReleaseDate().isAfter(LocalDate.now())
+                && listingRepository.existsActiveListingByProductId(product.getId());
+        if (!live && !preview) {
             throw new ProductNotFoundException("No product found with id: " + product.getId());
         }
     }

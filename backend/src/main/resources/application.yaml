@@ -91,7 +91,7 @@ enunas:
     # When true, USt-IdNr is a hard onboarding requirement (@NotBlank-style; never format-validated).
     vat-id-required: false
   shipping:
-    default-rate: 4.99
+    default-rate: 5.00
   media:
     # Two independently provisioned buckets, no default: the old ${S3_BUCKET:enunas-media} fallback
     # named a bucket that does not exist, so a missing variable failed per-request with NoSuchBucket

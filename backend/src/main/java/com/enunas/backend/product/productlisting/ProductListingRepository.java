@@ -30,7 +30,12 @@ public interface ProductListingRepository extends JpaRepository<ProductListing, 
     String CURRENTLY_SELLABLE =
             "l.active = true "
             + "AND (l.availableFrom IS NULL OR l.availableFrom <= CURRENT_TIMESTAMP) "
-            + "AND (l.availableUntil IS NULL OR l.availableUntil >= CURRENT_TIMESTAMP)";
+            + "AND (l.availableUntil IS NULL OR l.availableUntil >= CURRENT_TIMESTAMP) "
+            // A product is not on sale until its releaseDate — the storefront's master switch. A
+            // future releaseDate keeps the product visible as a "Coming Soon" preview (see the PLP
+            // queries in ProductRepository and ProductService.assertBrowsable) but every price- and
+            // listing-shaped read here must treat it as not-yet-sellable, whatever the window says.
+            + "AND (l.product.releaseDate IS NULL OR l.product.releaseDate <= CURRENT_DATE)";
 
     /**
      * What an anonymous storefront caller is allowed to see: sellable <em>and</em> belonging to a
@@ -120,4 +125,12 @@ public interface ProductListingRepository extends JpaRepository<ProductListing, 
     @Query("SELECT COUNT(l) > 0 FROM ProductListing l "
            + "WHERE l.product.id = :productId AND " + CURRENTLY_SELLABLE)
     boolean existsCurrentlyActiveListingByProductId(@Param("productId") Long productId);
+
+    /** True iff the product has at least one listing with {@code active = true}, ignoring the
+     *  availability window and the product's releaseDate. Backs the preview branch of
+     *  {@code ProductService.assertBrowsable}: a future-release product stays on the storefront only
+     *  while it has a listing a brand has switched on, exactly as a live product does. */
+    @Query("SELECT COUNT(l) > 0 FROM ProductListing l "
+           + "WHERE l.product.id = :productId AND l.active = true")
+    boolean existsActiveListingByProductId(@Param("productId") Long productId);
 }
