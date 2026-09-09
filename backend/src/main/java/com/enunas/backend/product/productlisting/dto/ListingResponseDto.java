@@ -21,6 +21,7 @@ public class ListingResponseDto {
     private String variantColor;
     private ColorFamily variantColorFamily;
     private String variantSize;
+    private Long colorId;
     /** Live stock pulled from the variant (the single source of truth). */
     private int variantStockQuantity;
     /**
@@ -73,6 +74,8 @@ public class ListingResponseDto {
                 .variantColor(productListing.getVariant().getColor())
                 .variantColorFamily(productListing.getVariant().getColorFamily())
                 .variantSize(productListing.getVariant().getSize())
+                .colorId(productListing.getVariant().getProductColor() != null
+                        ? productListing.getVariant().getProductColor().getId() : null)
                 .variantStockQuantity(productListing.getVariant().getStockQuantity())
                 .currentPrice(productListing.getCurrentPrice())
                 .originalPrice(isDiscounted(productListing) ? productListing.getPrice() : null)

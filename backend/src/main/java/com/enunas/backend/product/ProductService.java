@@ -5,6 +5,7 @@ import com.enunas.backend.brandpartner.BrandPartnerRepository;
 import com.enunas.backend.exception.ErrorCode;
 import com.enunas.backend.exception.ProductDeletionBlockedException;
 import com.enunas.backend.exception.ProductNotFoundException;
+import com.enunas.backend.media.ProductImageRepository;
 import com.enunas.backend.media.storage.MediaUrlResolver;
 import com.enunas.backend.order.OrderItemRepository;
 import com.enunas.backend.product.dto.*;
@@ -38,6 +39,7 @@ public class ProductService {
     private final ProductRepository productRepository;
     private final ProductVariantRepository variantRepository;
     private final ProductColorRepository productColorRepository;
+    private final ProductImageRepository productImageRepository;
     private final ProductListingRepository listingRepository;
     private final ProductVariantService variantService;
     private final BrandPartnerRepository brandPartnerRepository;
@@ -298,6 +300,15 @@ public class ProductService {
 
         variantRepository.deleteAll(variantRepository.findByProductId(id));
         variantRepository.flush();
+
+        // Images must go before colours: product_images.product_color_id is ON DELETE SET NULL, so
+        // deleting a colourway while its tagged images survive collapses every colour's primary into
+        // the shared group, where two or more collide on uq_product_images_primary_shared and abort
+        // the delete with a bare DataIntegrityViolationException outside the try below. The product
+        // delete would cascade these rows away anyway; their S3 objects are already orphaned by this
+        // path today, so nothing is lost by removing them here.
+        productImageRepository.deleteByProductId(id);
+        productImageRepository.flush();
 
         productColorRepository.deleteAll(productColorRepository.findByProductId(id));
         productColorRepository.flush();

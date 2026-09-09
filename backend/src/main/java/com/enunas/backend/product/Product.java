@@ -5,6 +5,7 @@ import com.enunas.backend.media.ProductVideo;
 import com.enunas.backend.brandpartner.BrandPartner;
 import com.enunas.backend.product.productanalytics.ProductAnalytics;
 import com.enunas.backend.product.producteconomics.ProductEconomics;
+import com.enunas.backend.product.productvariant.ProductColor;
 import com.enunas.backend.product.productvariant.ProductVariant;
 import com.enunas.backend.user.User;
 import jakarta.persistence.*;
@@ -112,6 +113,12 @@ public class Product {
     @Setter(AccessLevel.NONE)
     private List<ProductImage> images = new ArrayList<>();
 
+    @OneToMany(mappedBy = "product")
+    @Builder.Default
+    @Getter(AccessLevel.NONE)
+    @Setter(AccessLevel.NONE)
+    private List<ProductColor> colors = new ArrayList<>();
+
     @OneToMany(mappedBy = "product", cascade = CascadeType.ALL, orphanRemoval = true)
     @Builder.Default
     @Getter(AccessLevel.NONE)
@@ -179,6 +186,10 @@ public class Product {
 
     public List<ProductImage> getImages() {
         return images == null ? List.of() : Collections.unmodifiableList(images);
+    }
+
+    public List<ProductColor> getColors() {
+        return colors == null ? List.of() : Collections.unmodifiableList(colors);
     }
 
     public List<ProductVideo> getVideos() {

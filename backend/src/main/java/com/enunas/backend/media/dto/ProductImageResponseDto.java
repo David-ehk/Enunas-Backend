@@ -16,6 +16,8 @@ public class ProductImageResponseDto {
     private String altText;
     private boolean primary;
     private int displayOrder;
+    private Long productColorId;
+    private String color;
     private LocalDateTime createdAt;
 
     public static ProductImageResponseDto from(ProductImage image, MediaUrlResolver resolver) {
@@ -25,6 +27,8 @@ public class ProductImageResponseDto {
                 .altText(image.getAltText())
                 .primary(image.isPrimary())
                 .displayOrder(image.getDisplayOrder())
+                .productColorId(image.getProductColor() != null ? image.getProductColor().getId() : null)
+                .color(image.getProductColor() != null ? image.getProductColor().getColor() : null)
                 .createdAt(image.getCreatedAt())
                 .build();
     }

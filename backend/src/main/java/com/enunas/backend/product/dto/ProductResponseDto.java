@@ -58,6 +58,7 @@ public class ProductResponseDto {
     private String creatorEmail;
     private Boolean completeTheLookEnabled;
     private List<CompleteTheLookCardDto> completeTheLookProducts;
+    private List<ProductColorDto> colors;
     private List<ProductVariantResponseDto> variants;
     private List<ProductImageResponseDto> images;
     private List<ProductVideoResponseDto> videos;
@@ -111,6 +112,10 @@ public class ProductResponseDto {
                 .completeTheLookProducts(product.getCompleteTheLookProducts().stream()
                         .map(p -> CompleteTheLookCardDto.from(p, ctlPriceProvider.apply(p.getId()), resolver))
                         .toList())
+                // Keep .colors(...) before .images(...): loading the colours first populates the
+                // persistence context so ProductImageResponseDto.from's image.getProductColor()
+                // resolves from it instead of firing a SELECT per image.
+                .colors(product.getColors().stream().map(ProductColorDto::from).toList())
                 .variants(product.getVariants().stream()
                         .map(ProductVariantResponseDto::from)
                         .toList())

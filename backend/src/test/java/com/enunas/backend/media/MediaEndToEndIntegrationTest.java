@@ -84,6 +84,7 @@ class MediaEndToEndIntegrationTest {
     @Autowired private UserRepository userRepository;
     @Autowired private BrandPartnerRepository brandPartnerRepository;
     @Autowired private ProductRepository productRepository;
+    @Autowired private com.enunas.backend.product.productvariant.ProductColorRepository colourRepository;
     @Autowired private BCryptPasswordEncoder passwordEncoder;
 
     private HttpHeaders auth(String token) {
@@ -180,5 +181,76 @@ class MediaEndToEndIntegrationTest {
                 new HttpEntity<>(Map.of("logoStorageKey", key), auth(token)), Map.class);
         assertThat(updateResp.getStatusCode().is2xxSuccessful()).as("update: %s", updateResp.getBody()).isTrue();
         assertThat(updateResp.getBody().get("logoUrl")).isEqualTo("https://cdn.it.local/" + key);
+    }
+
+    @Test
+    void productImages_taggedByColour_filterReturnsColourPlusShared() throws Exception {
+        User brandUser = userRepository.save(User.builder()
+                .email("e2e-colour@it.local").password(passwordEncoder.encode("Brand123!"))
+                .role(Role.BRAND_PARTNER).enabled(true).adminApproved(true).build());
+        BrandPartner brand = BrandPartner.builder()
+                .user(brandUser).brandName("E2E Colour Brand").slug("e2e-colour-brand").build();
+        brand.setStatus(BrandStatus.ACTIVE);
+        brandPartnerRepository.save(brand);
+        Product product = productRepository.save(Product.builder()
+                .name("E2E Jacket").slug("e2e-jacket").brand(brand).creator(brandUser).build());
+        var black = colourRepository.save(com.enunas.backend.product.productvariant.ProductColor.builder()
+                .sku("E2EBLK").color("Black")
+                .colorFamily(com.enunas.backend.product.productvariant.ColorFamily.BLACK)
+                .product(product).build());
+        var white = colourRepository.save(com.enunas.backend.product.productvariant.ProductColor.builder()
+                .sku("E2EWHT").color("White")
+                .colorFamily(com.enunas.backend.product.productvariant.ColorFamily.WHITE)
+                .product(product).build());
+
+        String token = login("e2e-colour@it.local", "Brand123!");
+
+        // BLACK is the cover (primary) with a high displayOrder; WHITE / shared are non-primary
+        // with distinct displayOrders so the primary-DESC, displayOrder-ASC sort is observable.
+        String blackKey = uploadAndConfirmImage(product.getId(), token, black.getId(), true, 5);
+        String whiteKey = uploadAndConfirmImage(product.getId(), token, white.getId(), false, 0);
+        String sharedKey = uploadAndConfirmImage(product.getId(), token, null, false, 1);
+        String cdn = "https://cdn.it.local/";
+
+        ResponseEntity<List> all = rest.exchange(
+                "/products/" + product.getId() + "/media/images", HttpMethod.GET, null, List.class);
+        // primary (BLACK) first, then non-primary by displayOrder: white(0) then shared(1)
+        assertThat(imageUrls(all)).containsExactly(cdn + blackKey, cdn + whiteKey, cdn + sharedKey);
+
+        ResponseEntity<List> forBlack = rest.exchange(
+                "/products/" + product.getId() + "/media/images?colorId=" + black.getId(),
+                HttpMethod.GET, null, List.class);
+        // BLACK's own tagged images + shared images, not WHITE; primary (BLACK) first
+        assertThat(imageUrls(forBlack)).containsExactly(cdn + blackKey, cdn + sharedKey);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static java.util.List<String> imageUrls(ResponseEntity<List> resp) {
+        return ((List<Map<String, Object>>) resp.getBody()).stream()
+                .map(m -> (String) m.get("imageUrl")).toList();
+    }
+
+    private String uploadAndConfirmImage(Long productId, String token, Long colourId,
+                                         boolean primary, int displayOrder) throws Exception {
+        byte[] bytes = ("img-" + colourId + "-" + displayOrder).getBytes(StandardCharsets.UTF_8);
+        @SuppressWarnings("unchecked")
+        ResponseEntity<Map> presign = rest.exchange(
+                "/products/" + productId + "/media/upload-url", HttpMethod.POST,
+                new HttpEntity<>(Map.of("purpose", "PRODUCT_IMAGE", "contentType", "image/jpeg",
+                        "contentLength", bytes.length), auth(token)), Map.class);
+        String key = (String) presign.getBody().get("key");
+        putBytes((String) presign.getBody().get("uploadUrl"), "image/jpeg", bytes);
+
+        java.util.HashMap<String, Object> body = new java.util.HashMap<>();
+        body.put("storageKey", key);
+        body.put("displayOrder", displayOrder);
+        body.put("primary", primary);
+        if (colourId != null) body.put("productColorId", colourId);
+        @SuppressWarnings("unchecked")
+        ResponseEntity<Map> confirm = rest.exchange(
+                "/products/" + productId + "/media/images", HttpMethod.POST,
+                new HttpEntity<>(body, auth(token)), Map.class);
+        assertThat(confirm.getStatusCode().is2xxSuccessful()).as("confirm: %s", confirm.getBody()).isTrue();
+        return key;
     }
 }

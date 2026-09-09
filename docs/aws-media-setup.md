@@ -65,12 +65,18 @@ Apply this to **both** buckets — a presigned PUT goes straight to the bucket t
 so CORS on only one of them breaks brand uploads or product uploads, whichever was missed.
 
 Without this, every presigned PUT from the frontend fails with an opaque CORS error, not a clear
-S3 error. Allow `PUT` from the frontend origin(s):
+S3 error: the presign (`POST .../media/upload-url`) still returns 200 (signing never touches CORS),
+then the browser's preflight `OPTIONS` to S3 returns 403 because the PUT carries the non-simple
+`x-amz-tagging` header (`MediaStorageService.presignUpload` tags `media-status=pending`), and the
+PUT is aborted with `net::ERR_FAILED`.
+
+Allow `PUT` from every live frontend origin (apex and `www` are distinct origins to the browser —
+list both if both are live):
 
 ```json
 [
   {
-    "AllowedOrigins": ["https://your-frontend-domain.com"],
+    "AllowedOrigins": ["https://www.enunas.com", "https://enunas.com"],
     "AllowedMethods": ["PUT"],
     "AllowedHeaders": ["Content-Type", "x-amz-tagging"],
     "ExposeHeaders": ["ETag"],
@@ -78,6 +84,24 @@ S3 error. Allow `PUT` from the frontend origin(s):
   }
 ]
 ```
+
+`OPTIONS` is **not** a valid `AllowedMethods` value — S3 answers the preflight automatically from
+the `PUT` rule. `AllowedHeaders` is matched case-insensitively (`Content-Type` covers the
+`content-type` the browser sends); `["*"]` is an acceptable substitute.
+
+Apply and verify per bucket:
+
+```bash
+aws s3api put-bucket-cors --bucket <bucket> --region eu-central-1 \
+  --cors-configuration file://cors.json
+aws s3api get-bucket-cors --bucket <bucket> --region eu-central-1   # must echo the rule back
+```
+
+> Incident 2026-09-09: the CORS rule was applied to `enunas-clothing-images-…` only, so brand
+> logo/hero uploads failed in production with "Upload zu S3 fehlgeschlagen" while product images
+> worked. `get-bucket-cors` on the brand bucket returned `NoSuchCORSConfiguration`. Run the
+> `get-bucket-cors` check against **both** buckets — that is the one-command proof this step was
+> done for each.
 
 ## 4. Frontend upload contract
 

@@ -39,8 +39,20 @@ public class MediaController {
 
     // Public storefront read (no auth — see SecurityConfiguration GET /products/**)
     @GetMapping("/images")
-    public ResponseEntity<List<ProductImageResponseDto>> getImages(@PathVariable Long productId) {
-        return ResponseEntity.ok(mediaService.getImages(productId));
+    public ResponseEntity<List<ProductImageResponseDto>> getImages(
+            @PathVariable Long productId,
+            @RequestParam(required = false) Long colorId) {
+        return ResponseEntity.ok(mediaService.getImages(productId, colorId));
+    }
+
+    @PatchMapping("/images/{imageId}")
+    @PreAuthorize("hasRole('BRAND_PARTNER')")
+    public ResponseEntity<ProductImageResponseDto> updateImage(
+            @PathVariable Long productId,
+            @PathVariable Long imageId,
+            @Valid @RequestBody UpdateProductImageDto dto,
+            @AuthenticationPrincipal User owner) {
+        return ResponseEntity.ok(mediaService.updateImage(productId, imageId, dto, owner));
     }
 
     @DeleteMapping("/images/{imageId}")

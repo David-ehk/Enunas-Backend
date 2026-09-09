@@ -16,6 +16,7 @@ public class ProductVariantResponseDto {
     private Integer stockQuantity;
     private Integer weightGrams;
     private Long productId;
+    private Long colorId;
 
     public static ProductVariantResponseDto from(ProductVariant variant) {
         return ProductVariantResponseDto.builder()
@@ -27,6 +28,7 @@ public class ProductVariantResponseDto {
                 .stockQuantity(variant.getStockQuantity())
                 .weightGrams(variant.getWeightGrams())
                 .productId(variant.getProduct().getId())
+                .colorId(variant.getProductColor() != null ? variant.getProductColor().getId() : null)
                 .build();
     }
 }

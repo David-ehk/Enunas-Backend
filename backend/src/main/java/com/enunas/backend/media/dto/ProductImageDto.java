@@ -14,4 +14,7 @@ public class ProductImageDto {
     private boolean primary;
 
     private int displayOrder;
+
+    /** Optional: tag this image to a colourway. Null = shared (shown for every colourway). */
+    private Long productColorId;
 }

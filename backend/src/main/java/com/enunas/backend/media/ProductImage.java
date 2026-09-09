@@ -1,6 +1,7 @@
 package com.enunas.backend.media;
 
 import com.enunas.backend.product.Product;
+import com.enunas.backend.product.productvariant.ProductColor;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -22,6 +23,11 @@ public class ProductImage {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "product_id", nullable = false)
     private Product product;
+
+    /** The colourway this image is specific to. Null = shared: shown for every colourway. */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "product_color_id")
+    private ProductColor productColor;
 
     @Column(nullable = false)
     private String storageKey;

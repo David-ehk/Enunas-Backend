@@ -109,6 +109,40 @@ class ProductDeletionIntegrationTest extends AbstractDiscountIntegrationTest {
         assertThat(productCount(referrerId)).as("the referring product survives").isEqualTo(1);
     }
 
+    /**
+     * V32 added {@code product_images.product_color_id ON DELETE SET NULL} plus a partial unique
+     * index "one primary per shared group". Deleting the colours before the images would collapse
+     * every colourway's cover into the shared group, where they collide on that index and abort the
+     * delete outside the {@link com.enunas.backend.exception.ProductDeletionBlockedException}
+     * translation. {@code purgeProduct} must delete the images first.
+     */
+    @Test
+    void brandDeletesProductWithColourwaySpecificCoverPhotos_succeeds() {
+        BrandFixture brand = seedBrand("Acme", "acme", "0.18");
+        long productId = seedProductWithVariants(brand.brand(), brand.user(), 2);
+        String token = login("acme@it.local", "Brand123!");
+
+        List<Long> colourIds = jdbc.queryForList(
+                "SELECT id FROM product_colors WHERE product_id = ? ORDER BY id", Long.class, productId);
+        for (Long colourId : colourIds) {
+            jdbc.update("INSERT INTO product_images (product_id, product_color_id, storage_key, "
+                    + "is_primary, display_order, created_at) VALUES (?, ?, ?, true, 0, now())",
+                    productId, colourId, "products/" + productId + "/images/" + colourId + ".jpg");
+        }
+        // plus a shared primary, so the shared index is loaded before the colours collapse into it
+        jdbc.update("INSERT INTO product_images (product_id, product_color_id, storage_key, "
+                + "is_primary, display_order, created_at) VALUES (?, NULL, ?, true, 0, now())",
+                productId, "products/" + productId + "/images/shared.jpg");
+        assertThat(imageCount(productId)).isEqualTo(3);
+
+        ResponseEntity<Map> resp = delete("/products/delete/" + productId, token);
+
+        assertThat(resp.getStatusCode()).as("body: %s", resp.getBody()).isEqualTo(HttpStatus.NO_CONTENT);
+        assertThat(productCount(productId)).isZero();
+        assertThat(colourCount(productId)).isZero();
+        assertThat(imageCount(productId)).isZero();
+    }
+
     @Test
     void adminDeletesProductWithVariants_succeeds() {
         seedAdmin();
@@ -327,6 +361,11 @@ class ProductDeletionIntegrationTest extends AbstractDiscountIntegrationTest {
 
     private int variantCount(long productId) {
         return jdbc.queryForObject("SELECT COUNT(*) FROM product_variants WHERE product_id = ?",
+                Integer.class, productId);
+    }
+
+    private int imageCount(long productId) {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM product_images WHERE product_id = ?",
                 Integer.class, productId);
     }
 

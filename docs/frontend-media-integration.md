@@ -94,6 +94,53 @@ changes needed.
 `DELETE /products/{productId}/media/images/{imageId}` — unchanged, no request/response shape change
 (now also deletes the underlying S3 object server-side, invisible to the frontend).
 
+## Colourway-specific product images
+
+An image can now be tagged to one colourway, or left **shared** (shown for every colourway). The
+PDP gallery for a selected swatch = *its tagged images* + *all shared images*.
+
+### New / changed fields
+
+- `POST /products/{productId}/media/images` — body accepts optional `productColorId` (a
+  `ProductColor` id from `GET /products/{id}` → `colors[]`). Omit it for a shared image.
+- `PATCH /products/{productId}/media/images/{imageId}` — **new.** Partial update of image
+  metadata. Body: `{ productColorId?, unassignColor?, primary?, altText?, displayOrder? }`.
+  - `productColorId: <id>` reassigns the image to that colourway.
+  - `unassignColor: true` moves it back to the shared group.
+  - `primary: true` makes it the cover for its (post-update) colour group, demoting the previous
+    one in that group only.
+  - Omitted fields are unchanged. Sending a `productColorId` from another product → `403`.
+  - Changing the colour drops `primary` unless `primary: true` is also sent.
+- `GET /products/{productId}/media/images?colorId={id}` — optional filter. Returns the
+  colourway's own images **plus** shared images, primary-first. No param → all images (use this
+  in the vendor dashboard).
+- `GET /products/{productId}/media/images` responses now include `productColorId` (nullable) and
+  `color` (nullable) on each image.
+- `GET /products/{id}` (`ProductResponseDto`) gains `colors: [{ id, color, colorFamily, sku }]`.
+  Each entry in `images[]` carries `productColorId` + `primary`. `variants[]` and listing
+  responses gain `colorId`.
+
+### Vendor dashboard UX (specified — do not redesign)
+
+1. **Grouped upload.** The "Produktbilder" section renders as colour groups: `Alle Farben
+   (geteilt)` plus one group per entry in `colors[]`. An upload targets the active group — confirm
+   with that group's `productColorId` (or none for `Alle Farben`). Moving an image between groups
+   (drag / dropdown) → `PATCH` with `productColorId: <id>` or `unassignColor: true`. Each group has
+   its own "Als Titelbild setzen" → `PATCH { primary: true }`.
+2. **Existing products.** Untagged images appear under `Alle Farben (geteilt)` with the hint
+   *"Diese Bilder werden für alle Farbvarianten angezeigt."* No migration — splitting them is
+   drag-into-a-colour-group. When a product has ≥2 colourways and ≥1 shared image, show a
+   one-line, non-blocking nudge to assign colour-specific photos.
+3. **Shared is acceptable.** A colourway with no own images is valid and shippable — it shows the
+   shared set. You MAY show an advisory hint; you MUST NOT block listing activation or checkout on
+   it.
+
+### PDP
+
+Filter client-side: show an image when `img.productColorId === selectedColorId || img.productColorId == null`.
+The listing / search card picks the primary whose `productColorId` matches the card's colour
+(fall back to the shared primary, then the first image).
+
 ## Product videos (brand-partner dashboard)
 
 Same pattern, two presign calls if you have a thumbnail (`purpose: "PRODUCT_VIDEO"` for the video,
