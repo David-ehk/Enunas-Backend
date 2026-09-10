@@ -1751,7 +1751,7 @@ public class OrderService {
                 .orderNumber(order.getOrderNumber())
                 .buyerId(order.getBuyer().getId())
                 .buyerEmail(order.getBuyer().getEmail())
-                .status(order.getStatus())
+                .status(brandScopedStatus(order.getStatus(), ownShipment.getStatus()))
                 .shippingAddress(order.getShippingAddress())
                 .items(ownItems.stream().map(OrderItemResponseDto::from).toList())
                 .subtotal(subtotal)
@@ -1790,5 +1790,33 @@ public class OrderService {
             }
         }
         return builder.build();
+    }
+
+    /**
+     * The order-lifecycle status as it applies to ONE brand on a (possibly multi-brand) order.
+     *
+     * <p>While the order is in the shipping phase, {@link Order#getStatus()} is an order-wide
+     * rollup ({@link #syncShipmentStatus}): PARTIALLY_SHIPPED / SHIPPED reflect how far the OTHER
+     * brands on the order have got, and handing that to a brand that hasn't shipped yet leaks their
+     * progress. Re-derive it from this brand's own {@link OrderShipment} instead — the same record
+     * that already scopes {@code shipments[]} and {@code hasShippingProblem} in this DTO:
+     * AWAITING_SHIPMENT (or no row) &rarr; PAID, SHIPPED &rarr; SHIPPED, PROBLEM &rarr;
+     * SHIPPING_PROBLEM.
+     *
+     * <p>Outside the shipping phase (PENDING, DELIVERED, the return-like statuses, CANCELLED, and
+     * the admin escalation statuses) the order-wide status is passed through unchanged — identical
+     * to the behaviour before this scoping was added, and the branch {@code syncShipmentStatus}
+     * never touches. A single-brand order is unaffected in every phase: its rollup already equals
+     * its one brand's shipment state.
+     */
+    private OrderStatus brandScopedStatus(OrderStatus orderStatus, ShipmentStatus ownShipment) {
+        return switch (orderStatus) {
+            case PAID, PARTIALLY_SHIPPED, SHIPPED -> switch (ownShipment) {
+                case AWAITING_SHIPMENT -> OrderStatus.PAID;
+                case SHIPPED -> OrderStatus.SHIPPED;
+                case PROBLEM -> OrderStatus.SHIPPING_PROBLEM;
+            };
+            default -> orderStatus;
+        };
     }
 }

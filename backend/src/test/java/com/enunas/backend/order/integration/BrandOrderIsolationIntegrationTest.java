@@ -69,6 +69,32 @@ class BrandOrderIsolationIntegrationTest extends AbstractDiscountIntegrationTest
         return (List<Map<String, Object>>) resp.getBody().get("content");
     }
 
+    private Object brandOrderStatus(String token) {
+        List<Map<String, Object>> content = brandOrdersContent(token);
+        assertThat(content).hasSize(1);
+        return content.get(0).get("status");
+    }
+
+    private void ship(long orderId, String token) {
+        ResponseEntity<Map> resp = rest.exchange("/brand/orders/" + orderId + "/ship", HttpMethod.POST,
+                new HttpEntity<>(Map.of("carrier", "DHL", "trackingNumber", "TRACK-1"), auth(token)), Map.class);
+        assertThat(resp.getStatusCode().value()).isEqualTo(200);
+    }
+
+    private record SingleBrandOrder(long orderId, String token) {}
+
+    private SingleBrandOrder placeSingleBrandOrder() {
+        BrandPartner a = seedBrand("Solo", "solo", "0.15").brand();
+        seedCustomer();
+        long listing = seedListing(a, a.getUser(), "89.95", 5);
+        String customerToken = login("customer@it.local", "Customer123!");
+        String token = login("solo@it.local", "Brand123!");
+        ResponseEntity<Map> order = postOrder(customerToken, null, List.of(item(listing, 1)));
+        long orderId = ((Number) order.getBody().get("id")).longValue();
+        confirmPaid(orderId);
+        return new SingleBrandOrder(orderId, token);
+    }
+
     @Test
     void brandA_seesOnlyOwnItemAndTotal_notBrandBs() {
         TwoBrandOrder o = placeTwoBrandOrder();
@@ -103,6 +129,34 @@ class BrandOrderIsolationIntegrationTest extends AbstractDiscountIntegrationTest
 
         assertThat(new BigDecimal(order.get("total").toString())).isEqualByComparingTo("34.94");
         assertThat(order.toString()).doesNotContain(o.productA());
+    }
+
+    @Test
+    void brandB_status_doesNotLeakBrandAsShipmentProgress() {
+        TwoBrandOrder o = placeTwoBrandOrder();
+        ship(o.orderId(), o.tokenA());
+
+        // The whole order is now PARTIALLY_SHIPPED (Brand A shipped, Brand B hasn't). Brand B must
+        // NOT see that — its own parcel is still awaiting shipment, i.e. PAID in OrderStatus terms.
+        assertThat(brandOrderStatus(o.tokenB())).isEqualTo("PAID");
+    }
+
+    @Test
+    void brandA_status_reflectsOwnShippedStateOnMultiBrandOrder() {
+        TwoBrandOrder o = placeTwoBrandOrder();
+        ship(o.orderId(), o.tokenA());
+
+        // Order is PARTIALLY_SHIPPED, but Brand A is done with its own parcel.
+        assertThat(brandOrderStatus(o.tokenA())).isEqualTo("SHIPPED");
+    }
+
+    @Test
+    void singleBrandOrder_statusUnchanged_beforeAndAfterShipping() {
+        SingleBrandOrder o = placeSingleBrandOrder();
+
+        assertThat(brandOrderStatus(o.token())).isEqualTo("PAID");
+        ship(o.orderId(), o.token());
+        assertThat(brandOrderStatus(o.token())).isEqualTo("SHIPPED");
     }
 
     @Test
