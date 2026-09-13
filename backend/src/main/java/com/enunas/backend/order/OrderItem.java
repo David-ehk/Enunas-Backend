@@ -60,6 +60,15 @@ public class OrderItem {
     @Column(nullable = false)
     private String variantSnapshotSize;
 
+    /**
+     * S3 key of the line's thumbnail, frozen at order creation: the ordered colourway's cover
+     * image, or the product's shared cover — see {@link com.enunas.backend.order.OrderService}'s
+     * {@code resolveThumbnailKey}. Null when neither exists (never falls back to a different
+     * colourway's image), when the product had no image at all at purchase, and on every row
+     * created before V33. Resolved to a URL by {@code OrderItemResponseDto}.
+     */
+    private String variantSnapshotImageKey;
+
     private String brandSnapshotName;
 
     // --- Price snapshot at purchase time ---

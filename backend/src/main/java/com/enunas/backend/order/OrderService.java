@@ -24,6 +24,8 @@ import com.enunas.backend.order.dto.ShippingSnapshotDto;
 import com.enunas.backend.order.dto.UploadReturnLabelDto;
 import com.enunas.backend.order.validation.AllowedShippingCountries;
 import com.enunas.backend.exception.PaymentException;
+import com.enunas.backend.media.ProductImage;
+import com.enunas.backend.media.storage.MediaUrlResolver;
 import com.enunas.backend.payment.CreatePaymentCommand;
 import com.enunas.backend.payment.Payment;
 import com.enunas.backend.payment.PaymentProvider;
@@ -31,6 +33,7 @@ import com.enunas.backend.payment.PaymentRepository;
 import com.enunas.backend.payment.PaymentResult;
 import com.enunas.backend.payment.PaymentStatus;
 import com.enunas.backend.payment.RefundCommand;
+import com.enunas.backend.product.Product;
 import com.enunas.backend.product.productlisting.ProductListing;
 import com.enunas.backend.product.productlisting.ProductListingRepository;
 import com.enunas.backend.product.productvariant.ProductVariant;
@@ -98,6 +101,7 @@ public class OrderService {
     private final OrderShippingSnapshotRepository orderShippingSnapshotRepository;
     private final OrderShipmentRepository orderShipmentRepository;
     private final TransactionTemplate transactionTemplate;
+    private final MediaUrlResolver mediaUrlResolver;
 
     @Value("${app.frontend.base-url}")
     private String frontendBaseUrl;
@@ -183,7 +187,7 @@ public class OrderService {
                 saved.getOrderNumber(), buyer.getEmail(), pending.shippingSnapshots().size(),
                 paymentResult.paymentId());
 
-        return OrderResponseDto.from(saved, paymentResult.checkoutUrl())
+        return OrderResponseDto.from(saved, paymentResult.checkoutUrl(), mediaUrlResolver)
                 .toBuilder()
                 .shippingSnapshots(mapShippingSnapshots(saved, pending.shippingSnapshots()))
                 // Straight off the just-created payment; no lookup needed on this path.
@@ -348,6 +352,7 @@ public class OrderService {
                     .variantSnapshotSku(variant.getSku())
                     .variantSnapshotColor(variant.getColor())
                     .variantSnapshotSize(variant.getSize())
+                    .variantSnapshotImageKey(resolveThumbnailKey(pl.getProduct(), variant))
                     .priceAtPurchase(pl.getPrice())
                     .discountPriceAtPurchase(pl.getDiscountPrice())
                     .quantity(itemDto.getQuantity())
@@ -423,6 +428,39 @@ public class OrderService {
         return new OrderPricingDraft(orderItems, subtotal, discount, discountAmount,
                 shippingLines, shippingTotal, total, resolvedAddress,
                 listings.get(0).getCurrency());
+    }
+
+    /**
+     * The line's purchase-time thumbnail key, mirroring what the storefront shows for the ordered
+     * colourway: the colour's own cover, else the product's shared cover, else null. "Cover" within
+     * a group = primary, then lowest displayOrder, then lowest id.
+     *
+     * <p>Deliberately NOT three-tiered to "any image regardless of colour": showing a customer a
+     * different colourway's photo (a red line item with a blue product shot) reads as a picking
+     * error, which is worse than a placeholder. No image is preferable to the wrong image —
+     * product owner's call. See spec 2026-09-10-order-item-image-snapshot-design.md §3.
+     */
+    private String resolveThumbnailKey(Product product, ProductVariant variant) {
+        List<ProductImage> images = product.getImages();
+        if (images.isEmpty()) {
+            return null;
+        }
+        Long colourId = variant.getProductColor() != null ? variant.getProductColor().getId() : null;
+
+        return pickCover(images, img ->
+                        colourId != null && img.getProductColor() != null
+                                && img.getProductColor().getId().equals(colourId))
+                .or(() -> pickCover(images, img -> img.getProductColor() == null))
+                .map(ProductImage::getStorageKey)
+                .orElse(null);
+    }
+
+    private Optional<ProductImage> pickCover(List<ProductImage> images, Predicate<ProductImage> inGroup) {
+        return images.stream()
+                .filter(inGroup)
+                .min(Comparator.comparing((ProductImage i) -> !i.isPrimary())
+                        .thenComparingInt(ProductImage::getDisplayOrder)
+                        .thenComparing(ProductImage::getId));
     }
 
     private List<ShippingSnapshotDto> mapShippingSnapshots(Order order, List<OrderShippingSnapshot> snapshots) {
@@ -885,7 +923,7 @@ public class OrderService {
 
         // Idempotent: already in target state — return without side effects (CB-3).
         if (current == newStatus) {
-            return withPaymentId(OrderResponseDto.from(order), order.getId());
+            return withPaymentId(OrderResponseDto.from(order, mediaUrlResolver), order.getId());
         }
 
         validateForwardTransition(current, newStatus);
@@ -972,7 +1010,7 @@ public class OrderService {
             releaseDiscountUsageOnce(saved);
         }
 
-        return withPaymentId(OrderResponseDto.from(saved), saved.getId());
+        return withPaymentId(OrderResponseDto.from(saved, mediaUrlResolver), saved.getId());
     }
 
     /**
@@ -1015,7 +1053,7 @@ public class OrderService {
 
         log.info("Order {} cancelled by admin {} — reason: {}",
                 order.getOrderNumber(), admin.getEmail(), dto.getReason());
-        return withPaymentId(OrderResponseDto.from(order), order.getId());
+        return withPaymentId(OrderResponseDto.from(order, mediaUrlResolver), order.getId());
     }
 
     // ===== Admin: return flow =====
@@ -1677,9 +1715,11 @@ public class OrderService {
         OrderResponseDto base;
         if (isReturnLikeStatus(order.getStatus())) {
             List<ReturnOrder> returns = relations.returnsOf(order.getId());
-            base = !returns.isEmpty() ? OrderResponseDto.withReturns(order, returns) : OrderResponseDto.from(order);
+            base = !returns.isEmpty()
+                    ? OrderResponseDto.withReturns(order, returns, mediaUrlResolver)
+                    : OrderResponseDto.from(order, mediaUrlResolver);
         } else {
-            base = OrderResponseDto.from(order);
+            base = OrderResponseDto.from(order, mediaUrlResolver);
         }
 
         return base.toBuilder()
@@ -1753,7 +1793,7 @@ public class OrderService {
                 .buyerEmail(order.getBuyer().getEmail())
                 .status(brandScopedStatus(order.getStatus(), ownShipment.getStatus()))
                 .shippingAddress(order.getShippingAddress())
-                .items(ownItems.stream().map(OrderItemResponseDto::from).toList())
+                .items(ownItems.stream().map(item -> OrderItemResponseDto.from(item, mediaUrlResolver)).toList())
                 .subtotal(subtotal)
                 .discountCode(order.getDiscountCode())
                 .discountType(order.getDiscountType())

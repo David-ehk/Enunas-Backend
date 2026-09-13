@@ -5,6 +5,7 @@ public enum ProductType {
     // Tops
     T_SHIRT,
     LONGSLEEVE,
+    SHIRT,
     HOODIE,
     ZIP_HOODIE,
     SWEATER,
@@ -15,9 +16,14 @@ public enum ProductType {
     JOGGER,
     SHORTS,
     PANTS,
+    SKIRT,
+
+    // Full-body
+    DRESS,
 
     // Outerwear
     JACKET,
+    COAT,
 
     // Footwear
     SNEAKERS,
@@ -28,5 +34,8 @@ public enum ProductType {
     BEANIE,
     BAG,
     BELT,
-    JEWELRY
+    JEWELRY,
+
+    // Catch-all
+    OTHER
 }

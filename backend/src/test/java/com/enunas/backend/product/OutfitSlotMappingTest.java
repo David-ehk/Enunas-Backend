@@ -13,20 +13,21 @@ import static org.assertj.core.api.Assertions.assertThat;
 class OutfitSlotMappingTest {
 
     @ParameterizedTest
-    @EnumSource(value = ProductType.class, names = {"T_SHIRT", "LONGSLEEVE", "HOODIE", "ZIP_HOODIE", "SWEATER"})
+    @EnumSource(value = ProductType.class, names = {"T_SHIRT", "LONGSLEEVE", "SHIRT", "HOODIE", "ZIP_HOODIE", "SWEATER", "DRESS"})
     void tops_mapTo_TOP(ProductType type) {
         assertThat(buildProduct(type).getOutfitSlot()).isEqualTo(OutfitSlot.TOP);
     }
 
     @ParameterizedTest
-    @EnumSource(value = ProductType.class, names = {"JEANS", "CARGO_PANTS", "JOGGER", "SHORTS", "PANTS"})
+    @EnumSource(value = ProductType.class, names = {"JEANS", "CARGO_PANTS", "JOGGER", "SHORTS", "PANTS", "SKIRT"})
     void bottoms_mapTo_BOTTOM(ProductType type) {
         assertThat(buildProduct(type).getOutfitSlot()).isEqualTo(OutfitSlot.BOTTOM);
     }
 
-    @Test
-    void jacket_mapsTo_OUTERWEAR() {
-        assertThat(buildProduct(ProductType.JACKET).getOutfitSlot()).isEqualTo(OutfitSlot.OUTERWEAR);
+    @ParameterizedTest
+    @EnumSource(value = ProductType.class, names = {"JACKET", "COAT"})
+    void outerwear_mapsTo_OUTERWEAR(ProductType type) {
+        assertThat(buildProduct(type).getOutfitSlot()).isEqualTo(OutfitSlot.OUTERWEAR);
     }
 
     @ParameterizedTest
@@ -36,7 +37,7 @@ class OutfitSlotMappingTest {
     }
 
     @ParameterizedTest
-    @EnumSource(value = ProductType.class, names = {"CAP", "BEANIE", "BAG", "BELT", "JEWELRY"})
+    @EnumSource(value = ProductType.class, names = {"CAP", "BEANIE", "BAG", "BELT", "JEWELRY", "OTHER"})
     void accessories_mapTo_ACCESSORY(ProductType type) {
         assertThat(buildProduct(type).getOutfitSlot()).isEqualTo(OutfitSlot.ACCESSORY);
     }

@@ -2,6 +2,7 @@ package com.enunas.backend.order;
 
 import com.enunas.backend.discount.DiscountService;
 import com.enunas.backend.ledger.LedgerService;
+import com.enunas.backend.media.storage.MediaUrlResolver;
 import com.enunas.backend.order.dto.OrderResponseDto;
 import com.enunas.backend.payment.Payment;
 import com.enunas.backend.payment.PaymentRepository;
@@ -34,6 +35,7 @@ class RefundPersistenceHelper {
     private final LedgerService ledgerService;
     private final DiscountService discountService;
     private final ApplicationEventPublisher eventPublisher;
+    private final MediaUrlResolver mediaUrlResolver;
 
     /**
      * Persists one BRAND return's refund. The ledger reversal is scoped to that return's brand —
@@ -91,7 +93,7 @@ class RefundPersistenceHelper {
                 refundAmount,
                 order.getCurrency()));
 
-        return OrderResponseDto.withReturns(orderRepository.save(order), returns);
+        return OrderResponseDto.withReturns(orderRepository.save(order), returns, mediaUrlResolver);
     }
 
     private boolean allItemsCovered(Order order, List<ReturnOrder> returns) {

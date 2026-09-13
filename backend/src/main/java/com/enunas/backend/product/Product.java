@@ -170,11 +170,12 @@ public class Product {
     private OutfitSlot computeOutfitSlot() {
         if (productType == null) return OutfitSlot.TOP;
         return switch (productType) {
-            case T_SHIRT, LONGSLEEVE, HOODIE, ZIP_HOODIE, SWEATER -> OutfitSlot.TOP;
-            case JEANS, CARGO_PANTS, JOGGER, SHORTS, PANTS       -> OutfitSlot.BOTTOM;
-            case JACKET                                            -> OutfitSlot.OUTERWEAR;
-            case SNEAKERS, BOOTS                                   -> OutfitSlot.FOOTWEAR;
-            case CAP, BEANIE, BAG, BELT, JEWELRY                  -> OutfitSlot.ACCESSORY;
+            // DRESS occupies the torso slot; OTHER is the catch-all, bucketed as an accessory
+            case T_SHIRT, LONGSLEEVE, SHIRT, HOODIE, ZIP_HOODIE, SWEATER, DRESS -> OutfitSlot.TOP;
+            case JEANS, CARGO_PANTS, JOGGER, SHORTS, PANTS, SKIRT               -> OutfitSlot.BOTTOM;
+            case JACKET, COAT                                                    -> OutfitSlot.OUTERWEAR;
+            case SNEAKERS, BOOTS                                                 -> OutfitSlot.FOOTWEAR;
+            case CAP, BEANIE, BAG, BELT, JEWELRY, OTHER                          -> OutfitSlot.ACCESSORY;
         };
     }
 

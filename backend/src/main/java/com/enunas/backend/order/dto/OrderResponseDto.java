@@ -1,6 +1,7 @@
 package com.enunas.backend.order.dto;
 
 import com.enunas.backend.discount.DiscountType;
+import com.enunas.backend.media.storage.MediaUrlResolver;
 import com.enunas.backend.order.Order;
 import com.enunas.backend.order.OrderStatus;
 import com.enunas.backend.order.ReturnOrder;
@@ -74,7 +75,7 @@ public class OrderResponseDto {
     @Deprecated private LocalDateTime returnRequestedAt;
     @Deprecated private String returnShipToAddress;
 
-    public static OrderResponseDto from(Order order) {
+    public static OrderResponseDto from(Order order, MediaUrlResolver resolver) {
         return OrderResponseDto.builder()
                 .id(order.getId())
                 .orderNumber(order.getOrderNumber())
@@ -83,7 +84,7 @@ public class OrderResponseDto {
                 .status(order.getStatus())
                 .shippingAddress(order.getShippingAddress())
                 .items(order.getItems().stream()
-                        .map(OrderItemResponseDto::from)
+                        .map(item -> OrderItemResponseDto.from(item, resolver))
                         .toList())
                 .subtotal(order.getSubtotal())
                 .shippingTotal(order.getShippingTotal())
@@ -100,12 +101,12 @@ public class OrderResponseDto {
                 .build();
     }
 
-    public static OrderResponseDto from(Order order, String checkoutUrl) {
-        return from(order).toBuilder().checkoutUrl(checkoutUrl).build();
+    public static OrderResponseDto from(Order order, String checkoutUrl, MediaUrlResolver resolver) {
+        return from(order, resolver).toBuilder().checkoutUrl(checkoutUrl).build();
     }
 
-    public static OrderResponseDto withReturns(Order order, List<ReturnOrder> returns) {
-        var builder = from(order).toBuilder()
+    public static OrderResponseDto withReturns(Order order, List<ReturnOrder> returns, MediaUrlResolver resolver) {
+        var builder = from(order, resolver).toBuilder()
                 .returns(returns.stream().map(ReturnSummaryDto::from).toList());
 
         // Back-compat: only fill the legacy scalars when there is exactly one return. On a
