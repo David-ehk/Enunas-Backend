@@ -222,7 +222,5 @@
     ]
   },
   "enableAllProjectMcpServers": true,
-  "enabledMcpjsonServers": [
-    "Mollie"
-  ]
+  "enabledMcpjsonServers": []
 }

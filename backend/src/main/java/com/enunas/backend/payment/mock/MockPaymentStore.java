@@ -13,6 +13,23 @@ import java.util.concurrent.ConcurrentHashMap;
 public class MockPaymentStore {
 
     private final ConcurrentHashMap<String, MockPayment> payments = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, String> refundIdsByKey = new ConcurrentHashMap<>();
+
+    /** Returns the refundId already issued for this key, or null. */
+    public String refundIdForKey(String key) {
+        return key == null ? null : refundIdsByKey.get(key);
+    }
+
+    public void rememberRefundKey(String key, String refundId) {
+        if (key != null) refundIdsByKey.put(key, refundId);
+    }
+
+    /** Clears all mock provider state. Tests truncate the DB with RESTART IDENTITY, so without this
+     *  an order id — and therefore an idempotency key — recurs in the next test and collides. */
+    public void reset() {
+        payments.clear();
+        refundIdsByKey.clear();
+    }
 
     public void save(MockPayment payment) {
         payments.put(payment.getId(), payment);

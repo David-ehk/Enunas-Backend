@@ -2,6 +2,7 @@ package com.enunas.backend.order.dto;
 
 import com.enunas.backend.discount.DiscountType;
 import com.enunas.backend.media.storage.MediaUrlResolver;
+import com.enunas.backend.order.CancelReason;
 import com.enunas.backend.order.Order;
 import com.enunas.backend.order.OrderStatus;
 import com.enunas.backend.order.ReturnOrder;
@@ -57,6 +58,24 @@ public class OrderResponseDto {
      * customer's inbox — whereas a retried payment gets a fresh provider id.
      */
     private String molliePaymentId;
+
+    /** Why an admin cancelled. Null unless the order is CANCELLED. */
+    private CancelReason cancellationReason;
+
+    /** Mollie refund id if the cancellation refunded a captured payment. */
+    private String refundTransactionId;
+
+    /**
+     * When the payment provider confirmed the customer's money was captured — copied from
+     * {@code Payment.paidAt}. Null means nothing was ever charged.
+     *
+     * <p>This, not {@link #status}, is what answers "was the customer charged?". CANCELLED alone
+     * cannot: an admin can cancel a PAID order, and a payment can land after an order was already
+     * cancelled (see {@code OrderService.confirmPaymentByWebhook}). In both cases the order is
+     * CANCELLED and money was taken, so a client that reads CANCELLED as "nothing charged" tells the
+     * customer something false.
+     */
+    private LocalDateTime paidAt;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
@@ -96,6 +115,8 @@ public class OrderResponseDto {
                 .discountAmount(order.getDiscountAmount())
                 .notes(order.getNotes())
                 .hasShippingProblem(order.isShippingProblem())
+                .cancellationReason(order.getCancellationReason())
+                .refundTransactionId(order.getRefundTransactionId())
                 .createdAt(order.getCreatedAt())
                 .updatedAt(order.getUpdatedAt())
                 .build();

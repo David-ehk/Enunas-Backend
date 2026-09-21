@@ -501,6 +501,31 @@ class MultiBrandReturnTest extends AbstractDiscountIntegrationTest {
         assertThat(uploadLabel(brandBToken, returnA).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
     }
 
+    @Test
+    @DisplayName("The label-upload response never exposes the refund id to the brand")
+    void labelUploadResponseDoesNotLeakRefundTransactionId() {
+        BrandFixture a = brandWithReturnWarehouse("BrandA", "brand-a");
+        seedAdmin();
+        seedCustomer();
+        long listingA = seedListing(a.brand(), a.user(), "100.00", 5);
+
+        String customerToken = login("customer@it.local", "Customer123!");
+        String adminToken = login("admin@it.local", "Admin123!");
+        String brandAToken = login("brand-a@it.local", "Brand123!");
+
+        long orderId = orderId(postOrder(customerToken, null, List.of(item(listingA, 1))));
+        deliver(orderId, brandAToken, adminToken);
+        String returnA = (String) requestReturn(customerToken, orderId, null).getBody().get("returnNumber");
+        adminReturnAction(adminToken, returnA, "approve");
+
+        jdbc.update("UPDATE orders SET refund_transaction_id = 'ref_leak_probe' WHERE id = ?", orderId);
+
+        ResponseEntity<Map> uploaded = uploadLabel(brandAToken, returnA);
+        assertThat(uploaded.getStatusCode().is2xxSuccessful()).isTrue();
+        assertThat(uploaded.getBody().get("refundTransactionId")).isNull();
+        assertThat(uploaded.getBody().toString()).doesNotContain("ref_leak_probe");
+    }
+
     private ResponseEntity<Map> uploadLabel(String brandToken, String returnNumber) {
         Map<String, Object> body = Map.of(
                 "carrier", "DHL", "trackingNumber", "LABEL-TRACK-1", "labelUrl", "https://labels.example/1.pdf");

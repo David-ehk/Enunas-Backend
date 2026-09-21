@@ -63,6 +63,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -759,20 +760,56 @@ public class OrderService {
 
     // ===== Payment webhook (no role check — called server-to-server after amount verified) =====
 
-    @Transactional
+    /** Leads an order's cancellation note while a captured payment still has to go back to the customer. */
+    static final String REFUND_REQUIRED = "REFUND_REQUIRED";
+    /** Replaces {@link #REFUND_REQUIRED} once the automatic refund has gone through at the provider. */
+    static final String AUTO_REFUNDED = "AUTO_REFUNDED";
+    private static final int CANCELLATION_NOTE_MAX = 500;
+
+    /**
+     * Applies a provider-verified "paid" to the order. Two outcomes:
+     * <ul>
+     *   <li>PENDING with stock for every line → PAID, ledger booked, confirmation mail.</li>
+     *   <li>Money captured for an order that will never be fulfilled — the order was already
+     *       CANCELLED (auto-expired, customer finished paying at Mollie afterwards) or a line sold
+     *       out in the meantime. The payment is recorded with its {@code paidAt}, the order is
+     *       flagged {@link #REFUND_REQUIRED}, and the full amount is refunded automatically.</li>
+     * </ul>
+     *
+     * <p>Deliberately not {@code @Transactional}: the refund is an outbound HTTP call to Mollie and
+     * must run after the payment is committed, not inside a transaction holding the order lock —
+     * same rule as {@link #processRefund}. If the refund call fails, the committed
+     * {@link #REFUND_REQUIRED} flag and a {@code PAID} payment on a {@code CANCELLED} order are what
+     * an admin works from.
+     */
     public void confirmPaymentByWebhook(Long orderId) {
+        boolean refundNeeded = Boolean.TRUE.equals(
+                transactionTemplate.execute(status -> applyWebhookPayment(orderId)));
+        if (refundNeeded) {
+            refundPaymentForCancelledOrder(orderId);
+        }
+    }
+
+    /** @return true when money was captured for an order that will not be fulfilled and must be refunded. */
+    private boolean applyWebhookPayment(Long orderId) {
         // Pessimistic lock serializes concurrent duplicate webhooks: the second caller blocks here
         // until the first commits, then reads status = PAID and no-ops below. Without this, two
-        // webhooks could both read PENDING and both book the ledger → double payout.
+        // webhooks could both read PENDING and both book the ledger → double payout. It also
+        // serializes against the expiry job's save (Order is @Version'd), so a webhook either sees
+        // PENDING and wins, or sees the committed CANCELLED and takes the refund path.
         Order order = orderRepository.findByIdForUpdate(orderId)
                 .orElseThrow(() -> new OrderNotFoundException("Order not found with id: " + orderId));
         OrderStatus current = order.getStatus();
 
-        if (current == OrderStatus.PAID) return; // idempotent
+        if (current == OrderStatus.PAID) return false; // idempotent
+
+        if (current == OrderStatus.CANCELLED) {
+            return recordPaymentForCancelledOrder(order);
+        }
 
         if (current != OrderStatus.PENDING) {
             log.warn("Webhook: order {} in {} state, expected PENDING — ignoring", orderId, current);
-            return;
+            return false;
         }
 
         // Mark payment captured regardless of stock outcome — money was taken by Mollie.
@@ -802,16 +839,16 @@ public class OrderService {
             for (OrderItem done : decremented) {
                 productVariantRepository.restoreStock(done.getVariant().getId(), done.getQuantity());
             }
-            // Cancel and flag for manual refund — do NOT throw, so the webhook returns 200
-            // and Mollie stops retrying (this is a permanent stock-out, not a transient error).
-            String note = "REFUND_REQUIRED: payment captured but variant "
-                    + failedItem.getVariant().getId() + " sold out at confirmation time.";
+            // Cancel and refund — do NOT throw, so the webhook returns 200 and Mollie stops
+            // retrying (this is a permanent stock-out, not a transient error).
             order.setStatus(OrderStatus.CANCELLED);
-            order.setCancellationNote(note);
+            prependCancellationNote(order, REFUND_REQUIRED + ": payment captured but variant "
+                    + failedItem.getVariant().getId() + " sold out at confirmation time.");
             orderRepository.save(order);
             log.error("REFUND_REQUIRED: order {} — Mollie payment captured but variant {} out of stock."
-                    + " Manual refund needed.", order.getOrderNumber(), failedItem.getVariant().getId());
-            return;
+                    + " Refunding automatically.", order.getOrderNumber(), failedItem.getVariant().getId());
+            publishLatePaymentRefund(order, "Ein Artikel war zum Zeitpunkt deiner Zahlung leider bereits ausverkauft.");
+            return true;
         }
 
         order.setStatus(OrderStatus.PAID);
@@ -825,6 +862,110 @@ public class OrderService {
         sendOrderConfirmationEmail(order, shippingSnapshots);
 
         log.info("Webhook: order {} PENDING → PAID", order.getOrderNumber());
+        return false;
+    }
+
+    /**
+     * A payment landed on an order that was already CANCELLED. The order stays cancelled — its
+     * discount usage is already released, nothing was booked to the ledger and no stock was taken —
+     * so only the payment itself is recorded, truthfully, with its {@code paidAt}.
+     *
+     * @return true the first time; false for a duplicate webhook whose payment is already recorded
+     *         (PAID, or REFUNDED by an earlier run), so a retry can never refund twice.
+     */
+    private boolean recordPaymentForCancelledOrder(Order order) {
+        Payment payment = paymentRepository.findByOrderId(order.getId()).orElse(null);
+        if (payment == null) {
+            log.error("REFUND_REQUIRED: order {} is CANCELLED and was just paid, but has no payment row"
+                    + " — refund manually in Mollie.", order.getOrderNumber());
+            return false;
+        }
+        if (payment.getStatus() == PaymentStatus.PAID || payment.getStatus() == PaymentStatus.REFUNDED) {
+            log.info("Webhook: late payment for cancelled order {} already recorded ({}) — no-op",
+                    order.getOrderNumber(), payment.getStatus());
+            return false;
+        }
+
+        payment.setStatus(PaymentStatus.PAID);
+        payment.setPaidAt(LocalDateTime.now());
+        paymentRepository.save(payment);
+
+        prependCancellationNote(order, REFUND_REQUIRED + ": payment captured after the order was cancelled.");
+        orderRepository.save(order);
+
+        log.error("REFUND_REQUIRED: order {} — payment {} captured after the order was cancelled."
+                + " Refunding automatically.", order.getOrderNumber(), payment.getTransactionId());
+        publishLatePaymentRefund(order, "Die Bestellung war zu diesem Zeitpunkt bereits storniert.");
+        return true;
+    }
+
+    private void publishLatePaymentRefund(Order order, String reason) {
+        eventPublisher.publishEvent(new LatePaymentRefundRequiredEvent(
+                order.getBuyer().getEmail(), order.getOrderNumber(), order.getTotal(), order.getCurrency(), reason));
+    }
+
+    /**
+     * Refunds the full captured amount of a cancelled order. Runs outside any transaction (see
+     * {@link #confirmPaymentByWebhook}). Never throws: the webhook has already done its job, and a
+     * failure here leaves the committed {@link #REFUND_REQUIRED} flag for an admin rather than
+     * making Mollie retry a webhook that would — correctly — no-op on the recorded payment.
+     */
+    private void refundPaymentForCancelledOrder(Long orderId) {
+        Payment payment = paymentRepository.findByOrderId(orderId).orElse(null);
+        Order order = orderRepository.findById(orderId).orElse(null);
+        if (payment == null || order == null
+                || payment.getStatus() != PaymentStatus.PAID || payment.getTransactionId() == null) {
+            log.error("REFUND_REQUIRED: order {} — automatic refund skipped, payment not refundable."
+                    + " Refund manually in Mollie.", orderId);
+            return;
+        }
+
+        String refundId;
+        try {
+            refundId = paymentProvider.refundPayment(new RefundCommand(
+                    payment.getTransactionId(),
+                    payment.getAmount(),
+                    "Automatic refund: payment received for cancelled order " + order.getOrderNumber(),
+                    "late-refund-" + order.getOrderNumber())).refundId();
+        } catch (Exception e) {
+            log.error("REFUND_REQUIRED: order {} — automatic refund of payment {} FAILED, refund manually in Mollie: {}",
+                    order.getOrderNumber(), payment.getTransactionId(), e.getMessage());
+            return;
+        }
+
+        try {
+            transactionTemplate.executeWithoutResult(status -> {
+                Order locked = orderRepository.findByIdForUpdate(orderId).orElseThrow();
+                paymentRepository.findByOrderId(orderId).ifPresent(p -> {
+                    p.setStatus(PaymentStatus.REFUNDED);
+                    paymentRepository.save(p);
+                });
+                String note = locked.getCancellationNote() == null ? AUTO_REFUNDED + " " + refundId
+                        : locked.getCancellationNote().replaceFirst(REFUND_REQUIRED, AUTO_REFUNDED + " " + refundId);
+                locked.setCancellationNote(truncateNote(note));
+                orderRepository.save(locked);
+            });
+        } catch (Exception e) {
+            // The money has gone back — only our record of it failed. Loud, distinct marker: an admin
+            // must mark this refund as done, NOT issue a second one.
+            log.error("REFUND_RECORDING_FAILED: order {} — refund {} succeeded at the provider but was not"
+                    + " recorded: {}", order.getOrderNumber(), refundId, e.getMessage());
+            return;
+        }
+
+        log.info("Webhook: order {} — captured payment {} refunded automatically (refund {})",
+                order.getOrderNumber(), payment.getTransactionId(), refundId);
+    }
+
+    /** Puts {@code text} first so a marker like {@link #REFUND_REQUIRED} survives truncation of a long note. */
+    private static void prependCancellationNote(Order order, String text) {
+        String existing = order.getCancellationNote();
+        order.setCancellationNote(truncateNote(
+                existing == null || existing.isBlank() ? text : text + " | " + existing));
+    }
+
+    private static String truncateNote(String note) {
+        return note.length() > CANCELLATION_NOTE_MAX ? note.substring(0, CANCELLATION_NOTE_MAX) : note;
     }
 
     /**
@@ -1025,35 +1166,166 @@ public class OrderService {
         orderRepository.save(order);
     }
 
+    /**
+     * Cancels an order and, when money was captured, refunds it at the provider first.
+     *
+     * <p>Deliberately NOT {@code @Transactional}: phase 2 is an outbound Mollie call and must not
+     * hold a pooled DB connection (same rule as {@link #processRefund}). Nothing is written until
+     * the refund succeeds, so a provider failure leaves no half-state.
+     */
     @PreAuthorize("hasRole('ADMIN')")
-    @Transactional
     public OrderResponseDto cancelOrder(Long orderId, CancelOrderDto dto, User admin) {
-        Order order = findById(orderId);
+        CancelPreflight pre = transactionTemplate.execute(s -> validateCancellable(orderId));
 
-        if (order.getStatus() != OrderStatus.PENDING) {
-            throw new IllegalStateException(
-                    "Only PENDING orders can be cancelled. Current status: " + order.getStatus());
+        String refundId = null;
+        if (pre.wasPaid()) {
+            try {
+                refundId = paymentProvider.refundPayment(new RefundCommand(
+                        pre.transactionId(),
+                        pre.amount(),
+                        "Admin cancellation of order " + pre.orderNumber(),
+                        "order-cancel-" + pre.orderNumber())).refundId();
+            } catch (Exception e) {
+                log.error("Admin cancel: refund FAILED for order {} — order NOT cancelled: {}",
+                        pre.orderNumber(), e.getMessage());
+                throw new PaymentException("Refund failed at the payment provider — the order was NOT "
+                        + "cancelled. Please retry: " + e.getMessage(), e);
+            }
+            if (refundId == null || refundId.isBlank()) {
+                log.error("Admin cancel: provider returned no refund id for order {} — order NOT cancelled",
+                        pre.orderNumber());
+                throw new PaymentException("The payment provider returned no refund id — the order was NOT "
+                        + "cancelled. Check Mollie before retrying.");
+            }
+        }
+        final String finalRefundId = refundId;
+        final boolean wasPaid = pre.wasPaid();
+        CancelOutcome outcome = transactionTemplate.execute(
+                s -> persistCancellation(orderId, dto, admin, wasPaid, finalRefundId));
+        if (outcome.blockedMessage() != null) {
+            // Thrown only AFTER the transaction has committed. Throwing inside it would roll back the
+            // very refund record persistCancellation may just have written — forgetting money already returned.
+            throw new IllegalStateException(outcome.blockedMessage());
+        }
+        return outcome.response();
+    }
+
+    /** Phase 3's result: either the cancelled order, or a blocked-message (order NOT cancelled). */
+    private record CancelOutcome(OrderResponseDto response, String blockedMessage) {
+        static CancelOutcome done(OrderResponseDto response) { return new CancelOutcome(response, null); }
+        static CancelOutcome blocked(String message) { return new CancelOutcome(null, message); }
+    }
+
+    /** What phase 1 establishes, carried into phases 2 and 3. */
+    private record CancelPreflight(String orderNumber, boolean wasPaid, String transactionId, BigDecimal amount) {}
+
+    private static final Set<OrderStatus> CANCELLABLE = EnumSet.of(
+            OrderStatus.PENDING, OrderStatus.PAID, OrderStatus.SHIPPING_PROBLEM,
+            OrderStatus.AWAITING_ADMIN, OrderStatus.MANUAL_REVIEW);
+
+    private CancelPreflight validateCancellable(Long orderId) {
+        Order order = findById(orderId);
+        if (!CANCELLABLE.contains(order.getStatus())) {
+            throw new IllegalStateException("Order " + order.getOrderNumber() + " cannot be cancelled from "
+                    + order.getStatus() + ".");
+        }
+        if (anyBrandHasShipped(order)) {
+            throw new IllegalStateException("Order " + order.getOrderNumber() + " cannot be cancelled — at least "
+                    + "one brand has already shipped. Use a return/refund instead.");
+        }
+        Payment payment = paymentRepository.findByOrderId(orderId).orElse(null);
+        boolean wasPaid = payment != null && payment.getStatus() == PaymentStatus.PAID && payment.getPaidAt() != null;
+        if (payment != null && payment.getStatus() == PaymentStatus.REFUNDED) {
+            throw new IllegalStateException("Order " + order.getOrderNumber() + " already has a refund — use the "
+                    + "return/refund flow instead of cancelling.");
+        }
+        if (wasPaid && payment.getAmount().compareTo(order.getTotal()) != 0) {
+            log.error("CANCEL_AMOUNT_MISMATCH: order {} total {} != captured payment {}",
+                    order.getOrderNumber(), order.getTotal(), payment.getAmount());
+            throw new IllegalStateException("Order " + order.getOrderNumber() + " has a captured amount that "
+                    + "differs from its total — refusing to cancel; this needs a manual check.");
+        }
+        if (!wasPaid && order.getStatus() != OrderStatus.PENDING) {
+            log.error("CANCEL_NO_CAPTURED_PAYMENT: order {} is {} but has no captured payment",
+                    order.getOrderNumber(), order.getStatus());
+            throw new IllegalStateException("Order " + order.getOrderNumber() + " is in status " + order.getStatus()
+                    + " but has no captured payment — refusing to cancel; this needs a manual check.");
+        }
+        return new CancelPreflight(order.getOrderNumber(), wasPaid,
+                wasPaid ? payment.getTransactionId() : null,
+                wasPaid ? payment.getAmount() : null);
+    }
+
+    private CancelOutcome persistCancellation(Long orderId, CancelOrderDto dto, User admin,
+                                              boolean wasPaid, String refundId) {
+        Order order = orderRepository.findByIdForUpdate(orderId)
+                .orElseThrow(() -> new OrderNotFoundException("Order not found with id: " + orderId));
+
+        // Phase 1 saw this order unpaid; a webhook may have captured payment since. Re-check under the
+        // lock BEFORE any write, so throwing here is safe (nothing to roll back) and no paid order is
+        // ever cancelled without its refund.
+        if (!wasPaid) {
+            boolean paidNow = paymentRepository.findByOrderId(orderId)
+                    .map(p -> p.getStatus() == PaymentStatus.PAID && p.getPaidAt() != null).orElse(false);
+            if (paidNow) {
+                throw new IllegalStateException("A payment for order " + order.getOrderNumber() + " arrived while "
+                        + "it was being cancelled — nothing was changed, please retry.");
+            }
         }
 
-        // No stock restore needed — PENDING orders never decremented stock.
+        if (order.getStatus() == OrderStatus.CANCELLED) {
+            throw new IllegalStateException("Order " + order.getOrderNumber() + " was already cancelled"
+                    + (order.getRefundTransactionId() != null
+                        ? " (refund " + order.getRefundTransactionId() + ")" : "") + ".");
+        }
+        if (!CANCELLABLE.contains(order.getStatus()) || anyBrandHasShipped(order)) {
+            // A brand confirmed shipment while the refund was in flight (confirmShipment →
+            // syncShipmentStatus rewrites the order status). The goods are gone, so do NOT cancel:
+            // that would restore stock for a parcel in transit and claw back a delivered payout.
+            // The money HAS gone back, so record only that and leave the rest to a human.
+            if (refundId != null) {
+                paymentRepository.findByOrderId(orderId).ifPresent(p -> {
+                    p.setStatus(PaymentStatus.REFUNDED);
+                    paymentRepository.save(p);
+                });
+                order.setRefundTransactionId(refundId);
+                orderRepository.save(order);
+                log.error("CANCEL_RACE_SHIPPED: order {} shipped during its refund; refund {} recorded, order NOT "
+                        + "cancelled. Customer holds goods and money — resolve manually.",
+                        order.getOrderNumber(), refundId);
+            }
+            return CancelOutcome.blocked(refundId != null
+                    ? "Order " + order.getOrderNumber() + " shipped while the refund was in flight. The refund was "
+                        + "issued and recorded; the order was NOT cancelled."
+                    : "Order " + order.getOrderNumber() + " changed while it was being cancelled — nothing was "
+                        + "changed.");
+        }
 
         order.setCancellationReason(dto.getReason());
         order.setCancellationNote(dto.getNote());
         order.setCancelledByAdminEmail(admin.getEmail());
+        order.setRefundTransactionId(refundId);
         order.setStatus(OrderStatus.CANCELLED);
+
+        BigDecimal refundedAmount = null;
+        if (refundId != null) {
+            Payment payment = paymentRepository.findByOrderId(orderId).orElseThrow();
+            refundedAmount = payment.getAmount();
+            restoreVariantStock(order);
+            ledgerService.recordRefund(order, refundedAmount, refundId);
+            payment.setStatus(PaymentStatus.REFUNDED);
+            paymentRepository.save(payment);
+        }
         orderRepository.save(order);
-        // Reserved at checkout (validateAndApply), before payment — release it now the order never
-        // completes.
         releaseDiscountUsageOnce(order);
 
-        // Best-effort cancellation-notification email, dispatched AFTER_COMMIT — never blocks/rolls
-        // back the already-committed cancellation + discount-usage release.
         eventPublisher.publishEvent(new OrderCancelledEvent(
-                order.getBuyer().getEmail(), order.getOrderNumber(), dto.getReason(), dto.getNote()));
+                order.getBuyer().getEmail(), order.getOrderNumber(), dto.getReason(), dto.getNote(),
+                refundedAmount, order.getCurrency()));
 
-        log.info("Order {} cancelled by admin {} — reason: {}",
-                order.getOrderNumber(), admin.getEmail(), dto.getReason());
-        return withPaymentId(OrderResponseDto.from(order, mediaUrlResolver), order.getId());
+        log.info("Order {} cancelled by admin {} — reason: {}{}", order.getOrderNumber(), admin.getEmail(),
+                dto.getReason(), refundId != null ? ", refund " + refundId : "");
+        return CancelOutcome.done(withPaymentId(OrderResponseDto.from(order, mediaUrlResolver), order.getId()));
     }
 
     // ===== Admin: return flow =====
@@ -1156,7 +1428,8 @@ public class OrderService {
             refundId = paymentProvider.refundPayment(new RefundCommand(
                     payment.getTransactionId(),
                     amount,
-                    "Refund for return " + returnNumber + " (order " + order.getOrderNumber() + ")")).refundId();
+                    "Refund for return " + returnNumber + " (order " + order.getOrderNumber() + ")",
+                    null)).refundId();
         } catch (Exception e) {
             log.error("Refund failed for return {}: {}", returnNumber, e.getMessage());
             throw new PaymentException("Could not process refund: " + e.getMessage(), e);
@@ -1187,7 +1460,8 @@ public class OrderService {
 
         log.info("BrandPartner {} uploaded return label for {} (carrier={}, tracking={})",
                 brandPartner.getEmail(), returnNumber, dto.getCarrier(), dto.getTrackingNumber());
-        return toDto(returnOrder.getOrder());
+        // Brand-facing response on the unscoped toDto path: strip the refund id, which brands never see.
+        return toDto(returnOrder.getOrder()).toBuilder().refundTransactionId(null).build();
     }
 
     /** Gross value of the items on this return — the ceiling for refunding it. */
@@ -1631,7 +1905,7 @@ public class OrderService {
             Map<Long, List<OrderShippingSnapshot>> snapshots,
             Map<Long, List<OrderShipment>> shipments,
             Map<Long, List<ReturnOrder>> returns,
-            Map<Long, String> paymentIds) {
+            Map<Long, Payment> payments) {
 
         List<OrderShippingSnapshot> snapshotsOf(Long orderId) {
             return snapshots.getOrDefault(orderId, List.of());
@@ -1647,7 +1921,14 @@ public class OrderService {
 
         /** Null when the order has no payment row yet, or the provider has not issued an id. */
         String paymentIdOf(Long orderId) {
-            return paymentIds.get(orderId);
+            Payment payment = payments.get(orderId);
+            return payment == null ? null : payment.getTransactionId();
+        }
+
+        /** Null when the order has no payment row, or its payment was never captured. */
+        LocalDateTime paidAtOf(Long orderId) {
+            Payment payment = payments.get(orderId);
+            return payment == null ? null : payment.getPaidAt();
         }
     }
 
@@ -1680,13 +1961,11 @@ public class OrderService {
                 : Map.of();
 
         // payments.order_id is unique, so this is at most one row per order and never overwrites a
-        // sibling. transactionId is null until the provider issues one, hence the explicit filter —
-        // Collectors.toMap rejects null values.
-        Map<Long, String> paymentIds = paymentRepository.findByOrderIdIn(orderIds).stream()
-                .filter(p -> p.getTransactionId() != null)
-                .collect(Collectors.toMap(p -> p.getOrder().getId(), Payment::getTransactionId));
+        // sibling.
+        Map<Long, Payment> payments = paymentRepository.findByOrderIdIn(orderIds).stream()
+                .collect(Collectors.toMap(p -> p.getOrder().getId(), p -> p));
 
-        return new OrderRelations(snapshots, shipments, returns, paymentIds);
+        return new OrderRelations(snapshots, shipments, returns, payments);
     }
 
     private OrderResponseDto toDto(Order order) {
@@ -1699,10 +1978,10 @@ public class OrderService {
      * admin paths — page responses go through {@link #loadRelations}, which batches it.
      */
     private OrderResponseDto withPaymentId(OrderResponseDto dto, Long orderId) {
+        Payment payment = paymentRepository.findByOrderId(orderId).orElse(null);
         return dto.toBuilder()
-                .molliePaymentId(paymentRepository.findByOrderId(orderId)
-                        .map(Payment::getTransactionId)
-                        .orElse(null))
+                .molliePaymentId(payment == null ? null : payment.getTransactionId())
+                .paidAt(payment == null ? null : payment.getPaidAt())
                 .build();
     }
 
@@ -1726,6 +2005,7 @@ public class OrderService {
                 .shippingSnapshots(mapShippingSnapshots(order, relations.snapshotsOf(order.getId())))
                 .shipments(relations.shipmentsOf(order.getId()).stream().map(OrderShipmentDto::from).toList())
                 .molliePaymentId(relations.paymentIdOf(order.getId()))
+                .paidAt(relations.paidAtOf(order.getId()))
                 .build();
     }
 
@@ -1810,6 +2090,7 @@ public class OrderService {
                 .total(total)
                 .currency(order.getCurrency())
                 .notes(order.getNotes())
+                .cancellationReason(order.getCancellationReason())
                 .createdAt(order.getCreatedAt())
                 .updatedAt(order.getUpdatedAt());
 

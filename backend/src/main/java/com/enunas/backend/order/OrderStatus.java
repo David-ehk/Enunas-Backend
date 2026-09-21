@@ -20,11 +20,14 @@ public enum OrderStatus {
     RETURN_APPROVED,   // admin approved; return label issued
     RETURN_RECEIVED,   // admin received goods back; stock restored
     REFUNDED,          // money returned to customer
-    CANCELLED;         // admin cancelled (only from PENDING)
+    CANCELLED;         // never fulfilled — expired/cancelled while PENDING, OR cancelled after payment
+                       // (admin cancel of a PAID order, payment landing late / on a sold-out line).
+                       // Status alone does NOT say whether money was taken: read Payment.paidAt.
 
     /**
-     * Every status in which the customer's money was actually taken — i.e. everything except
-     * PENDING (never paid) and CANCELLED (only reachable from PENDING). REFUNDED is deliberately
+     * Every status in which the order stands as a completed sale — i.e. everything except PENDING
+     * (never paid) and CANCELLED (never fulfilled; any money captured for it is reversed in full).
+     * REFUNDED is deliberately
      * included: the order was placed and paid for, and the refund is recorded separately. This is
      * the same rule {@code OrderRepository.getOrderStatsByBuyer} and
      * {@code OrderItemRepository.findVat22fLineItems} apply, stated once so the three cannot drift.

@@ -76,6 +76,7 @@ public abstract class AbstractDiscountIntegrationTest {
 
     @Autowired protected OrderService orderService;
     @Autowired protected LedgerService ledgerService;
+    @Autowired(required = false) protected com.enunas.backend.payment.mock.MockPaymentStore mockPaymentStore;
 
     @AfterEach
     void cleanDatabase() {
@@ -84,6 +85,9 @@ public abstract class AbstractDiscountIntegrationTest {
                 "settlement_runs, ledger_entries, payments, order_items, orders, listings, " +
                 "product_variants, product_colors, products, discount_codes, brand_economics, " +
                 "brand_partners, user_addresses, oauth_accounts, customers, users RESTART IDENTITY CASCADE");
+        if (mockPaymentStore != null) {
+            mockPaymentStore.reset();
+        }
     }
 
     // ===== Seeding =====

@@ -102,6 +102,10 @@ public class Order {
 
     private String cancelledByAdminEmail;
 
+    /** Mollie refund id when this cancellation refunded a captured payment. Null otherwise. */
+    @Column(length = 64)
+    private String refundTransactionId;
+
     // ===== Shipping — LEGACY, frozen. Pre-dates per-brand shipment tracking and could only ever
     // hold ONE brand's carrier/tracking on a multi-brand order (the bug OrderShipment/V27 fixes).
     // No longer written by OrderService — see OrderShipment for the real, per-brand data going

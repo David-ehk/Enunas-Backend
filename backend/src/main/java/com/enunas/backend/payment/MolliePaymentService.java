@@ -71,10 +71,13 @@ public class MolliePaymentService implements PaymentProvider {
                             .build())
                     .build();
 
-            CreateRefundResponse response = mollieClient.refunds().create()
+            var call = mollieClient.refunds().create()
                     .paymentId(command.paymentId())
-                    .refundRequest(refundRequest)
-                    .call();
+                    .refundRequest(refundRequest);
+            if (command.idempotencyKey() != null) {
+                call = call.idempotencyKey(command.idempotencyKey());
+            }
+            CreateRefundResponse response = call.call();
 
             String refundId = response.entityRefundResponse()
                     .map(refund -> refund.id())

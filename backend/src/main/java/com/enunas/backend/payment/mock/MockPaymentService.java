@@ -40,8 +40,16 @@ public class MockPaymentService implements PaymentProvider {
             throw new IllegalStateException("MockPaymentService: payment not found: " + command.paymentId());
         }
 
+        String existing = store.refundIdForKey(command.idempotencyKey());
+        if (existing != null) {
+            log.info("MockPaymentService: replaying refund {} for idempotency key {}",
+                    existing, command.idempotencyKey());
+            return new RefundResult(existing);
+        }
+
         String refundId = "ref_mock_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
         store.markRefunded(command.paymentId(), refundId);
+        store.rememberRefundKey(command.idempotencyKey(), refundId);
         webhookDispatcher.dispatchRefundCreated(refundId, command.paymentId());
 
         log.info("MockPaymentService: refunded payment={} refundId={} amount={}",

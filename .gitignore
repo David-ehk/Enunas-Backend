@@ -10,3 +10,8 @@ desktop.ini
 
 # Superpowers subagent-driven-development scratch workspace
 .superpowers/
+
+# Agent skills: `.agents/skills/` is vendored and committed for team
+# reproducibility. `.claude/skills/` holds machine-local symlinks into it.
+.claude/skills/
+.claude/worktrees/

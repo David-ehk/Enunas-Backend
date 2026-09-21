@@ -5,5 +5,6 @@ import java.math.BigDecimal;
 public record RefundCommand(
         String paymentId,
         BigDecimal amount,
-        String reason
+        String reason,
+        String idempotencyKey
 ) {}
