@@ -1,11 +1,13 @@
 package com.enunas.backend.payment;
 
 import com.enunas.backend.exception.PaymentException;
+import com.enunas.backend.exception.PaymentRejectedException;
 import com.mollie.mollie.Client;
 import com.mollie.mollie.models.components.Amount;
 import com.mollie.mollie.models.components.PaymentRequest;
 import com.mollie.mollie.models.components.PaymentResponseStatus;
 import com.mollie.mollie.models.components.RefundRequest;
+import com.mollie.mollie.models.errors.ClientError;
 import com.mollie.mollie.models.operations.CreatePaymentResponse;
 import com.mollie.mollie.models.operations.CreateRefundResponse;
 import com.mollie.mollie.models.operations.GetPaymentRequest;
@@ -87,6 +89,12 @@ public class MolliePaymentService implements PaymentProvider {
             return new RefundResult(refundId);
         } catch (PaymentException e) {
             throw e;
+        } catch (ClientError e) {
+            if (e.code() >= 400 && e.code() < 500) {
+                throw new PaymentRejectedException(
+                        "Mollie rejected refundPayment (HTTP " + e.code() + "): " + e.getMessage(), e);
+            }
+            throw new PaymentException("Mollie refundPayment failed: " + e.getMessage(), e);
         } catch (Exception e) {
             throw new PaymentException("Mollie refundPayment failed: " + e.getMessage(), e);
         }
