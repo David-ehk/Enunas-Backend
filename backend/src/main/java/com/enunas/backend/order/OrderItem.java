@@ -6,6 +6,7 @@ import jakarta.persistence.*;
 import lombok.*;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 
 /**
  * Line item in an Order. Owns its own price/variant snapshot — the variant FK is the only
@@ -150,6 +151,35 @@ public class OrderItem {
 
     @Column(precision = 10, scale = 2)
     private BigDecimal brandDiscountShare;     // net portion of the discount the brand absorbs
+
+    // --- Pre-shipment item cancellation (V36). A claim sets every field below except
+    // refundTransactionId; finalize sets refundTransactionId. See isCancelled / isCancellationSettled.
+    private LocalDateTime cancelledAt;
+
+    @Enumerated(EnumType.STRING)
+    private CancelReason cancellationReason;
+
+    @Column(length = 500)
+    private String cancellationNote;
+
+    private String cancelledByAdminEmail;
+
+    private Boolean cancellationIncludesShipping;
+
+    private String cancellationClaimKey;
+
+    @Column(length = 64)
+    private String refundTransactionId;
+
+    /** Withdrawn from fulfilment — claimed by an in-flight or stuck cancellation, or settled. */
+    public boolean isCancelled() {
+        return cancelledAt != null;
+    }
+
+    /** Cancelled and its refund recorded — the only state money checks may treat as refunded. */
+    public boolean isCancellationSettled() {
+        return refundTransactionId != null;
+    }
 
     // Convenience for ownership (no DB column - transient)
     public Long getBrandId() {
