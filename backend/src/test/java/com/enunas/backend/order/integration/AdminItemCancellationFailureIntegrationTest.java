@@ -154,6 +154,28 @@ class AdminItemCancellationFailureIntegrationTest extends AbstractItemCancellati
         assertThat(output).contains("ITEM_CANCEL_ABORTED_AFTER_SHIPMENT");
     }
 
+    /** Fix 3: reconcile RECORD must reject a refund id already recorded against a DIFFERENT claim
+     *  (typo/reuse) BEFORE writing anything for the claim being reconciled — otherwise the ledger
+     *  reversal is silently skipped while items/payment/stock still move, and the brand's balance is
+     *  permanently wrong with no error. */
+    @Test
+    void reconcileRecord_rejectsARefundIdAlreadyUsedByADifferentClaim() {
+        Fixture f = paidTwoBrandOrder(null);
+        assertThat(cancelItems(f.adminToken(), f.orderId(), List.of(f.a1())).getStatusCode().value()).isEqualTo(200);
+        String reusedRefundId = (String) itemRow(f.a1()).get("refund_transaction_id");
+        assertThat(reusedRefundId).isNotNull();
+        int reversalsBefore = reversals(f.orderId()).size();
+
+        claimViaJdbc(f.a2());
+        backdateClaim(f.a2());
+        ResponseEntity<Map> resp = reconcile(f.adminToken(), f.orderId(), claimKeyOf(f.a2()), "RECORD", reusedRefundId);
+
+        assertThat(resp.getStatusCode().value()).as("%s", resp.getBody()).isEqualTo(409);
+        assertThat(itemRow(f.a2()).get("refund_transaction_id")).isNull();
+        assertThat(stockOfItem(f.a2())).isEqualTo(4);
+        assertThat(reversals(f.orderId())).hasSize(reversalsBefore);
+    }
+
     @Test
     void reconcile_withForeignClaimKey_isRejected() {
         Fixture f = ambiguousClaimOnA1();

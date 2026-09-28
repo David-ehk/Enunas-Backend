@@ -290,6 +290,17 @@ public class LedgerService {
                 items.size(), order.getId(), brandId, payout);
     }
 
+    /**
+     * True if {@code refundId} already has a REFUND_REVERSAL ledger entry recorded — under ANY claim
+     * or return, not just the caller's. Used by manual reconciliation to catch a mistyped/reused
+     * refund id before it silently skips the reversal write (see
+     * {@link #recordItemCancellationReversal}'s own idempotency guard, which is correct for retries
+     * of the SAME claim but must not be relied on to catch a different claim reusing someone else's id).
+     */
+    public boolean isRefundAlreadyRecorded(String refundId) {
+        return ledgerRepository.existsByExternalReferenceIdAndEntryType(refundId, LedgerEntryType.REFUND_REVERSAL);
+    }
+
     /** A brand left with no active items never ships: reverse its whole shipping revenue. Idempotent. */
     @Transactional
     public void reverseShippingForEmptiedBrand(Order order, Long brandId, String refundId) {

@@ -1086,6 +1086,10 @@ public class OrderService {
     @PreAuthorize("hasRole('ADMIN')")
     @Transactional
     public OrderResponseDto updateOrderStatus(Long orderId, OrderStatus newStatus) {
+        if (newStatus == OrderStatus.CANCELLED) {
+            throw new IllegalArgumentException(
+                    "Cancelling via updateOrderStatus is not supported — use cancelOrder or cancelOrderItems.");
+        }
         Order order = findByIdForUpdate(orderId);
         OrderStatus current = order.getStatus();
 
@@ -1228,6 +1232,10 @@ public class OrderService {
             throw new IllegalStateException("Order " + order.getOrderNumber() + " cannot be cancelled — at least "
                     + "one brand has already shipped. Use a return/refund instead.");
         }
+        if (hasUnsettledItemCancellationClaim(order)) {
+            throw new IllegalStateException("Order " + order.getOrderNumber()
+                    + " has an item-level cancellation in progress — reconcile it before cancelling the whole order.");
+        }
         Payment payment = paymentRepository.findByOrderId(orderId).orElse(null);
         boolean wasPaid = payment != null && payment.getStatus() == PaymentStatus.PAID && payment.getPaidAt() != null;
         if (payment != null && payment.getStatus() == PaymentStatus.REFUNDED) {
@@ -1298,6 +1306,29 @@ public class OrderService {
                         + "issued and recorded; the order was NOT cancelled."
                     : "Order " + order.getOrderNumber() + " changed while it was being cancelled — nothing was "
                         + "changed.");
+        }
+
+        if (hasUnsettledItemCancellationClaim(order)) {
+            // An item-level cancellation claim was opened while this whole-order cancel's refund was in
+            // flight. Same shape as the shipped-race above: if the refund already happened, record it —
+            // otherwise the money is gone but nothing shows it — and leave the rest to reconciliation so
+            // the item claim's own refund doesn't collide with this one.
+            if (refundId != null) {
+                paymentRepository.findByOrderId(orderId).ifPresent(p -> {
+                    p.setStatus(PaymentStatus.REFUNDED);
+                    paymentRepository.save(p);
+                });
+                order.setRefundTransactionId(refundId);
+                orderRepository.save(order);
+                log.error("CANCEL_RACE_ITEM_CLAIM: order {} developed an item-level cancellation claim while "
+                        + "its refund was in flight; refund {} recorded, order NOT cancelled. Reconcile the "
+                        + "claim before retrying.", order.getOrderNumber(), refundId);
+            }
+            return CancelOutcome.blocked(refundId != null
+                    ? "Order " + order.getOrderNumber() + " developed an item-level cancellation claim while the "
+                        + "refund was in flight. The refund was issued and recorded; the order was NOT cancelled."
+                    : "Order " + order.getOrderNumber() + " has an item-level cancellation in progress — "
+                        + "reconcile it before cancelling the whole order.");
         }
 
         order.setCancellationReason(dto.getReason());
@@ -1667,6 +1698,13 @@ public class OrderService {
     private boolean anyBrandHasShipped(Order order) {
         return orderShipmentRepository.findByOrder_IdOrderByIdAsc(order.getId()).stream()
                 .anyMatch(s -> s.getStatus() == ShipmentStatus.SHIPPED);
+    }
+
+    /** True if any item on this order has an in-flight or stuck per-item cancellation claim (claimed,
+     *  refund not yet recorded) — the whole-order cancel must not proceed until that settles or is
+     *  reconciled, or it would double-refund/double-reverse. */
+    private boolean hasUnsettledItemCancellationClaim(Order order) {
+        return order.getItems().stream().anyMatch(i -> i.isCancelled() && !i.isCancellationSettled());
     }
 
     private void assertOwnership(Order order, User buyer) {

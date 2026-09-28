@@ -195,7 +195,12 @@ public class OrderItemCancellationService {
             }
             return refundId;
         } catch (PaymentRejectedException e) {
-            transactionTemplate.executeWithoutResult(s -> releaseClaim(orderId, claim.claimKey()));
+            try {
+                transactionTemplate.executeWithoutResult(s -> releaseClaim(orderId, claim.claimKey()));
+            } catch (RuntimeException releaseFailure) {
+                log.error("ITEM_CANCEL_RELEASE_FAILED: order {} claim {} — provider rejected the refund but releasing "
+                                + "the claim also failed: {}", claim.orderNumber(), claim.claimKey(), releaseFailure.getMessage());
+            }
             throw new PaymentException("The payment provider rejected the refund — the items were NOT cancelled: "
                     + e.getMessage(), e);
         } catch (RuntimeException e) {
@@ -214,6 +219,10 @@ public class OrderItemCancellationService {
         List<OrderItem> items = claimItems(order, claimKey);
         if (items.stream().anyMatch(OrderItem::isCancellationSettled)) {
             throw new IllegalStateException("Claim " + claimKey + " is already settled.");
+        }
+        if (ledgerService.isRefundAlreadyRecorded(refundId)) {
+            throw new IllegalStateException("Refund id " + refundId + " is already recorded against a different "
+                    + "cancellation or return — check for a typo before reconciling claim " + claimKey + ".");
         }
         Long brandId = items.get(0).getBrandId();
 
