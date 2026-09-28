@@ -248,14 +248,66 @@ public class LedgerService {
     }
 
     /**
+     * Pre-shipment item cancellation: reverses exactly these items' own product entries — no
+     * fraction, no proration. Contrast {@link #recordRefund(Order, Long, BigDecimal, String)}, which
+     * prorates across every item of the brand. Idempotent per {@code refundId}.
+     */
+    @Transactional
+    public void recordItemCancellationReversal(Order order, List<OrderItem> items, String refundId) {
+        if (ledgerRepository.existsByExternalReferenceIdAndEntryType(refundId, LedgerEntryType.REFUND_REVERSAL)) {
+            log.warn("LedgerService: REFUND_REVERSAL already recorded for externalRefundId={}; skipping", refundId);
+            return;
+        }
+        Long brandId = items.get(0).getBrandId();
+        BigDecimal fee = BigDecimal.ZERO, vat = BigDecimal.ZERO, payout = BigDecimal.ZERO;
+        for (OrderItem item : items) {
+            fee = fee.add(nz(item.getCommissionNet()));
+            vat = vat.add(nz(item.getCommissionVat()));
+            payout = payout.add(nz(item.getBrandPayoutAmount()));
+        }
+        List<LedgerEntry> originals = ledgerRepository.findActivePaymentEntriesByOrderAndBrand(order.getId(), brandId);
+
+        ledgerRepository.save(LedgerEntry.builder()
+                .orderId(order.getId())
+                .orderItemId(items.get(0).getId())
+                .brandPartnerId(brandId)
+                .totalAmount(fee.add(vat).add(payout).negate())
+                .platformFee(fee.negate())
+                .brandPayout(payout.negate())
+                .commissionNet(fee.negate())
+                .commissionVat(vat.negate())
+                .commissionRate(items.get(0).getCommissionRate())
+                .currency(order.getCurrency())
+                .entryType(LedgerEntryType.REFUND_REVERSAL)
+                .status(LedgerEntryStatus.REVERSED)
+                .payoutEligibleAt(LocalDateTime.now())
+                .movedToAvailable(false)
+                .reversalOfEntryId(originals.isEmpty() ? null : originals.get(0).getId())
+                .externalReferenceId(refundId)
+                .build());
+        applyBrandDebit(brandId, payout);
+        log.info("LedgerService: reversed {} cancelled item(s) exactly for orderId={} brandId={} payout={}",
+                items.size(), order.getId(), brandId, payout);
+    }
+
+    /** A brand left with no active items never ships: reverse its whole shipping revenue. Idempotent. */
+    @Transactional
+    public void reverseShippingForEmptiedBrand(Order order, Long brandId, String refundId) {
+        if (ledgerRepository.existsByExternalReferenceIdAndEntryType(shippingRef(refundId), LedgerEntryType.REFUND_REVERSAL)) {
+            log.warn("LedgerService: shipping REFUND_REVERSAL already recorded for externalRefundId={}; skipping", refundId);
+            return;
+        }
+        reverseShippingEntries(order, brandId, BigDecimal.ONE, refundId);
+    }
+
+    /**
      * Reverses ORDER_PAYMENT entries for one brand at the given fraction — the product/commission
      * side of a refund. Never touches SHIPPING_REVENUE entries; see {@link #reverseShippingEntries}.
      */
     private void reverseProductEntries(Order order, Long brandId, BigDecimal fraction, String externalRefundId) {
         BigDecimal fee = BigDecimal.ZERO, vat = BigDecimal.ZERO, payout = BigDecimal.ZERO;
         BigDecimal rate = null;
-        for (OrderItem item : order.getItems()) {
-            if (!brandId.equals(item.getBrandId())) continue;
+        for (OrderItem item : unreversedItemsOf(order, brandId)) {
             BigDecimal itemRate = item.getCommissionRate() != null
                     ? item.getCommissionRate() : resolveBrandRate(brandId);
             BigDecimal itemFee = item.getCommissionNet() != null
@@ -392,17 +444,31 @@ public class LedgerService {
         return fraction;
     }
 
-    /** @return that brand's summed lineGross, or {@code null} if the order has no items for that brand. */
+    /**
+     * A brand's items whose product entries are not yet reversed. A cancellation-settled item was
+     * already reversed exactly by {@link #recordItemCancellationReversal}; the pro-rata basis
+     * ({@link #brandProductGross}) and the pro-rata sum ({@link #reverseProductEntries}) must BOTH skip
+     * it, or a later return on the same brand reverses the wrong amount (spec D22).
+     */
+    private List<OrderItem> unreversedItemsOf(Order order, Long brandId) {
+        return order.getItems().stream()
+                .filter(i -> brandId.equals(i.getBrandId()) && !i.isCancellationSettled())
+                .toList();
+    }
+
+    private static BigDecimal nz(BigDecimal v) {
+        return v != null ? v : BigDecimal.ZERO;
+    }
+
+    /** @return the summed lineGross of the brand's not-yet-reversed items, or {@code null} if there are none. */
     private BigDecimal brandProductGross(Order order, Long brandId) {
-        boolean found = false;
+        List<OrderItem> items = unreversedItemsOf(order, brandId);
+        if (items.isEmpty()) return null;
         BigDecimal gross = BigDecimal.ZERO;
-        for (OrderItem item : order.getItems()) {
-            if (!brandId.equals(item.getBrandId())) continue;
-            found = true;
-            BigDecimal lineGross = item.getLineGross() != null ? item.getLineGross() : item.getLineTotal();
-            gross = gross.add(lineGross);
+        for (OrderItem item : items) {
+            gross = gross.add(item.getLineGross() != null ? item.getLineGross() : item.getLineTotal());
         }
-        return found ? gross : null;
+        return gross;
     }
 
     /**
