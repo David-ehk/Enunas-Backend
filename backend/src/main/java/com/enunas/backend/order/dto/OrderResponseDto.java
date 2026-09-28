@@ -103,7 +103,7 @@ public class OrderResponseDto {
                 .status(order.getStatus())
                 .shippingAddress(order.getShippingAddress())
                 .items(order.getItems().stream()
-                        .map(item -> OrderItemResponseDto.from(item, resolver))
+                        .map(item -> OrderItemResponseDto.withRefundDetails(item, resolver))
                         .toList())
                 .subtotal(order.getSubtotal())
                 .shippingTotal(order.getShippingTotal())
