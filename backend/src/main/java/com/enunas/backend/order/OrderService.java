@@ -102,6 +102,7 @@ public class OrderService {
     private final OrderShippingSnapshotRepository orderShippingSnapshotRepository;
     private final OrderShipmentRepository orderShipmentRepository;
     private final TransactionTemplate transactionTemplate;
+    private final jakarta.persistence.EntityManager entityManager;
     private final MediaUrlResolver mediaUrlResolver;
 
     @Value("${app.frontend.base-url}")
@@ -661,8 +662,9 @@ public class OrderService {
     @PreAuthorize("hasRole('BRAND_PARTNER')")
     @Transactional
     public OrderResponseDto confirmShipment(Long orderId, ShipmentConfirmationDto dto, User brandPartner) {
-        Order order = findById(orderId);
+        Order order = findByIdForUpdate(orderId);
         BrandPartner brand = resolveOwnBrand(order, brandPartner);
+        assertBrandHasActiveItems(order, brand);
 
         OrderShipment shipment = resolveOrCreateShipment(order, brand);
         if (shipment.getStatus() == ShipmentStatus.SHIPPED) {
@@ -698,8 +700,9 @@ public class OrderService {
     @PreAuthorize("hasRole('BRAND_PARTNER')")
     @Transactional
     public OrderResponseDto reportShippingProblem(Long orderId, ShippingProblemDto dto, User brandPartner) {
-        Order order = findById(orderId);
+        Order order = findByIdForUpdate(orderId);
         BrandPartner brand = resolveOwnBrand(order, brandPartner);
+        assertBrandHasActiveItems(order, brand);
 
         OrderShipment shipment = resolveOrCreateShipment(order, brand);
         if (shipment.getStatus() == ShipmentStatus.SHIPPED) {
@@ -719,6 +722,16 @@ public class OrderService {
         log.warn("BrandPartner {} reported a shipping problem for their items on order {}: {}",
                 brandPartner.getEmail(), order.getOrderNumber(), dto.getDescription());
         return toBrandScopedDto(saved, brandPartner, loadRelations(List.of(saved)));
+    }
+
+    /** A brand whose every item on this order was cancelled has nothing to ship or report on (spec D18). */
+    private void assertBrandHasActiveItems(Order order, BrandPartner brand) {
+        boolean anyActive = order.getItems().stream()
+                .anyMatch(i -> brand.getId().equals(i.getBrandId()) && !i.isCancelled());
+        if (!anyActive) {
+            throw new IllegalStateException("All of " + brand.getBrandName() + "'s items on order "
+                    + order.getOrderNumber() + " were cancelled — there is nothing to ship.");
+        }
     }
 
     /**
@@ -745,7 +758,7 @@ public class OrderService {
                 // order would tell the customer that items still sitting at another brand are on
                 // their way.
                 order.getItems().stream()
-                        .filter(item -> brand.getId().equals(item.getBrandId()))
+                        .filter(item -> brand.getId().equals(item.getBrandId()) && !item.isCancelled())
                         .map(item -> new OrderItemLine(item.getProductSnapshotName(),
                                 item.getVariantSnapshotColor(), item.getVariantSnapshotSize(),
                                 item.getQuantity(), null))
@@ -935,6 +948,13 @@ public class OrderService {
 
         try {
             transactionTemplate.executeWithoutResult(status -> {
+                // Unlike cancelOrder's persistCancellation and RefundPersistenceHelper.persist — the
+                // other two refund call sites, which read/validate BEFORE their uncontrolled Mollie
+                // call and only take the row lock AFTER it (so a concurrent writer could slip in
+                // between and make that pre-refund read stale) — this method takes findByIdForUpdate's
+                // lock, and recordPaymentForCancelledOrder's PAID/REFUNDED early-return, BEFORE the
+                // Mollie call above. There is no window in which a stale read could be trusted after
+                // the refund completes, so no StaleSessionGuard is needed here.
                 Order locked = orderRepository.findByIdForUpdate(orderId).orElseThrow();
                 paymentRepository.findByOrderId(orderId).ifPresent(p -> {
                     p.setStatus(PaymentStatus.REFUNDED);
@@ -943,6 +963,7 @@ public class OrderService {
                 String note = locked.getCancellationNote() == null ? AUTO_REFUNDED + " " + refundId
                         : locked.getCancellationNote().replaceFirst(REFUND_REQUIRED, AUTO_REFUNDED + " " + refundId);
                 locked.setCancellationNote(truncateNote(note));
+                locked.setRefundTransactionId(refundId);
                 orderRepository.save(locked);
             });
         } catch (Exception e) {
@@ -1059,7 +1080,7 @@ public class OrderService {
     @PreAuthorize("hasRole('ADMIN')")
     @Transactional
     public OrderResponseDto updateOrderStatus(Long orderId, OrderStatus newStatus) {
-        Order order = findById(orderId);
+        Order order = findByIdForUpdate(orderId);
         OrderStatus current = order.getStatus();
 
         // Idempotent: already in target state — return without side effects (CB-3).
@@ -1086,28 +1107,6 @@ public class OrderService {
                 p.setPaidAt(LocalDateTime.now());
                 paymentRepository.save(p);
             });
-        }
-
-        // Restore stock when cancelling any post-payment order (CB-6 fix).
-        boolean postPaymentCancel = newStatus == OrderStatus.CANCELLED &&
-                (current == OrderStatus.PAID ||
-                 current == OrderStatus.SHIPPING_PROBLEM ||
-                 current == OrderStatus.AWAITING_ADMIN ||
-                 current == OrderStatus.MANUAL_REVIEW);
-        // Cancelling restores stock for EVERY item and reverses the whole order's ledger — which is
-        // wrong once goods are physically out the door. Escalation states are reachable from
-        // PARTIALLY_SHIPPED, so without this an admin could escalate a part-shipped order and then
-        // cancel it, restoring stock for items a brand already dispatched. Same reasoning that
-        // keeps CANCELLED off SHIPPED and PARTIALLY_SHIPPED in validateForwardTransition; a return
-        // or refund is the correct instrument once anything has shipped.
-        if (newStatus == OrderStatus.CANCELLED && anyBrandHasShipped(order)) {
-            throw new IllegalStateException(
-                    "Order " + order.getOrderNumber() + " cannot be cancelled — at least one brand has "
-                    + "already shipped. Use a return/refund instead.");
-        }
-
-        if (postPaymentCancel) {
-            restoreVariantStock(order);
         }
 
         // First (and only) time this order reaches DELIVERED — anchors the 14-day Widerruf window.
@@ -1141,14 +1140,6 @@ public class OrderService {
             ledgerService.recordOrderPayment(saved);
             ledgerService.recordShippingRevenue(saved,
                     orderShippingSnapshotRepository.findByOrderIdOrderByIdAsc(saved.getId()));
-        }
-
-        // Reverse brand ledger entries when a post-payment order is cancelled. The discount code
-        // (if any) is released here too — a cancelled order no longer has a discounted sale to its
-        // name, so the usage it reserved at checkout must go back.
-        if (postPaymentCancel) {
-            ledgerService.recordRefund(saved, saved.getTotal(), "ADMIN_CANCEL_" + saved.getId());
-            releaseDiscountUsageOnce(saved);
         }
 
         return withPaymentId(OrderResponseDto.from(saved, mediaUrlResolver), saved.getId());
@@ -1258,6 +1249,10 @@ public class OrderService {
 
     private CancelOutcome persistCancellation(Long orderId, CancelOrderDto dto, User admin,
                                               boolean wasPaid, String refundId) {
+        // See StaleSessionGuard: phase 1 has committed and its entities are still managed here, so
+        // without this a lock query below could hand back those stale instances (lock taken, fields
+        // not refreshed) instead of the current row.
+        StaleSessionGuard.clear(entityManager);
         Order order = orderRepository.findByIdForUpdate(orderId)
                 .orElseThrow(() -> new OrderNotFoundException("Order not found with id: " + orderId));
 
@@ -1429,7 +1424,7 @@ public class OrderService {
                     payment.getTransactionId(),
                     amount,
                     "Refund for return " + returnNumber + " (order " + order.getOrderNumber() + ")",
-                    null)).refundId();
+                    "return-refund-" + returnNumber)).refundId();
         } catch (Exception e) {
             log.error("Refund failed for return {}: {}", returnNumber, e.getMessage());
             throw new PaymentException("Could not process refund: " + e.getMessage(), e);
@@ -1811,6 +1806,7 @@ public class OrderService {
     private Map<Long, BrandPartner> brandsOnOrder(Order order) {
         Map<Long, BrandPartner> brands = new LinkedHashMap<>();
         for (OrderItem item : order.getItems()) {
+            if (item.isCancelled()) continue; // nothing left to ship for it (spec D9)
             BrandPartner brand = item.getVariant().getProduct().getBrand();
             if (brand != null && brand.getId() != null) {
                 brands.putIfAbsent(brand.getId(), brand);
@@ -1821,6 +1817,14 @@ public class OrderService {
 
     private Order findById(Long id) {
         return orderRepository.findById(id)
+                .orElseThrow(() -> new OrderNotFoundException("Order not found with id: " + id));
+    }
+
+    /** Same as {@link #findById}, but holds the orders row lock until the transaction ends. Every
+     *  writer that decides from item cancellation state takes this lock, so it serialises with
+     *  OrderItemCancellationService's claim (spec D23). */
+    private Order findByIdForUpdate(Long id) {
+        return orderRepository.findByIdForUpdate(id)
                 .orElseThrow(() -> new OrderNotFoundException("Order not found with id: " + id));
     }
 
