@@ -18,15 +18,19 @@ import com.enunas.backend.brandpartner.dto.BrandPartnerResponseDto;
 import com.enunas.backend.customer.CustomerService;
 import com.enunas.backend.customer.dto.CustomerResponseDto;
 import com.enunas.backend.customer.dto.UpdateCustomerProfileDto;
+import com.enunas.backend.order.CancelReason;
+import com.enunas.backend.order.OrderItemCancellationService;
 import com.enunas.backend.order.OrderService;
 import com.enunas.backend.order.OrderStatus;
 import com.enunas.backend.order.dto.CancelOrderDto;
+import com.enunas.backend.order.dto.CancelOrderItemsDto;
 import com.enunas.backend.order.dto.OrderResponseDto;
 import com.enunas.backend.order.dto.ReturnRequestDto;
 import com.enunas.backend.product.dto.UpdateProductDto;
 import com.enunas.backend.user.User;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
@@ -46,12 +50,14 @@ import java.math.BigDecimal;
 @RequestMapping("/admin")
 @RequiredArgsConstructor
 @PreAuthorize("hasRole('ADMIN')")
+@Slf4j
 public class AdminController {
 
     private final AdminService adminService;
     private final CustomerService customerService;
     private final OrderService orderService;
     private final BrandPartnerService brandPartnerService;
+    private final OrderItemCancellationService orderItemCancellationService;
 
     // ===== Brand-partner moderation =====
 
@@ -251,7 +257,20 @@ public class AdminController {
     @PatchMapping("/orders/{orderId}/status")
     public ResponseEntity<OrderResponseDto> updateOrderStatus(
             @PathVariable Long orderId,
-            @RequestParam OrderStatus status) {
+            @RequestParam OrderStatus status,
+            @AuthenticationPrincipal User admin) {
+        if (status == OrderStatus.CANCELLED) {
+            // DEPRECATED: one release only. Cancelling needs a refund, an admin identity and a
+            // reason, none of which this endpoint carries — delegate to the real cancel endpoint's
+            // service method so the money is right whichever route the caller uses, then remove
+            // this branch once callers have migrated to POST /admin/orders/{orderId}/cancel.
+            log.warn("DEPRECATED_CANCEL_PATH: order {} cancelled via PATCH status — use POST /admin/orders/{}/cancel",
+                    orderId, orderId);
+            CancelOrderDto dto = new CancelOrderDto();
+            dto.setReason(CancelReason.OTHER);
+            dto.setNote("via deprecated PATCH");
+            return ResponseEntity.ok(orderService.cancelOrder(orderId, dto, admin));
+        }
         return ResponseEntity.ok(orderService.updateOrderStatus(orderId, status));
     }
 
@@ -261,6 +280,14 @@ public class AdminController {
             @Valid @RequestBody CancelOrderDto dto,
             @AuthenticationPrincipal User admin) {
         return ResponseEntity.ok(orderService.cancelOrder(orderId, dto, admin));
+    }
+
+    @PostMapping("/orders/{orderId}/cancel-items")
+    public ResponseEntity<OrderResponseDto> cancelOrderItems(
+            @PathVariable Long orderId,
+            @Valid @RequestBody CancelOrderItemsDto dto,
+            @AuthenticationPrincipal User admin) {
+        return ResponseEntity.ok(orderItemCancellationService.cancelItems(orderId, dto, admin));
     }
 
     // ===== Returns — addressed per brand. An order spanning several brands has one return per

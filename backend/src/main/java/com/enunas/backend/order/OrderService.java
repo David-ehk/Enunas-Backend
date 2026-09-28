@@ -1701,8 +1701,11 @@ public class OrderService {
      * moved into a RETURN_-prefixed status, REFUNDED, or CANCELLED, or an admin's own order-wide
      * SHIPPING_PROBLEM/AWAITING_ADMIN/MANUAL_REVIEW escalation, is left untouched — those remain a deliberate,
      * order-wide admin lever, never overridden by one brand's local shipment event.
+     *
+     * <p>Public so OrderItemCancellationService can re-run the rollup after a cancellation empties a
+     * brand (spec D27); it only ever moves forward, so a re-run is always safe.
      */
-    private Order syncShipmentStatus(Order order) {
+    public Order syncShipmentStatus(Order order) {
         if (shippingPhaseRank(order.getStatus()) < 0) return order;
 
         Set<Long> orderBrandIds = brandsOnOrder(order).keySet();

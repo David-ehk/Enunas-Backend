@@ -123,4 +123,10 @@ abstract class AbstractItemCancellationIntegrationTest extends AbstractDiscountI
         return jdbc.queryForObject("SELECT amount FROM order_shipping_snapshots "
                 + "WHERE order_id = ? AND brand_partner_id = ?", BigDecimal.class, orderId, brandId);
     }
+
+    protected ResponseEntity<Map> cancelItems(String adminToken, long orderId, List<Long> itemIds) {
+        return rest.exchange("/admin/orders/" + orderId + "/cancel-items", HttpMethod.POST,
+                new HttpEntity<>(Map.of("orderItemIds", itemIds, "reason", "OUT_OF_STOCK",
+                        "note", "brand cannot fulfil"), auth(adminToken)), Map.class);
+    }
 }
