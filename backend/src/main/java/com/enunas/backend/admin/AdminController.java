@@ -25,6 +25,7 @@ import com.enunas.backend.order.OrderStatus;
 import com.enunas.backend.order.dto.CancelOrderDto;
 import com.enunas.backend.order.dto.CancelOrderItemsDto;
 import com.enunas.backend.order.dto.OrderResponseDto;
+import com.enunas.backend.order.dto.ReconcileItemCancellationDto;
 import com.enunas.backend.order.dto.ReturnRequestDto;
 import com.enunas.backend.product.dto.UpdateProductDto;
 import com.enunas.backend.user.User;
@@ -288,6 +289,14 @@ public class AdminController {
             @Valid @RequestBody CancelOrderItemsDto dto,
             @AuthenticationPrincipal User admin) {
         return ResponseEntity.ok(orderItemCancellationService.cancelItems(orderId, dto, admin));
+    }
+
+    @PostMapping("/orders/{orderId}/cancel-items/reconcile")
+    public ResponseEntity<OrderResponseDto> reconcileItemCancellation(
+            @PathVariable Long orderId,
+            @Valid @RequestBody ReconcileItemCancellationDto dto,
+            @AuthenticationPrincipal User admin) {
+        return ResponseEntity.ok(orderItemCancellationService.reconcile(orderId, dto, admin));
     }
 
     // ===== Returns — addressed per brand. An order spanning several brands has one return per

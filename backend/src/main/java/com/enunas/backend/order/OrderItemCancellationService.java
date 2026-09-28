@@ -8,6 +8,7 @@ import com.enunas.backend.exception.PaymentRejectedException;
 import com.enunas.backend.ledger.LedgerService;
 import com.enunas.backend.order.dto.CancelOrderItemsDto;
 import com.enunas.backend.order.dto.OrderResponseDto;
+import com.enunas.backend.order.dto.ReconcileItemCancellationDto;
 import com.enunas.backend.payment.Payment;
 import com.enunas.backend.payment.PaymentProvider;
 import com.enunas.backend.payment.PaymentRepository;
@@ -86,6 +87,41 @@ public class OrderItemCancellationService {
             throw e;
         }
         return orderService.getOrderById(orderId);
+    }
+
+    /**
+     * Resolves a stuck claim by an admin's explicit decision, never automatically and never by a
+     * second Mollie call (spec D26). RECORD settles with a refund the admin found at Mollie; RELEASE
+     * frees the items when the admin confirmed no refund exists.
+     */
+    @PreAuthorize("hasRole('ADMIN')")
+    public OrderResponseDto reconcile(Long orderId, ReconcileItemCancellationDto dto, User admin) {
+        boolean record = dto.getAction() == ReconcileItemCancellationDto.Action.RECORD;
+        if (record && (dto.getRefundId() == null || dto.getRefundId().isBlank())) {
+            throw new IllegalArgumentException("RECORD needs the refund id from Mollie.");
+        }
+        transactionTemplate.executeWithoutResult(s -> {
+            assertStuck(orderId, dto.getClaimKey());
+            if (record) {
+                finalizeClaim(orderId, dto.getClaimKey(), dto.getRefundId());
+            } else {
+                releaseClaim(orderId, dto.getClaimKey());
+            }
+        });
+        log.warn("ITEM_CANCEL_RECONCILED: admin {} {} claim {} on order {}{}", admin.getEmail(), dto.getAction(),
+                dto.getClaimKey(), orderId, record ? " with refund " + dto.getRefundId() : "");
+        return orderService.getOrderById(orderId);
+    }
+
+    private void assertStuck(Long orderId, String claimKey) {
+        List<OrderItem> items = claimItems(lock(orderId), claimKey);
+        if (items.stream().anyMatch(OrderItem::isCancellationSettled)) {
+            throw new IllegalStateException("Claim " + claimKey + " is already settled — nothing to reconcile.");
+        }
+        if (items.get(0).getCancelledAt().isAfter(LocalDateTime.now().minus(STUCK_AFTER))) {
+            throw new IllegalStateException("Claim " + claimKey + " is still in progress — reconcile only after "
+                    + STUCK_AFTER.toMinutes() + " minutes.");
+        }
     }
 
     private Claim claim(Long orderId, CancelOrderItemsDto dto, User admin) {

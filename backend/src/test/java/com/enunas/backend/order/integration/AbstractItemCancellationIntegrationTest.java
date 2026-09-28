@@ -129,4 +129,18 @@ abstract class AbstractItemCancellationIntegrationTest extends AbstractDiscountI
                 new HttpEntity<>(Map.of("orderItemIds", itemIds, "reason", "OUT_OF_STOCK",
                         "note", "brand cannot fulfil"), auth(adminToken)), Map.class);
     }
+
+    protected ResponseEntity<Map> reconcile(String adminToken, long orderId, String claimKey, String action,
+                                            String refundId) {
+        Map<String, Object> body = new java.util.HashMap<>();
+        body.put("claimKey", claimKey);
+        body.put("action", action);
+        if (refundId != null) body.put("refundId", refundId);
+        return rest.exchange("/admin/orders/" + orderId + "/cancel-items/reconcile", HttpMethod.POST,
+                new HttpEntity<>(body, auth(adminToken)), Map.class);
+    }
+
+    protected String claimKeyOf(long itemId) {
+        return jdbc.queryForObject("SELECT cancellation_claim_key FROM order_items WHERE id = ?", String.class, itemId);
+    }
 }
