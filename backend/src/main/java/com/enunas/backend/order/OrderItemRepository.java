@@ -22,7 +22,8 @@ public interface OrderItemRepository extends JpaRepository<OrderItem, Long> {
 
     /**
      * Line items of a brand's completed sales (not PENDING/CANCELLED) whose order falls in the
-     * period [startUtc, endUtc). Backs the §22f export — one row per supplied item.
+     * period [startUtc, endUtc). Backs the §22f export — one row per supplied item. Cancelled items
+     * (spec D20) are excluded — nothing was delivered.
      */
     @Query("""
             SELECT oi FROM OrderItem oi
@@ -33,6 +34,7 @@ public interface OrderItemRepository extends JpaRepository<OrderItem, Long> {
               AND o.status <> com.enunas.backend.order.OrderStatus.PENDING
               AND o.status <> com.enunas.backend.order.OrderStatus.CANCELLED
               AND o.createdAt >= :startUtc AND o.createdAt < :endUtc
+              AND oi.cancelledAt IS NULL
             ORDER BY o.createdAt ASC, oi.id ASC
             """)
     List<OrderItem> findVat22fLineItems(@Param("brandId") Long brandId,

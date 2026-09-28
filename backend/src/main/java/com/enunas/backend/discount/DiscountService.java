@@ -7,6 +7,7 @@ import com.enunas.backend.discount.DiscountApplication.ItemShare;
 import com.enunas.backend.discount.dto.CreateDiscountDto;
 import com.enunas.backend.discount.dto.DiscountResponseDto;
 import com.enunas.backend.discount.dto.UpdateDiscountDto;
+import com.enunas.backend.order.Order;
 import com.enunas.backend.order.OrderItem;
 import com.enunas.backend.user.User;
 import lombok.RequiredArgsConstructor;
@@ -216,6 +217,16 @@ public class DiscountService {
                     }
                 },
                 () -> log.warn("DiscountService: releaseUsage found no code for {}", rawCode));
+    }
+
+    /**
+     * Releases the order's reserved code usage exactly once, guarded by
+     * {@code Order.discountUsageReleased}. The caller persists {@code order}.
+     */
+    public void releaseUsageOnce(Order order) {
+        if (order.getDiscountCode() == null || order.isDiscountUsageReleased()) return;
+        releaseUsage(order.getDiscountCode());
+        order.setDiscountUsageReleased(true);
     }
 
     // ===== Private helpers =====

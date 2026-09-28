@@ -545,16 +545,22 @@ public class OrderService {
             }
         }
 
-        // Which items is the customer returning? (null orderItemId = the whole order.)
+        // Which items is the customer returning? (null orderItemId = the whole order.) Cancelled items
+        // never shipped and were refunded already — never returnable (spec D19).
         List<OrderItem> requested;
         if (dto.orderItemId() == null) {
-            requested = new ArrayList<>(order.getItems());
+            requested = order.getItems().stream().filter(i -> !i.isCancelled()).toList();
         } else {
-            requested = List.of(order.getItems().stream()
+            OrderItem item = order.getItems().stream()
                     .filter(i -> i.getId().equals(dto.orderItemId()))
                     .findFirst()
                     .orElseThrow(() -> new IllegalArgumentException(
-                            "OrderItem " + dto.orderItemId() + " does not belong to this order")));
+                            "OrderItem " + dto.orderItemId() + " does not belong to this order"));
+            if (item.isCancelled()) {
+                throw new IllegalStateException("OrderItem " + item.getId()
+                        + " was cancelled before shipment — it cannot be returned.");
+            }
+            requested = List.of(item);
         }
 
         // Guard per ITEM, not per order. The old order-wide guard meant returning one brand's item
@@ -1151,9 +1157,7 @@ public class OrderService {
      * for it (cancel, auto-expiry, full refund).
      */
     private void releaseDiscountUsageOnce(Order order) {
-        if (order.getDiscountCode() == null || order.isDiscountUsageReleased()) return;
-        discountService.releaseUsage(order.getDiscountCode());
-        order.setDiscountUsageReleased(true);
+        discountService.releaseUsageOnce(order);
         orderRepository.save(order);
     }
 
@@ -1549,7 +1553,7 @@ public class OrderService {
         if (returns.isEmpty()) return order;
 
         boolean allRefunded = returns.stream().allMatch(r -> r.getStatus() == ReturnStatus.REFUNDED);
-        if (allRefunded && allItemsReturned(order, returns)) {
+        if (allRefunded && ReturnCoverage.allItemsCovered(order, returns)) {
             order.setStatus(OrderStatus.REFUNDED);
             return order;
         }
@@ -1565,14 +1569,6 @@ public class OrderService {
             case REFUNDED  -> OrderStatus.RETURN_RECEIVED; // refunded but not all items covered
         });
         return order;
-    }
-
-    private boolean allItemsReturned(Order order, List<ReturnOrder> returns) {
-        Set<Long> returned = returns.stream()
-                .flatMap(r -> r.getItems().stream())
-                .map(ri -> ri.getOrderItem().getId())
-                .collect(Collectors.toSet());
-        return order.getItems().stream().allMatch(i -> returned.contains(i.getId()));
     }
 
     // ===== Private helpers =====
