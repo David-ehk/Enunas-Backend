@@ -119,7 +119,7 @@ public class Order {
 
     /** True the moment any brand on this order has reported a shipping problem via
      *  {@link OrderService#reportShippingProblem} — independent of {@link #status}, which stays an
-     *  honest per-brand shipment rollup (see {@link OrderService#syncShipmentStatus}) and must never
+     *  honest per-brand shipment rollup (see {@link OrderShipmentRollup#syncShipmentStatus}) and must never
      *  be faked into SHIPPING_PROBLEM by one brand's local issue on a multi-brand order. Never
      *  cleared automatically — an admin resolving the underlying per-brand problem doesn't retroactively
      *  erase that this order once needed attention. */
@@ -173,6 +173,16 @@ public class Order {
 
     public List<OrderItem> getItems() {
         return items == null ? List.of() : Collections.unmodifiableList(items);
+    }
+
+    /** This brand's items that no cancellation claim has withdrawn. */
+    public List<OrderItem> activeItemsOf(Long brandId) {
+        return getItems().stream().filter(i -> brandId.equals(i.getBrandId()) && !i.isCancelled()).toList();
+    }
+
+    /** True if any item has a claim whose refund is not recorded yet (in flight or stuck). */
+    public boolean hasUnsettledCancellationClaim() {
+        return getItems().stream().anyMatch(i -> i.cancellationState() == OrderItem.CancellationState.PENDING);
     }
 
     public void addItem(OrderItem item) {

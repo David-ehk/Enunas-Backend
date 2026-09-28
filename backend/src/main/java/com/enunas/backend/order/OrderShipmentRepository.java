@@ -23,4 +23,8 @@ public interface OrderShipmentRepository extends JpaRepository<OrderShipment, Lo
     /** The find-or-create lookup {@link OrderService} uses before recording a brand's own
      *  ship/problem event — at most one row per (order, brand), enforced by the DB unique index. */
     Optional<OrderShipment> findByOrder_IdAndBrand_Id(Long orderId, Long brandId);
+
+    default boolean brandShipped(Long orderId, Long brandId) {
+        return findByOrder_IdAndBrand_Id(orderId, brandId).map(s -> s.getStatus() == ShipmentStatus.SHIPPED).orElse(false);
+    }
 }

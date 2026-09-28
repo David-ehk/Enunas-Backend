@@ -6,6 +6,7 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
 
 @Slf4j
 @Component
@@ -15,13 +16,15 @@ public class MockPaymentStore {
     private final ConcurrentHashMap<String, MockPayment> payments = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, String> refundIdsByKey = new ConcurrentHashMap<>();
 
-    /** Returns the refundId already issued for this key, or null. */
-    public String refundIdForKey(String key) {
-        return key == null ? null : refundIdsByKey.get(key);
-    }
-
-    public void rememberRefundKey(String key, String refundId) {
-        if (key != null) refundIdsByKey.put(key, refundId);
+    /**
+     * Atomically replays the refundId already stored for {@code key}, or mints and stores a new one
+     * via {@code mint} when none exists yet. A separate get-then-put (a lookup call followed by a
+     * store call) is a race: two genuinely concurrent callers can both see no existing key and each
+     * mint their own id. {@link ConcurrentHashMap#computeIfAbsent} makes the check-and-set a single
+     * atomic operation, so only one caller ever mints.
+     */
+    public String replayOrMint(String key, Supplier<String> mint) {
+        return refundIdsByKey.computeIfAbsent(key, k -> mint.get());
     }
 
     /** Clears all mock provider state. Tests truncate the DB with RESTART IDENTITY, so without this

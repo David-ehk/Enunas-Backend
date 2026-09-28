@@ -82,6 +82,13 @@ public class ReturnOrder {
     @Column(nullable = false)
     private ReturnStatus status = ReturnStatus.REQUESTED;
 
+    /**
+     * Unlike {@code Order}/{@code Payment}, this had no optimistic-lock column at all until V35 —
+     * see RefundPersistenceHelper.persist()'s javadoc for the stale-read bug that gap allowed.
+     */
+    @Version
+    private Long version;
+
     @Enumerated(EnumType.STRING)
     private ReturnReason reason;
 

@@ -167,6 +167,11 @@ public class BrandPartner {
         return id != null && id.equals(other.id);
     }
 
+    /** Where brand-facing notices go: the contact email, else the owner's login email. */
+    public String notificationEmail() {
+        return contactEmail != null ? contactEmail : (user != null ? user.getEmail() : null);
+    }
+
     @Override
     public int hashCode() {
         return getClass().hashCode();

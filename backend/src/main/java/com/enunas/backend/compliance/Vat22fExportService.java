@@ -50,8 +50,7 @@ public class Vat22fExportService {
 
         String iban = payoutProfileRepository.findByBrandPartner_Id(brandId)
                 .map(BrandPayoutProfile::getIban).orElse(null);
-        String supplierEmail = brand.getContactEmail() != null ? brand.getContactEmail()
-                : (brand.getUser() != null ? brand.getUser().getEmail() : null);
+        String supplierEmail = brand.notificationEmail();
         String shipmentOrigin = formatAddress(
                 brand.getAddressStreet(), brand.getAddressPostalCode(),
                 brand.getAddressCity(), brand.getAddressCountry());

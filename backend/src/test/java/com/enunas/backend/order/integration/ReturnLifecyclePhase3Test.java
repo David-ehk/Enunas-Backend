@@ -3,15 +3,19 @@ package com.enunas.backend.order.integration;
 import com.enunas.backend.brandpartner.BrandPartner;
 import com.enunas.backend.discount.integration.AbstractDiscountIntegrationTest;
 import com.enunas.backend.order.OrderExpiryService;
+import com.enunas.backend.payment.PaymentProvider;
+import com.enunas.backend.payment.RefundCommand;
 import com.enunas.backend.user.EmailService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
 import java.util.HashMap;
 import java.util.List;
@@ -31,6 +35,7 @@ import static org.mockito.Mockito.verify;
 class ReturnLifecyclePhase3Test extends AbstractDiscountIntegrationTest {
 
     @MockitoBean private EmailService emailService;
+    @MockitoSpyBean private PaymentProvider paymentProvider;
     @Autowired private OrderExpiryService orderExpiryService;
 
     private BrandFixture brandWithReturnWarehouse(String name, String slug) {
@@ -307,7 +312,7 @@ class ReturnLifecyclePhase3Test extends AbstractDiscountIntegrationTest {
                 new HttpEntity<>(null, auth(adminToken)), Map.class);
         assertThat(cancelled.getStatusCode().is2xxSuccessful()).as("cancel: %s", cancelled.getBody()).isTrue();
 
-        assertThat(usedCount("REL50")).as("released via the postPaymentCancel path").isEqualTo(0);
+        assertThat(usedCount("REL50")).as("released via the delegated cancel path").isEqualTo(0);
         assertThat(orderRow(orderId).get("discount_usage_released")).isEqualTo(true);
     }
 
@@ -425,6 +430,11 @@ class ReturnLifecyclePhase3Test extends AbstractDiscountIntegrationTest {
                 HttpMethod.POST, new HttpEntity<>(null, auth(adminToken)), Map.class);
         assertThat(firstRefund.getStatusCode().is2xxSuccessful())
                 .as("first refund: %s", firstRefund.getBody()).isTrue();
+
+        ArgumentCaptor<RefundCommand> refundCommandCaptor = ArgumentCaptor.forClass(RefundCommand.class);
+        verify(paymentProvider).refundPayment(refundCommandCaptor.capture());
+        assertThat(refundCommandCaptor.getValue().idempotencyKey())
+                .isEqualTo("return-refund-" + returnNumber);
 
         ResponseEntity<Map> secondRefund = rest.exchange("/admin/returns/" + returnNumber + "/refund",
                 HttpMethod.POST, new HttpEntity<>(null, auth(adminToken)), Map.class);

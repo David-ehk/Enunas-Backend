@@ -27,7 +27,7 @@ public class OrderItemResponseDto {
     private LocalDateTime cancelledAt;
     private CancelReason cancellationReason;
     /** ACTIVE, PENDING (claimed — refund not recorded yet) or CANCELLED. */
-    private String cancellationState;
+    private OrderItem.CancellationState cancellationState;
     /** Null in brand-scoped views. */
     private String refundTransactionId;
     /** Null in brand-scoped views. */
@@ -64,7 +64,6 @@ public class OrderItemResponseDto {
                 .lineTotal(item.getLineTotal())
                 .cancelledAt(item.getCancelledAt())
                 .cancellationReason(item.getCancellationReason())
-                .cancellationState(item.isCancellationSettled() ? "CANCELLED"
-                        : item.isCancelled() ? "PENDING" : "ACTIVE");
+                .cancellationState(item.cancellationState());
     }
 }

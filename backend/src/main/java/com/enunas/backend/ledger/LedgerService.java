@@ -192,9 +192,9 @@ public class LedgerService {
     @Transactional
     public void recordRefund(Order order, BigDecimal refundAmount, String externalRefundId) {
         boolean productAlreadyDone = externalRefundId != null &&
-                ledgerRepository.existsByExternalReferenceIdAndEntryType(externalRefundId, LedgerEntryType.REFUND_REVERSAL);
+                isRefundAlreadyRecorded(externalRefundId);
         boolean shippingAlreadyDone = externalRefundId != null &&
-                ledgerRepository.existsByExternalReferenceIdAndEntryType(shippingRef(externalRefundId), LedgerEntryType.REFUND_REVERSAL);
+                isRefundAlreadyRecorded(shippingRef(externalRefundId));
         if (productAlreadyDone && shippingAlreadyDone) {
             log.warn("LedgerService: REFUND_REVERSAL already recorded for externalRefundId={}; skipping", externalRefundId);
             return;
@@ -230,8 +230,7 @@ public class LedgerService {
      */
     @Transactional
     public void recordRefund(Order order, Long brandId, BigDecimal refundAmount, String externalRefundId) {
-        if (externalRefundId != null &&
-                ledgerRepository.existsByExternalReferenceIdAndEntryType(externalRefundId, LedgerEntryType.REFUND_REVERSAL)) {
+        if (externalRefundId != null && isRefundAlreadyRecorded(externalRefundId)) {
             log.warn("LedgerService: REFUND_REVERSAL already recorded for externalRefundId={}; skipping", externalRefundId);
             return;
         }
@@ -254,7 +253,7 @@ public class LedgerService {
      */
     @Transactional
     public void recordItemCancellationReversal(Order order, List<OrderItem> items, String refundId) {
-        if (ledgerRepository.existsByExternalReferenceIdAndEntryType(refundId, LedgerEntryType.REFUND_REVERSAL)) {
+        if (isRefundAlreadyRecorded(refundId)) {
             log.warn("LedgerService: REFUND_REVERSAL already recorded for externalRefundId={}; skipping", refundId);
             return;
         }
@@ -304,7 +303,7 @@ public class LedgerService {
     /** A brand left with no active items never ships: reverse its whole shipping revenue. Idempotent. */
     @Transactional
     public void reverseShippingForEmptiedBrand(Order order, Long brandId, String refundId) {
-        if (ledgerRepository.existsByExternalReferenceIdAndEntryType(shippingRef(refundId), LedgerEntryType.REFUND_REVERSAL)) {
+        if (isRefundAlreadyRecorded(shippingRef(refundId))) {
             log.warn("LedgerService: shipping REFUND_REVERSAL already recorded for externalRefundId={}; skipping", refundId);
             return;
         }

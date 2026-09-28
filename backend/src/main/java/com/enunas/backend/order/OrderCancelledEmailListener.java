@@ -26,6 +26,11 @@ public class OrderCancelledEmailListener {
                     + "Grund: " + event.reason()
                     + (event.note() != null && !event.note().isBlank() ? "\nHinweis: " + event.note() : "");
 
+            if (event.refundAmount() != null) {
+                body += "\n\nWir erstatten dir " + event.refundAmount() + " " + event.currency()
+                        + " auf dein ursprüngliches Zahlungsmittel. Das dauert je nach Bank 5–10 Werktage.";
+            }
+
             emailService.sendPlainTextEmail(
                     event.buyerEmail(),
                     "Bestellung " + event.orderNumber() + " storniert",

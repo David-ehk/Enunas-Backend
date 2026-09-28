@@ -6,6 +6,7 @@ import jakarta.persistence.*;
 import lombok.*;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.LocalDateTime;
 
 /**
@@ -179,6 +180,46 @@ public class OrderItem {
     /** Cancelled and its refund recorded — the only state money checks may treat as refunded. */
     public boolean isCancellationSettled() {
         return refundTransactionId != null;
+    }
+
+    /** A claim this old with no refund recorded is stuck, not in flight (spec D26). */
+    public static final Duration STUCK_AFTER = Duration.ofMinutes(5);
+
+    public enum CancellationState { ACTIVE, PENDING, CANCELLED }
+
+    public CancellationState cancellationState() {
+        return isCancellationSettled() ? CancellationState.CANCELLED
+                : isCancelled() ? CancellationState.PENDING : CancellationState.ACTIVE;
+    }
+
+    /** Claimed, refund not recorded, and at least {@link #STUCK_AFTER} old (age >= 5 min; younger is in flight). */
+    public boolean isClaimStuck(LocalDateTime now) {
+        return cancellationState() == CancellationState.PENDING && !cancelledAt.isAfter(now.minus(STUCK_AFTER));
+    }
+
+    /** Records the whole cancellation decision except the refund id (spec D15). */
+    public void claimCancellation(String claimKey, CancelReason reason, String note, String adminEmail,
+                                  boolean includesShipping, LocalDateTime now) {
+        cancelledAt = now;
+        cancellationReason = reason;
+        cancellationNote = note;
+        cancelledByAdminEmail = adminEmail;
+        cancellationIncludesShipping = includesShipping;
+        cancellationClaimKey = claimKey;
+    }
+
+    /** Undoes a claim that moved no money. */
+    public void releaseCancellationClaim() {
+        cancelledAt = null;
+        cancellationReason = null;
+        cancellationNote = null;
+        cancelledByAdminEmail = null;
+        cancellationIncludesShipping = null;
+        cancellationClaimKey = null;
+    }
+
+    public void settleCancellation(String refundId) {
+        refundTransactionId = refundId;
     }
 
     // Convenience for ownership (no DB column - transient)

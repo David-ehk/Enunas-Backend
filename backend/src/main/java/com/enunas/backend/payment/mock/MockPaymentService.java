@@ -40,16 +40,24 @@ public class MockPaymentService implements PaymentProvider {
             throw new IllegalStateException("MockPaymentService: payment not found: " + command.paymentId());
         }
 
-        String existing = store.refundIdForKey(command.idempotencyKey());
-        if (existing != null) {
-            log.info("MockPaymentService: replaying refund {} for idempotency key {}",
-                    existing, command.idempotencyKey());
-            return new RefundResult(existing);
+        // Atomic replay-or-mint: two genuinely concurrent callers with the same idempotency key must
+        // never both mint a refund id. store.replayOrMint uses ConcurrentHashMap#computeIfAbsent, so
+        // only ONE caller's supplier ever runs; `minted` tells us whether it was ours.
+        boolean[] minted = {false};
+        String key = command.idempotencyKey();
+        String refundId = key == null
+                ? "ref_mock_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16)
+                : store.replayOrMint(key, () -> {
+                    minted[0] = true;
+                    return "ref_mock_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+                });
+
+        if (key != null && !minted[0]) {
+            log.info("MockPaymentService: replaying refund {} for idempotency key {}", refundId, key);
+            return new RefundResult(refundId);
         }
 
-        String refundId = "ref_mock_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
         store.markRefunded(command.paymentId(), refundId);
-        store.rememberRefundKey(command.idempotencyKey(), refundId);
         webhookDispatcher.dispatchRefundCreated(refundId, command.paymentId());
 
         log.info("MockPaymentService: refunded payment={} refundId={} amount={}",

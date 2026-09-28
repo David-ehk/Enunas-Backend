@@ -8,7 +8,7 @@ public enum OrderStatus {
     PENDING,           // placed, awaiting payment
     PAID,              // payment confirmed
     PARTIALLY_SHIPPED, // at least one brand on this (possibly multi-brand) order has shipped, not all — see OrderShipment
-    SHIPPED,           // every brand on this order has shipped — see OrderService.syncShipmentStatus
+    SHIPPED,           // every brand on this order has shipped — see OrderShipmentRollup.syncShipmentStatus
     DELIVERED,         // received by customer
 
     // Neu für Probleme:

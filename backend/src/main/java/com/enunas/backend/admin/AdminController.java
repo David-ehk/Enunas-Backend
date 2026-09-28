@@ -261,7 +261,7 @@ public class AdminController {
             @RequestParam OrderStatus status,
             @AuthenticationPrincipal User admin) {
         if (status == OrderStatus.CANCELLED) {
-            // DEPRECATED: one release only. Cancelling needs a refund, an admin identity and a
+            // DEPRECATED, for removal (callers should use POST /admin/orders/{orderId}/cancel). Cancelling needs a refund, an admin identity and a
             // reason, none of which this endpoint carries — delegate to the real cancel endpoint's
             // service method so the money is right whichever route the caller uses, then remove
             // this branch once callers have migrated to POST /admin/orders/{orderId}/cancel.
@@ -288,7 +288,8 @@ public class AdminController {
             @PathVariable Long orderId,
             @Valid @RequestBody CancelOrderItemsDto dto,
             @AuthenticationPrincipal User admin) {
-        return ResponseEntity.ok(orderItemCancellationService.cancelItems(orderId, dto, admin));
+        orderItemCancellationService.cancelItems(orderId, dto, admin);
+        return ResponseEntity.ok(orderService.getOrderById(orderId));
     }
 
     @PostMapping("/orders/{orderId}/cancel-items/reconcile")
@@ -296,7 +297,8 @@ public class AdminController {
             @PathVariable Long orderId,
             @Valid @RequestBody ReconcileItemCancellationDto dto,
             @AuthenticationPrincipal User admin) {
-        return ResponseEntity.ok(orderItemCancellationService.reconcile(orderId, dto, admin));
+        orderItemCancellationService.reconcile(orderId, dto, admin);
+        return ResponseEntity.ok(orderService.getOrderById(orderId));
     }
 
     // ===== Returns — addressed per brand. An order spanning several brands has one return per

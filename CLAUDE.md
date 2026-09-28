@@ -26,6 +26,18 @@ Not enabled by default — see `docs/agents/mollie-mcp.md`. The Mollie MCP
 path doesn't need for normal feature work; enable it for the session when you
 actually need it, then remove it again.
 
+### Code style
+
+`ponytail` (full intensity, its default) governs every implementer subagent
+in step 3 of the feature workflow below, and applies more broadly too — it's
+auto-invocable on any coding task, per its own trigger. It governs
+**solution shape**: YAGNI first, reuse before writing, stdlib/native before a
+dependency, shortest working diff. It does not override TDD's test-first
+sequencing (see step 3) — the two operate on different axes: ponytail
+decides how much code and which rung of the ladder; TDD decides the order
+code and tests get written in. `/ponytail lite|full|ultra` adjusts intensity
+for a session; "stop ponytail" reverts to normal mode.
+
 ## Feature workflow
 
 Build → review → deepen, with a gate right after intent-gathering so
@@ -66,11 +78,34 @@ mattpocock's `tdd` (same trigger, `disable-model-invocation` added to avoid
 the collision; still available via explicit `/tdd` for its seam/anti-pattern
 reference and its ties into `codebase-design` vocabulary).
 
+**Every implementer subagent runs under `ponytail`** (see Code style above):
+TDD sequences red → green, `ponytail` shapes what "green" looks like — the
+shortest, most reused, least-dependency-adding implementation that passes
+the test. Include this instruction explicitly in each implementer subagent's
+dispatch — a fresh subagent doesn't inherit the session's active skill
+state.
+
+This matters most exactly here, not as a general nicety: fresh implementer
+subagents are the single biggest token sink in the whole workflow — one per
+task, each rebuilding context from scratch since none inherit the session's
+history. A bloated implementation compounds that cost twice over: more
+tokens to write it, then more tokens for every downstream layer (task
+review, `/code-review`, both audits below) to read and reason about. Keeping
+`ponytail` mandatory here is the cheapest lever in this file for controlling
+total spend — cheaper than any model-tier choice in the table below.
+
 Run `superpowers:verification-before-completion` before claiming any task done.
 
 ### 4. Review — four layers, in order
 
-Each layer asks a different question; run them in this order, heaviest last:
+Each layer asks a different question; run them in this order, heaviest last.
+
+**Before layers 3 and 4, run a `ponytail` pass over the diff first.** Both
+are Opus-tier (see model table) precisely because they're judgment-heavy and
+expensive per token; spending that budget re-discovering YAGNI violations,
+unneeded abstractions, or a dependency that a stdlib one-liner would've
+covered is the same finding a cheap `ponytail` pass catches for free. Fix
+what it flags, *then* run the expensive layer on the smaller remaining diff.
 
 1. **`requesting-code-review`** (superpowers, subagent) — did we build what
    the plan said?
@@ -155,6 +190,10 @@ things you're not using:
   `/code-review`.
 - Don't run `brainstorming` and `grilling` by default on the same task —
   escalate to `grilling` only when something's genuinely contested.
+- `ponytail` before the expensive stuff: mandatory for every implementer
+  subagent (step 3) and run as a pre-pass before layers 3–4 of the review
+  (step 4). A cheap lazy-pass catching bloat is strictly less expensive than
+  an Opus-tier layer catching the same bloat later.
 
 ## Skill dependencies
 

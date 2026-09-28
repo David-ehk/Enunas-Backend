@@ -44,11 +44,10 @@ class RefundPersistenceHelper {
      */
     @Transactional
     OrderResponseDto persist(Long returnOrderId, BigDecimal refundAmount, String mollieRefundId) {
-        // See StaleSessionGuard: without this, a plain findById here could hand back the SAME
-        // managed ReturnOrder instance processRefund already validated as RECEIVED, even after a
-        // concurrent refund committed and flipped it to REFUNDED while processRefund's outbound
-        // Mollie call was still in flight.
-        StaleSessionGuard.clear(entityManager);
+        // Clear the shared open-in-view session so findById reads the database, not the ReturnOrder
+        // processRefund validated as RECEIVED before its outbound Mollie call (a concurrent refund
+        // may have flipped it to REFUNDED since).
+        entityManager.clear();
         ReturnOrder returnOrder = returnOrderRepository.findById(returnOrderId)
                 .orElseThrow(() -> new IllegalStateException("Return not found: " + returnOrderId));
 

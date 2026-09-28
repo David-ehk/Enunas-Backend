@@ -1,6 +1,7 @@
 package com.enunas.backend.discount.integration;
 
-import com.enunas.backend.order.OrderStatus;
+import com.enunas.backend.order.CancelReason;
+import com.enunas.backend.order.dto.CancelOrderDto;
 import com.enunas.backend.user.User;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -89,7 +90,9 @@ class DiscountPaymentFlowIntegrationTest extends AbstractDiscountIntegrationTest
         assertThat(ledgerFee).isEqualByComparingTo("8.00"); // platform_fee = commissionNet
         assertThat(usedCount("TESTADMIN10")).isEqualTo(1); // no further increment
 
-        asAdmin(admin, () -> orderService.updateOrderStatus(oid, OrderStatus.CANCELLED));
+        CancelOrderDto cancelDto = new CancelOrderDto();
+        cancelDto.setReason(CancelReason.CUSTOMER_REQUEST);
+        asAdmin(admin, () -> orderService.cancelOrder(oid, cancelDto, admin));
         assertThat(brandPending(a.brand().getId())).isEqualByComparingTo(baseline); // back to baseline
     }
 
@@ -142,7 +145,9 @@ class DiscountPaymentFlowIntegrationTest extends AbstractDiscountIntegrationTest
         assertThat(brandPending(a.brand().getId())).isEqualByComparingTo("93.64"); // 88.65 product payout + 4.99 shipping
         assertThat(brandPending(b.brand().getId())).isEqualByComparingTo("53.78"); // 48.79 product payout + 4.99 shipping
 
-        asAdmin(admin, () -> orderService.updateOrderStatus(oid, OrderStatus.CANCELLED));
+        CancelOrderDto cancelDto = new CancelOrderDto();
+        cancelDto.setReason(CancelReason.CUSTOMER_REQUEST);
+        asAdmin(admin, () -> orderService.cancelOrder(oid, cancelDto, admin));
         assertThat(brandPending(a.brand().getId())).isEqualByComparingTo(baseA);
         assertThat(brandPending(b.brand().getId())).isEqualByComparingTo(baseB);
     }

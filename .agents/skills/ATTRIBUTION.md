@@ -20,6 +20,7 @@ for the full licence text.
 | `thermo-nuclear-code-quality-review` | [cursor/plugins](https://github.com/cursor/plugins) | MIT |
 | `neon` | [neondatabase/agent-skills](https://github.com/neondatabase/agent-skills) | Apache-2.0 |
 | `neon-postgres` | [neondatabase/agent-skills](https://github.com/neondatabase/agent-skills) | Apache-2.0 |
+| `ponytail` | [dietrichgebert/ponytail](https://github.com/dietrichgebert/ponytail) | MIT |
 
 ## Modifications
 
