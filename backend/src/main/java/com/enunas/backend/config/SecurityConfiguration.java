@@ -5,6 +5,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpHeaders;
@@ -24,6 +25,7 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import org.springframework.web.servlet.HandlerExceptionResolver;
 
 import java.io.IOException;
+import java.time.Clock;
 import java.util.Arrays;
 import java.util.List;
 
@@ -31,11 +33,15 @@ import java.util.List;
 @Configuration
 @EnableWebSecurity
 @EnableMethodSecurity(prePostEnabled = true)
+@EnableConfigurationProperties({RateLimitProperties.class, MicroCacheProperties.class})
 public class SecurityConfiguration {
 
     private final AuthenticationProvider authenticationProvider;
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
     private final HandlerExceptionResolver handlerExceptionResolver;
+    private final RateLimitProperties rateLimitProperties;
+    private final MicroCacheProperties microCacheProperties;
+    private final Clock clock;
 
     @Value("${app.cors.allowed-origins}")
     private String allowedOriginsProperty;
@@ -43,11 +49,17 @@ public class SecurityConfiguration {
     public SecurityConfiguration(
             AuthenticationProvider authenticationProvider,
             JwtAuthenticationFilter jwtAuthenticationFilter,
-            @Qualifier("handlerExceptionResolver") HandlerExceptionResolver handlerExceptionResolver
+            @Qualifier("handlerExceptionResolver") HandlerExceptionResolver handlerExceptionResolver,
+            RateLimitProperties rateLimitProperties,
+            MicroCacheProperties microCacheProperties,
+            Clock clock
     ) {
         this.authenticationProvider = authenticationProvider;
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
         this.handlerExceptionResolver = handlerExceptionResolver;
+        this.rateLimitProperties = rateLimitProperties;
+        this.microCacheProperties = microCacheProperties;
+        this.clock = clock;
     }
 
     @Bean
@@ -126,7 +138,15 @@ public class SecurityConfiguration {
                         .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
                 )
                 .authenticationProvider(authenticationProvider)
-                .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
+                .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
+                // Built with `new`, not @Component: a Filter bean would also be auto-registered as a
+                // plain servlet filter and every request would be counted twice.
+                .addFilterAfter(new RateLimitFilter(rateLimitProperties, clock, handlerExceptionResolver), JwtAuthenticationFilter.class)
+                // After the limiter so cache hits still count against the caller's budget. A cache
+                // hit returns here, before AuthorizationFilter/@PreAuthorize ever run, so auth safety
+                // depends on MicroCacheFilter skipping every request that carries an Authorization
+                // header (the only auth channel) -- not on this filter's position in the chain.
+                .addFilterAfter(new MicroCacheFilter(microCacheProperties, clock), RateLimitFilter.class);
 
         return http.build();
     }

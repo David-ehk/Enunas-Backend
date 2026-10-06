@@ -13,6 +13,8 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Clock;
+
 @Configuration
 public class ApplicationConfiguration {
 
@@ -48,6 +50,12 @@ public class ApplicationConfiguration {
     @Bean
     public AuthenticationManager authenticationManager(AuthenticationConfiguration config) throws Exception {
         return config.getAuthenticationManager();
+    }
+
+    /** UTC, matching the JVM pin in TimezoneConfig. Injected so time-dependent filters are testable. */
+    @Bean
+    public Clock clock() {
+        return Clock.systemUTC();
     }
 
     @Bean

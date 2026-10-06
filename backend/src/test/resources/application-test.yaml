@@ -5,6 +5,10 @@ spring:
   datasource:
     url: jdbc:tc:postgresql:16:///enunas
     driver-class-name: org.testcontainers.jdbc.ContainerDatabaseDriver
+    # Every cached test context gets its own pool against the ONE shared tc Postgres; keep each small
+    # so extra contexts (@TestPropertySource / @MockitoBean) don't exhaust max_connections.
+    hikari:
+      maximum-pool-size: 5
   jpa:
     hibernate:
       ddl-auto: validate
@@ -77,3 +81,10 @@ app:
   # until the test drives confirmation deterministically.
   mock:
     webhook-base-url: http://localhost:1
+  # Off for the suite (it logs in / checks out far more than any real user); the feature's own
+  # tests turn it back on via @TestPropertySource.
+  rate-limit:
+    enabled: false
+  # Off so tests that mutate then re-read a product anonymously never see stale data.
+  micro-cache:
+    enabled: false
