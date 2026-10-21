@@ -96,24 +96,4 @@ class LedgerServiceRefundSplitTest {
         assertThat(saved.get(1).getExternalReferenceId()).isEqualTo("full-cancel:SHIPPING");
         assertThat(saved.get(1).getBrandPayout()).isEqualByComparingTo("-4.99");
     }
-
-    @Test
-    void brandScopedReturn_reversesOnlyProductEntries_shippingUntouched() {
-        BrandEconomics eco = BrandEconomics.builder().pendingBalance(new BigDecimal("86.99")).build();
-        when(brandEconomicsRepository.findByBrandPartner_Id(5L)).thenReturn(Optional.of(eco));
-
-        Order ord = order(productItem(), "104.99");
-
-        when(ledgerRepository.existsByExternalReferenceIdAndEntryType("return-1", LedgerEntryType.REFUND_REVERSAL))
-                .thenReturn(false);
-        when(ledgerRepository.findActivePaymentEntriesByOrderAndBrand(1L, 5L)).thenReturn(List.of());
-
-        ledgerService.recordRefund(ord, 5L, new BigDecimal("100.00"), "return-1");
-
-        // Only the 82.00 product payout reversed; shipping's 4.99 stays untouched.
-        assertThat(eco.getPendingBalance()).isEqualByComparingTo("4.99");
-
-        verify(ledgerRepository, times(1)).save(any(LedgerEntry.class));
-        verify(ledgerRepository, never()).findActiveShippingEntriesByOrderAndBrand(anyLong(), anyLong());
-    }
 }

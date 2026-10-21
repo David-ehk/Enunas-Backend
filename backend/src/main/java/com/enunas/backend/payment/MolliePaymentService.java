@@ -2,8 +2,10 @@ package com.enunas.backend.payment;
 
 import com.enunas.backend.exception.PaymentException;
 import com.enunas.backend.exception.PaymentRejectedException;
+import com.enunas.backend.exception.PaymentRetryLaterException;
 import com.mollie.mollie.Client;
 import com.mollie.mollie.models.components.Amount;
+import com.mollie.mollie.models.components.Metadata;
 import com.mollie.mollie.models.components.PaymentRequest;
 import com.mollie.mollie.models.components.PaymentResponseStatus;
 import com.mollie.mollie.models.components.RefundRequest;
@@ -12,6 +14,7 @@ import com.mollie.mollie.models.operations.CreatePaymentResponse;
 import com.mollie.mollie.models.operations.CreateRefundResponse;
 import com.mollie.mollie.models.operations.GetPaymentRequest;
 import com.mollie.mollie.models.operations.GetPaymentResponse;
+import com.mollie.mollie.models.operations.GetRefundRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
@@ -65,13 +68,16 @@ public class MolliePaymentService implements PaymentProvider {
     @Override
     public RefundResult refundPayment(RefundCommand command) {
         try {
-            RefundRequest refundRequest = RefundRequest.builder()
+            var refundBuilder = RefundRequest.builder()
                     .description(command.reason())
                     .amount(Amount.builder()
                             .currency("EUR")
                             .value(command.amount().setScale(2, RoundingMode.HALF_UP).toPlainString())
-                            .build())
-                    .build();
+                            .build());
+            if (!command.metadata().isEmpty()) {
+                refundBuilder.metadata(Metadata.of(command.metadata()));
+            }
+            RefundRequest refundRequest = refundBuilder.build();
 
             var call = mollieClient.refunds().create()
                     .paymentId(command.paymentId())
@@ -90,14 +96,39 @@ public class MolliePaymentService implements PaymentProvider {
         } catch (PaymentException e) {
             throw e;
         } catch (ClientError e) {
-            if (e.code() >= 400 && e.code() < 500) {
-                throw new PaymentRejectedException(
-                        "Mollie rejected refundPayment (HTTP " + e.code() + "): " + e.getMessage(), e);
-            }
-            throw new PaymentException("Mollie refundPayment failed: " + e.getMessage(), e);
+            throw mapClientError("refundPayment", e);
         } catch (Exception e) {
             throw new PaymentException("Mollie refundPayment failed: " + e.getMessage(), e);
         }
+    }
+
+    @Override
+    public RefundStatusResult getRefundStatus(String paymentId, String refundId) {
+        try {
+            var refund = mollieClient.refunds().get()
+                    .request(GetRefundRequest.builder().paymentId(paymentId).refundId(refundId).build())
+                    .call()
+                    .entityRefundResponse()
+                    .orElseThrow(() -> new PaymentException("Mollie refund not found: " + refundId));
+            return new RefundStatusResult(
+                    RefundStatusResult.Status.valueOf(refund.status().value().toUpperCase()),
+                    new BigDecimal(refund.amount().value()),
+                    refund.paymentId().orElse(paymentId));
+        } catch (PaymentException e) {
+            throw e;
+        } catch (ClientError e) {
+            throw mapClientError("getRefundStatus", e);
+        } catch (Exception e) {
+            throw new PaymentException("Mollie getRefundStatus failed: " + e.getMessage(), e);
+        }
+    }
+
+    /** 429 = throttled (retry later), other 4xx = refused, anything else = ambiguous. */
+    private static PaymentException mapClientError(String op, ClientError e) {
+        String msg = "Mollie rejected " + op + " (HTTP " + e.code() + "): " + e.getMessage();
+        if (e.code() == 429) return new PaymentRetryLaterException(msg, e);
+        if (e.code() >= 400 && e.code() < 500) return new PaymentRejectedException(msg, e);
+        return new PaymentException("Mollie " + op + " failed: " + e.getMessage(), e);
     }
 
     @Override

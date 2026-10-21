@@ -16,22 +16,21 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The deprecated order-scoped return shims (POST /admin/orders/{id}/return/approve|receive|refund
+ * The deprecated order-scoped return shims (POST /admin/orders/{id}/return/approve|receive
  * — kept so pre-existing callers work while they migrate to /admin/returns/{returnNumber}/*)
- * delegate to approveReturn/receiveReturn/processRefund via a plain in-class method call. Spring's
+ * delegate to approveReturn/receiveReturn via a plain in-class method call. Spring's
  * @Transactional is proxy-based and never intercepts that kind of self-invocation, so the callee's
  * own @Transactional was silently inert — receiveReturnByOrder 500'd with
  * InvalidDataAccessApiUsageException ("No active transaction for update or delete query") the
  * moment it hit ProductVariantRepository.restoreStock, a bare @Modifying query that requires an
- * active transaction. Fixed by adding @Transactional directly on the shim methods themselves (see
- * OrderService for why processRefundByOrder is deliberately excluded).
+ * active transaction. Fixed by adding @Transactional directly on the shim methods themselves.
  */
 class DeprecatedOrderScopedReturnShimsIntegrationTest extends AbstractDiscountIntegrationTest {
 
     @MockitoBean private EmailService emailService;
 
     @Test
-    void approveReceiveRefund_viaDeprecatedOrderScopedShims_allSucceed() {
+    void approveReceive_viaDeprecatedOrderScopedShims_allSucceed() {
         BrandPartner brand = seedBrand("Acme", "acme", "0.15").brand();
         seedCustomer();
         seedAdmin();
@@ -71,10 +70,5 @@ class DeprecatedOrderScopedReturnShimsIntegrationTest extends AbstractDiscountIn
                 "SELECT stock_quantity FROM product_variants WHERE id = " +
                 "(SELECT variant_id FROM order_items WHERE order_id = ?)", Integer.class, orderId);
         assertThat(stock).isEqualTo(5); // back to the seeded quantity after restoring the 1 returned
-
-        ResponseEntity<Map> refund = rest.exchange("/admin/orders/" + orderId + "/return/refund",
-                HttpMethod.POST, new HttpEntity<>(null, auth(adminToken)), Map.class);
-        assertThat(refund.getStatusCode().value()).as("body: %s", refund.getBody()).isEqualTo(200);
-        assertThat(refund.getBody().get("status")).isEqualTo("REFUNDED");
     }
 }

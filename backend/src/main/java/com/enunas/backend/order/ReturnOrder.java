@@ -84,7 +84,7 @@ public class ReturnOrder {
 
     /**
      * Unlike {@code Order}/{@code Payment}, this had no optimistic-lock column at all until V35 —
-     * see RefundPersistenceHelper.persist()'s javadoc for the stale-read bug that gap allowed.
+     * which let two concurrent writers silently overwrite each other (stale-read refund bug).
      */
     @Version
     private Long version;
@@ -156,8 +156,43 @@ public class ReturnOrder {
         this.labelUpdatedAt = LocalDateTime.now();
     }
 
+    /** Refund claim total (items + shipping). */
     @Column(precision = 10, scale = 2)
     private BigDecimal refundAmount;
+
+    // ===== Refund claim/tracking (V37) =====
+
+    @Column(name = "refund_claim_key", length = 100)
+    private String refundClaimKey;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "refund_state")
+    private ReturnRefundState refundState;
+
+    @Column(name = "refund_items_amount", precision = 10, scale = 2)
+    private BigDecimal refundItemsAmount;
+
+    @Column(name = "refund_shipping_amount", precision = 10, scale = 2)
+    private BigDecimal refundShippingAmount;
+
+    @Column(name = "refund_claimed_at")
+    private LocalDateTime refundClaimedAt;
+
+    @Column(name = "refund_released_by")
+    private String refundReleasedBy;
+
+    @Column(name = "refund_override_reason", length = 500)
+    private String refundOverrideReason;
+
+    @Column(name = "refund_transaction_id", length = 100)
+    private String refundTransactionId;
+
+    @Column(name = "refund_resend_count", nullable = false)
+    private int refundResendCount;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "received_by")
+    private ReceivedBy receivedBy;
 
     @Column(updatable = false)
     private LocalDateTime requestedAt;

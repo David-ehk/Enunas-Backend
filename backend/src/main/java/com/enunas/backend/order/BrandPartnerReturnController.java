@@ -30,4 +30,11 @@ public class BrandPartnerReturnController {
             @AuthenticationPrincipal User brandPartner) {
         return ResponseEntity.ok(orderService.uploadReturnLabel(returnNumber, dto, brandPartner));
     }
+
+    /** The brand confirms the goods arrived back; restores stock. */
+    @PostMapping("/{returnNumber}/receive")
+    public ResponseEntity<OrderResponseDto> receive(@PathVariable String returnNumber,
+                                                    @AuthenticationPrincipal User brandPartner) {
+        return ResponseEntity.ok(orderService.receiveReturn(returnNumber, ReceivedBy.BRAND, brandPartner));
+    }
 }

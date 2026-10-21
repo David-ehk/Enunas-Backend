@@ -5,6 +5,7 @@ import com.enunas.backend.brandpartner.brandeconomics.BrandEconomicsRepository;
 import com.enunas.backend.order.Order;
 import com.enunas.backend.order.OrderItem;
 import com.enunas.backend.order.OrderShippingSnapshot;
+import com.enunas.backend.order.RefundQuote;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -182,8 +183,7 @@ public class LedgerService {
      * an admin pre-shipment cancel, or a chargeback against the entire payment. A full-order
      * reversal undoes everything, product and shipping alike.
      *
-     * <p>For a return, use {@link #recordRefund(Order, Long, BigDecimal, String)} instead — it
-     * deliberately touches product entries only. See {@link #reverseShippingEntries} for why.
+     * <p>For a return, use {@link #recordReturnReversal} instead — it books exactly a RefundQuote.
      *
      * <p>Both idempotency guards (product and shipping) are checked ONCE per call, before looping
      * brands — a duplicate webhook for the same {@code externalRefundId} must skip the whole
@@ -212,44 +212,49 @@ public class LedgerService {
         }
     }
 
-    /**
-     * Creates REFUND_REVERSAL entries for a single BRAND's return, reversing that brand's product
-     * entries only. Deduction order: pendingBalance → payoutBalance → outstandingDebt. Idempotent
-     * when externalRefundId is provided — safe to call on duplicate webhooks.
-     *
-     * <p><b>Shipping is deliberately untouched here.</b> This version doesn't refund shipping on a
-     * partial per-brand item return (standard policy: shipping is charged once per shipment, not
-     * per item) — but it stays fully traceable via its own snapshot and ledger entries for when
-     * that policy question needs answering. The seam for that decision is a future
-     * {@code RefundPolicyService} — e.g. "the customer returned every item from this brand, should
-     * its shipping refund too?" — not this method.
-     *
-     * @param brandId restricts the reversal to that brand and pro-rates against THAT BRAND's gross
-     *                share rather than the order total — so refunding one brand's return leaves
-     *                every other brand's ledger untouched.
-     */
+    /** Exactly the quote: one product REFUND_REVERSAL (+ one shipping reversal when quote.shippingAmount() > 0). Idempotent on refundId. */
     @Transactional
-    public void recordRefund(Order order, Long brandId, BigDecimal refundAmount, String externalRefundId) {
-        if (externalRefundId != null && isRefundAlreadyRecorded(externalRefundId)) {
-            log.warn("LedgerService: REFUND_REVERSAL already recorded for externalRefundId={}; skipping", externalRefundId);
+    public void recordReturnReversal(Order order, Long brandId, RefundQuote quote, String refundId) {
+        if (isRefundAlreadyRecorded(refundId)) {
+            log.warn("LedgerService: REFUND_REVERSAL already recorded for externalRefundId={}; skipping", refundId);
             return;
         }
-
-        BigDecimal basis = brandProductGross(order, brandId);
-        if (basis == null) {
-            log.warn("LedgerService: no order items for brand {} on order {} — nothing to reverse",
-                     brandId, order.getId());
-            return;
+        List<LedgerEntry> originals = ledgerRepository.findActivePaymentEntriesByOrderAndBrand(order.getId(), brandId);
+        BigDecimal net = quote.commissionNet(), vat = quote.commissionVat(), payout = quote.brandPayout();
+        ledgerRepository.save(LedgerEntry.builder()
+                .orderId(order.getId())
+                .orderItemId(quote.lines().get(0).orderItemId())
+                .brandPartnerId(brandId)
+                .totalAmount(net.add(vat).add(payout).negate())
+                .platformFee(net.negate())
+                .brandPayout(payout.negate())
+                .commissionNet(net.negate())
+                .commissionVat(vat.negate())
+                .commissionRate(originals.isEmpty() ? resolveBrandRate(brandId) : originals.get(0).getCommissionRate())
+                .currency(order.getCurrency())
+                .entryType(LedgerEntryType.REFUND_REVERSAL)
+                .status(LedgerEntryStatus.REVERSED)
+                .payoutEligibleAt(LocalDateTime.now())
+                .movedToAvailable(false)
+                .reversalOfEntryId(originals.isEmpty() ? null : originals.get(0).getId())
+                .externalReferenceId(refundId)
+                .build());
+        applyBrandDebit(brandId, payout);
+        if (quote.shippingAmount().signum() > 0) {
+            reverseShippingEntries(order, brandId, BigDecimal.ONE, refundId);
         }
+        log.info("LedgerService: reversed return exactly for orderId={} brandId={} payout={} shipping={}",
+                order.getId(), brandId, payout, quote.shippingAmount());
+    }
 
-        BigDecimal fraction = fractionOf(refundAmount, basis);
-        reverseProductEntries(order, brandId, fraction, externalRefundId);
+    /** True once any shipping REFUND_REVERSAL exists for this brand on this order (any claim, cancellation or return). */
+    public boolean isShippingReversed(Long orderId, Long brandId) {
+        return ledgerRepository.existsShippingReversal(orderId, brandId);
     }
 
     /**
      * Pre-shipment item cancellation: reverses exactly these items' own product entries — no
-     * fraction, no proration. Contrast {@link #recordRefund(Order, Long, BigDecimal, String)}, which
-     * prorates across every item of the brand. Idempotent per {@code refundId}.
+     * fraction, no proration. Idempotent per {@code refundId}.
      */
     @Transactional
     public void recordItemCancellationReversal(Order order, List<OrderItem> items, String refundId) {
@@ -456,9 +461,8 @@ public class LedgerService {
 
     /**
      * A brand's items whose product entries are not yet reversed. A cancellation-settled item was
-     * already reversed exactly by {@link #recordItemCancellationReversal}; the pro-rata basis
-     * ({@link #brandProductGross}) and the pro-rata sum ({@link #reverseProductEntries}) must BOTH skip
-     * it, or a later return on the same brand reverses the wrong amount (spec D22).
+     * already reversed exactly by {@link #recordItemCancellationReversal}; the order-wide pro-rata sum
+     * ({@link #reverseProductEntries}) must skip it (spec D22).
      */
     private List<OrderItem> unreversedItemsOf(Order order, Long brandId) {
         return order.getItems().stream()
@@ -468,17 +472,6 @@ public class LedgerService {
 
     private static BigDecimal nz(BigDecimal v) {
         return v != null ? v : BigDecimal.ZERO;
-    }
-
-    /** @return the summed lineGross of the brand's not-yet-reversed items, or {@code null} if there are none. */
-    private BigDecimal brandProductGross(Order order, Long brandId) {
-        List<OrderItem> items = unreversedItemsOf(order, brandId);
-        if (items.isEmpty()) return null;
-        BigDecimal gross = BigDecimal.ZERO;
-        for (OrderItem item : items) {
-            gross = gross.add(item.getLineGross() != null ? item.getLineGross() : item.getLineTotal());
-        }
-        return gross;
     }
 
     /**

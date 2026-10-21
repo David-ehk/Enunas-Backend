@@ -3,6 +3,7 @@ package com.enunas.backend.order;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
+import java.math.BigDecimal;
 import java.util.Collection;
 import java.util.List;
 
@@ -17,4 +18,12 @@ public interface OrderShippingSnapshotRepository extends JpaRepository<OrderShip
      * order (see {@code OrderService.loadRelations} — a 20-order page cost 20 round trips here).
      */
     List<OrderShippingSnapshot> findByOrderIdInOrderByIdAsc(Collection<Long> orderIds);
+
+    /** Sum of the shipping the customer paid this brand on this order. */
+    default BigDecimal brandShippingTotal(Long orderId, Long brandId) {
+        return findByOrderIdOrderByIdAsc(orderId).stream()
+                .filter(s -> brandId.equals(s.getBrandPartnerId()))
+                .map(OrderShippingSnapshot::getAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
 }

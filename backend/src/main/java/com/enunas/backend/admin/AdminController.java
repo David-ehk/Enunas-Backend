@@ -22,6 +22,7 @@ import com.enunas.backend.order.CancelReason;
 import com.enunas.backend.order.OrderItemCancellationService;
 import com.enunas.backend.order.OrderService;
 import com.enunas.backend.order.OrderStatus;
+import com.enunas.backend.order.ReceivedBy;
 import com.enunas.backend.order.dto.CancelOrderDto;
 import com.enunas.backend.order.dto.CancelOrderItemsDto;
 import com.enunas.backend.order.dto.OrderResponseDto;
@@ -39,8 +40,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
-
-import java.math.BigDecimal;
 
 /**
  * Single entry point for all admin actions. Admin is identified purely by ROLE_ADMIN —
@@ -323,16 +322,9 @@ public class AdminController {
     }
 
     @PostMapping("/returns/{returnNumber}/receive")
-    public ResponseEntity<OrderResponseDto> receiveReturn(@PathVariable String returnNumber) {
-        return ResponseEntity.ok(orderService.receiveReturn(returnNumber));
-    }
-
-    /** {@code refundAmount} is optional — omit it to refund this brand's full returned value. */
-    @PostMapping("/returns/{returnNumber}/refund")
-    public ResponseEntity<OrderResponseDto> processRefund(
-            @PathVariable String returnNumber,
-            @RequestParam(required = false) BigDecimal refundAmount) {
-        return ResponseEntity.ok(orderService.processRefund(returnNumber, refundAmount));
+    public ResponseEntity<OrderResponseDto> receiveReturn(@PathVariable String returnNumber,
+                                                          @AuthenticationPrincipal User admin) {
+        return ResponseEntity.ok(orderService.receiveReturn(returnNumber, ReceivedBy.ADMIN, admin));
     }
 
     // ===== Deprecated order-scoped aliases. Kept so existing callers keep working while they move
@@ -349,13 +341,5 @@ public class AdminController {
     @PostMapping("/orders/{orderId}/return/receive")
     public ResponseEntity<OrderResponseDto> receiveReturnByOrder(@PathVariable Long orderId) {
         return ResponseEntity.ok(orderService.receiveReturnByOrder(orderId));
-    }
-
-    @Deprecated
-    @PostMapping("/orders/{orderId}/return/refund")
-    public ResponseEntity<OrderResponseDto> processRefundByOrder(
-            @PathVariable Long orderId,
-            @RequestParam(required = false) BigDecimal refundAmount) {
-        return ResponseEntity.ok(orderService.processRefundByOrder(orderId, refundAmount));
     }
 }

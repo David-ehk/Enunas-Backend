@@ -27,10 +27,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * RefundPersistenceHelper.persist builds its OrderResponseDto via its OWN injected
- * MediaUrlResolver field — same singleton bean as OrderService's, but a genuinely separate piece
- * of wiring (it is its own @Component so its own @Transactional proxy applies), which a missed
- * field or a missed argument at this call site would have made no OrderService test catch.
+ * The release-refund response must carry the ordered colour's resolved image URL.
  * Exercised on its own rather than assumed correct because OrderService's tests pass.
  */
 class RefundOrderItemImageSnapshotIntegrationTest extends AbstractDiscountIntegrationTest {
@@ -83,12 +80,12 @@ class RefundOrderItemImageSnapshotIntegrationTest extends AbstractDiscountIntegr
         rest.exchange("/admin/orders/" + orderId + "/return/receive", HttpMethod.POST,
                 new HttpEntity<>(null, auth(adminToken)), Map.class);
 
+        String returnNumber = jdbc.queryForObject("SELECT return_number FROM returns WHERE order_id = ?", String.class, orderId);
         @SuppressWarnings("unchecked")
-        ResponseEntity<Map> refund = rest.exchange("/admin/orders/" + orderId + "/return/refund",
+        ResponseEntity<Map> refund = rest.exchange("/admin/returns/" + returnNumber + "/release-refund",
                 HttpMethod.POST, new HttpEntity<>(null, auth(adminToken)), Map.class);
 
         assertThat(refund.getStatusCode().value()).as("body: %s", refund.getBody()).isEqualTo(200);
-        assertThat(refund.getBody().get("status")).isEqualTo("REFUNDED");
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> items = (List<Map<String, Object>>) refund.getBody().get("items");
         assertThat(items).isNotEmpty();

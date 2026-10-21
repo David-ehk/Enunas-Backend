@@ -1,12 +1,16 @@
 package com.enunas.backend.order;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 @Repository
@@ -36,11 +40,37 @@ public interface ReturnOrderRepository extends JpaRepository<ReturnOrder, Long> 
     Optional<ReturnOrder> findFirstByOrder_IdAndBrand_IdAndStatusNot(
             Long orderId, Long brandId, ReturnStatus excludedStatus);
 
+    /** Sum of units already on a return (any return, any status), per order item of this order. */
+    @Query("SELECT ri.orderItem.id, SUM(ri.quantityReturned) FROM ReturnItem ri "
+            + "WHERE ri.returnOrder.order.id = :orderId GROUP BY ri.orderItem.id")
+    List<Object[]> returnedQuantityByItem(@Param("orderId") Long orderId);
+
+    default Map<Long, Integer> returnedUnits(Long orderId) {
+        Map<Long, Integer> m = new HashMap<>();
+        for (Object[] row : returnedQuantityByItem(orderId)) {
+            m.put((Long) row[0], ((Number) row[1]).intValue());
+        }
+        return m;
+    }
+
     /**
-     * OrderItem ids on this order that already sit on a return. Used to reject a second return of
-     * the same item while still allowing a later return of a different brand's items — the old
-     * {@code existsByOrder} guard blocked the whole order and made per-brand returns impossible.
+     * Returns whose refund has been claimed (any refund state, including an unfinished claim), plus
+     * returns refunded before V37, which carry refund_state REFUNDED but no claim key.
      */
-    @Query("SELECT ri.orderItem.id FROM ReturnItem ri WHERE ri.returnOrder.order.id = :orderId")
-    List<Long> findReturnedOrderItemIds(@Param("orderId") Long orderId);
+    @Query("SELECT r FROM ReturnOrder r WHERE r.order.id = :orderId AND (r.refundClaimKey IS NOT NULL "
+            + "OR r.refundState = com.enunas.backend.order.ReturnRefundState.REFUNDED)")
+    List<ReturnOrder> findClaimedByOrderId(@Param("orderId") Long orderId);
+
+    // Refund overview (admin). Newest first.
+    @Query("SELECT r FROM ReturnOrder r WHERE r.status = com.enunas.backend.order.ReturnStatus.RECEIVED "
+            + "AND r.refundClaimKey IS NULL ORDER BY r.id DESC")
+    Page<ReturnOrder> findRefundDue(Pageable pageable);
+
+    /** Claimed with no state yet = the attempt is in flight (a resend keeps its old refund id, so don't test that). */
+    @Query("SELECT r FROM ReturnOrder r WHERE r.refundClaimKey IS NOT NULL AND r.refundState IS NULL "
+            + "ORDER BY r.id DESC")
+    Page<ReturnOrder> findRefundInProgress(Pageable pageable);
+
+    @Query("SELECT r FROM ReturnOrder r WHERE r.refundState = :state ORDER BY r.id DESC")
+    Page<ReturnOrder> findByRefundState(@Param("state") ReturnRefundState state, Pageable pageable);
 }

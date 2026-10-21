@@ -78,7 +78,7 @@ public interface LedgerRepository extends JpaRepository<LedgerEntry, Long> {
     /**
      * Same period/entry-type scope as {@link #aggregateByBrandForPeriod}, but splits brandPayout
      * into product vs. shipping, each already netted against its own refunds. Shipping refunds are
-     * identified by the {@code :SHIPPING} suffix {@link LedgerService#recordRefund(com.enunas.backend.order.Order, java.math.BigDecimal, String)}
+     * identified by the {@code :SHIPPING} suffix {@link LedgerService}
      * already tags them with — no new column, reuses the existing signal. refundAmount is reported
      * positive (sum of both product and shipping REFUND_REVERSAL rows, which are stored negative).
      */
@@ -223,4 +223,9 @@ public interface LedgerRepository extends JpaRepository<LedgerEntry, Long> {
     /** AVAILABLE-status product money (order payments net of refunds) for a brand — see above. */
     @Query("SELECT SUM(le.brandPayout) FROM LedgerEntry le WHERE le.brandPartnerId = :brandId AND le.status = com.enunas.backend.ledger.LedgerEntryStatus.AVAILABLE AND le.entryType IN (com.enunas.backend.ledger.LedgerEntryType.ORDER_PAYMENT, com.enunas.backend.ledger.LedgerEntryType.REFUND_REVERSAL)")
     Optional<BigDecimal> sumAvailableProductForBrand(@Param("brandId") Long brandId);
+
+    @Query("SELECT COUNT(le) > 0 FROM LedgerEntry le WHERE le.orderId = :orderId AND le.brandPartnerId = :brandId "
+         + "AND le.entryType = com.enunas.backend.ledger.LedgerEntryType.REFUND_REVERSAL "
+         + "AND le.externalReferenceId LIKE '%:SHIPPING'")
+    boolean existsShippingReversal(@Param("orderId") Long orderId, @Param("brandId") Long brandId);
 }

@@ -57,7 +57,6 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.security.SecureRandom;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -65,7 +64,6 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.EnumSet;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -92,7 +90,6 @@ public class OrderService {
     private final ReturnOrderRepository returnOrderRepository;
     private final PaymentProvider paymentProvider;
     private final LedgerService ledgerService;
-    private final RefundPersistenceHelper refundPersistenceHelper;
     private final DiscountService discountService;
     private final ApplicationEventPublisher eventPublisher;
     private final ReturnAddressSnapshotFactory returnAddressSnapshotFactory;
@@ -481,7 +478,7 @@ public class OrderService {
     public Page<OrderResponseDto> getMyOrders(User buyer, Pageable pageable) {
         Page<Order> page = orderRepository.findByBuyerOrderByCreatedAtDesc(buyer, pageable);
         OrderRelations relations = loadRelations(page.getContent());
-        return page.map(order -> toDto(order, relations));
+        return page.map(order -> forCustomer(toDto(order, relations)));
     }
 
     @Transactional(readOnly = true)
@@ -489,15 +486,23 @@ public class OrderService {
     public OrderResponseDto getMyOrderById(Long orderId, User buyer) {
         Order order = findById(orderId);
         assertOwnership(order, buyer);
-        return toDto(order);
+        return forCustomer(toDto(order));
+    }
+
+    /** The customer view of an order: everything except admin-only return notes. */
+    private OrderResponseDto forCustomer(OrderResponseDto dto) {
+        if (dto.getReturns() == null) return dto;
+        return dto.toBuilder()
+                .returns(dto.getReturns().stream().map(ReturnSummaryDto::withoutOverrideReason).toList()).build();
     }
 
     @PreAuthorize("hasRole('CUSTOMER')")
     @Transactional
     public OrderResponseDto requestReturn(Long orderId, ReturnRequestDto dto, User buyer) {
-        Order order = findById(orderId);
+        // Locked: the remaining-units check + merge below is read-then-write.
+        Order order = orderLock.lockFresh(orderId);
         assertOwnership(order, buyer);
-        return doRequestReturn(order, dto, true);
+        return forCustomer(doRequestReturn(order, dto, true));
     }
 
     /**
@@ -509,7 +514,7 @@ public class OrderService {
     @PreAuthorize("hasRole('ADMIN')")
     @Transactional
     public OrderResponseDto adminRequestReturn(Long orderId, ReturnRequestDto dto, User admin) {
-        Order order = findById(orderId);
+        Order order = orderLock.lockFresh(orderId);
         log.info("Admin {} initiating a goodwill return (bypassing the 14-day window) for order {}",
                 admin.getEmail(), order.getOrderNumber());
         return doRequestReturn(order, dto, false);
@@ -546,11 +551,16 @@ public class OrderService {
             }
         }
 
-        // Which items is the customer returning? (null orderItemId = the whole order.) Cancelled items
-        // never shipped and were refunded already — never returnable (spec D19).
-        List<OrderItem> requested;
+        // Which items, and how many units of each? (null orderItemId = the whole order's remaining
+        // units.) Cancelled items never shipped and were refunded already — never returnable (spec D19).
+        // Guard per UNIT: lines may be returned in parts, over several requests.
+        Map<Long, Integer> returned = returnOrderRepository.returnedUnits(orderId);
+        Map<OrderItem, Integer> unitsToReturn = new LinkedHashMap<>();
         if (dto.orderItemId() == null) {
-            requested = order.getItems().stream().filter(i -> !i.isCancelled()).toList();
+            for (OrderItem i : order.getItems()) {
+                int remaining = i.isCancelled() ? 0 : i.getQuantity() - returned.getOrDefault(i.getId(), 0);
+                if (remaining > 0) unitsToReturn.put(i, remaining);
+            }
         } else {
             OrderItem item = order.getItems().stream()
                     .filter(i -> i.getId().equals(dto.orderItemId()))
@@ -561,30 +571,32 @@ public class OrderService {
                 throw new IllegalStateException("OrderItem " + item.getId()
                         + " was cancelled before shipment — it cannot be returned.");
             }
-            requested = List.of(item);
+            int remaining = item.getQuantity() - returned.getOrDefault(item.getId(), 0);
+            if (remaining <= 0) {
+                throw new IllegalStateException("All units of item " + item.getId() + " are already on a return.");
+            }
+            int units = dto.quantity() != null ? dto.quantity() : remaining;
+            if (units > remaining) {
+                throw new IllegalArgumentException(
+                        "Only " + remaining + " unit(s) of item " + item.getId() + " can still be returned.");
+            }
+            unitsToReturn.put(item, units);
         }
-
-        // Guard per ITEM, not per order. The old order-wide guard meant returning one brand's item
-        // permanently blocked returning another brand's item from the same order.
-        Set<Long> alreadyReturned = new HashSet<>(returnOrderRepository.findReturnedOrderItemIds(orderId));
-        List<OrderItem> toReturn = requested.stream()
-                .filter(i -> !alreadyReturned.contains(i.getId()))
-                .toList();
-        if (toReturn.isEmpty()) {
+        if (unitsToReturn.isEmpty()) {
             throw new IllegalStateException(
                     "All requested items on order " + order.getOrderNumber() + " have already been returned");
         }
 
         // Split by brand: goods physically travel to different places, so each brand gets its own
         // return with its own number, address snapshot, approval and refund.
-        Map<Long, List<OrderItem>> itemsByBrand = new LinkedHashMap<>();
-        for (OrderItem item : toReturn) {
-            Long brandId = item.getBrandId();
+        Map<Long, Map<OrderItem, Integer>> itemsByBrand = new LinkedHashMap<>();
+        for (Map.Entry<OrderItem, Integer> e : unitsToReturn.entrySet()) {
+            Long brandId = e.getKey().getBrandId();
             if (brandId == null) {
                 throw new IllegalStateException(
-                        "OrderItem " + item.getId() + " has no brand — cannot route a return for it");
+                        "OrderItem " + e.getKey().getId() + " has no brand — cannot route a return for it");
             }
-            itemsByBrand.computeIfAbsent(brandId, k -> new ArrayList<>()).add(item);
+            itemsByBrand.computeIfAbsent(brandId, k -> new LinkedHashMap<>()).put(e.getKey(), e.getValue());
         }
 
         // At most one ACTIVE (non-REFUNDED) return may exist per (order, brand) — enforced here and
@@ -595,10 +607,10 @@ public class OrderService {
         List<ReturnOrder> touched = new ArrayList<>();
         List<String> blockedBrandNames = new ArrayList<>();
 
-        for (Map.Entry<Long, List<OrderItem>> entry : itemsByBrand.entrySet()) {
+        for (Map.Entry<Long, Map<OrderItem, Integer>> entry : itemsByBrand.entrySet()) {
             Long brandId = entry.getKey();
-            List<OrderItem> brandItems = entry.getValue();
-            BrandPartner brand = brandItems.get(0).getVariant().getProduct().getBrand();
+            Map<OrderItem, Integer> brandUnits = entry.getValue();
+            BrandPartner brand = brandUnits.keySet().iterator().next().getVariant().getProduct().getBrand();
 
             Optional<ReturnOrder> active = returnOrderRepository
                     .findFirstByOrder_IdAndBrand_IdAndStatusNot(orderId, brandId, ReturnStatus.REFUNDED);
@@ -624,11 +636,14 @@ public class OrderService {
                         returnAddressSnapshotFactory.create(brand, returnOrder.getReturnNumber()));
             }
 
-            for (OrderItem item : brandItems) {
-                returnOrder.addItem(ReturnItem.builder()
-                        .orderItem(item)
-                        .quantityReturned(item.getQuantity())
-                        .build());
+            for (Map.Entry<OrderItem, Integer> e : brandUnits.entrySet()) {
+                returnOrder.getItems().stream()
+                        .filter(ri -> ri.getOrderItem().getId().equals(e.getKey().getId()))
+                        .findFirst()
+                        .ifPresentOrElse(
+                                ri -> ri.setQuantityReturned(ri.getQuantityReturned() + e.getValue()),
+                                () -> returnOrder.addItem(ReturnItem.builder()
+                                        .orderItem(e.getKey()).quantityReturned(e.getValue()).build()));
             }
             touched.add(returnOrderRepository.save(returnOrder));
         }
@@ -787,7 +802,7 @@ public class OrderService {
      *
      * <p>Deliberately not {@code @Transactional}: the refund is an outbound HTTP call to Mollie and
      * must run after the payment is committed, not inside a transaction holding the order lock —
-     * same rule as {@link #processRefund}. If the refund call fails, the committed
+     * same rule as the refund flow in ReturnRefundService. If the refund call fails, the committed
      * {@link #REFUND_REQUIRED} flag and a {@code PAID} payment on a {@code CANCELLED} order are what
      * an admin works from.
      */
@@ -1152,7 +1167,7 @@ public class OrderService {
      * Cancels an order and, when money was captured, refunds it at the provider first.
      *
      * <p>Deliberately NOT {@code @Transactional}: phase 2 is an outbound Mollie call and must not
-     * hold a pooled DB connection (same rule as {@link #processRefund}). Nothing is written until
+     * hold a pooled DB connection (same rule as the refund flow in ReturnRefundService). Nothing is written until
      * the refund succeeds, so a provider failure leaves no half-state.
      */
     @PreAuthorize("hasRole('ADMIN')")
@@ -1368,13 +1383,20 @@ public class OrderService {
         return toDto(saved);
     }
 
-    @PreAuthorize("hasRole('ADMIN')")
+    /**
+     * Goods-received confirmation. The brand confirms its own return; admin is the fallback. Also valid
+     * as a late arrival after an override refund (REFUNDED, never received): stock is restored and the
+     * status stays REFUNDED. Authorization is on the controllers; brand ownership is checked here.
+     */
     @Transactional
-    public OrderResponseDto receiveReturn(String returnNumber) {
-        ReturnOrder returnOrder = findReturnByNumber(returnNumber);
+    public OrderResponseDto receiveReturn(String returnNumber, ReceivedBy by, User actor) {
+        ReturnOrder returnOrder = lockedReturn(returnNumber);
         Order order = returnOrder.getOrder();
 
-        if (returnOrder.getStatus() != ReturnStatus.APPROVED) {
+        if (by == ReceivedBy.BRAND) assertBrandOwns(returnOrder, actor);
+        boolean lateAfterRefund = returnOrder.getStatus() == ReturnStatus.REFUNDED
+                && returnOrder.getReceivedAt() == null;
+        if (returnOrder.getStatus() != ReturnStatus.APPROVED && !lateAfterRefund) {
             throw new IllegalStateException("Can only receive a return in APPROVED status. Current: "
                     + returnOrder.getStatus());
         }
@@ -1384,64 +1406,15 @@ public class OrderService {
             productVariantRepository.restoreStock(variant.getId(), item.getQuantityReturned());
         }
 
-        returnOrder.setStatus(ReturnStatus.RECEIVED);
+        if (!lateAfterRefund) returnOrder.setStatus(ReturnStatus.RECEIVED);
         returnOrder.setReceivedAt(LocalDateTime.now());
+        returnOrder.setReceivedBy(by);
         returnOrderRepository.save(returnOrder);
 
-        log.info("Return {} received for order {} — variant stock restored", returnNumber,
+        log.info("Return {} received ({}) for order {} — variant stock restored", returnNumber, by,
                 order.getOrderNumber());
-        return toDto(orderRepository.save(syncOrderStatus(order)));
-    }
-
-    /**
-     * Refunds a single brand's return. The amount defaults to that brand's refundable share when
-     * null, and is capped by it — refunding "the order total" against one brand's return would
-     * reverse ledger entries for brands whose goods never came back.
-     */
-    @PreAuthorize("hasRole('ADMIN')")
-    public OrderResponseDto processRefund(String returnNumber, BigDecimal refundAmount) {
-        // Validate state before touching Mollie or the DB.
-        ReturnOrder returnOrder = findReturnByNumber(returnNumber);
-        Order order = returnOrder.getOrder();
-
-        if (returnOrder.getStatus() != ReturnStatus.RECEIVED) {
-            throw new IllegalStateException("Can only refund after the return is received. Current: "
-                    + returnOrder.getStatus());
-        }
-        if (returnOrder.getBrand() == null) {
-            throw new IllegalStateException("Return " + returnNumber + " has no brand — cannot scope the refund");
-        }
-
-        BigDecimal refundable = refundableTotal(returnOrder);
-        BigDecimal amount = refundAmount != null ? refundAmount : refundable;
-        if (amount.compareTo(BigDecimal.ZERO) <= 0) {
-            throw new IllegalArgumentException("Refund amount must be positive");
-        }
-        if (amount.compareTo(refundable) > 0) {
-            throw new IllegalArgumentException("Refund amount " + amount
-                    + " exceeds the refundable total " + refundable + " for return " + returnNumber);
-        }
-
-        Payment payment = paymentRepository.findByOrderId(order.getId())
-                .orElseThrow(() -> new IllegalStateException("No payment record for order " + order.getId()));
-
-        // 1. Call the payment provider OUTSIDE any transaction — avoids holding a DB connection
-        //    during an HTTP call and separates the external side-effect from the atomic DB commit.
-        String refundId;
-        try {
-            refundId = paymentProvider.refundPayment(new RefundCommand(
-                    payment.getTransactionId(),
-                    amount,
-                    "Refund for return " + returnNumber + " (order " + order.getOrderNumber() + ")",
-                    "return-refund-" + returnNumber)).refundId();
-        } catch (Exception e) {
-            log.error("Refund failed for return {}: {}", returnNumber, e.getMessage());
-            throw new PaymentException("Could not process refund: " + e.getMessage(), e);
-        }
-
-        // 2. Persist all DB changes atomically in a single @Transactional block.
-        //    The refund ID is the idempotency key — duplicate calls are safe.
-        return refundPersistenceHelper.persist(returnOrder.getId(), amount, refundId);
+        Order saved = orderRepository.save(syncOrderStatus(order));
+        return by == ReceivedBy.BRAND ? toBrandScopedDto(saved, actor, loadRelations(List.of(saved))) : toDto(saved);
     }
 
     /**
@@ -1453,34 +1426,29 @@ public class OrderService {
     @Transactional
     public OrderResponseDto uploadReturnLabel(String returnNumber, UploadReturnLabelDto dto, User brandPartner) {
         ReturnOrder returnOrder = findReturnByNumber(returnNumber);
-        if (returnOrder.getBrand() == null
-                || returnOrder.getBrand().getUser() == null
-                || !returnOrder.getBrand().getUser().getId().equals(brandPartner.getId())) {
-            throw new SecurityException("This return does not belong to your brand");
-        }
+        assertBrandOwns(returnOrder, brandPartner);
 
         returnOrder.applyBrandUploadedLabel(dto.getCarrier(), dto.getTrackingNumber(), dto.getLabelUrl());
         returnOrderRepository.save(returnOrder);
 
         log.info("BrandPartner {} uploaded return label for {} (carrier={}, tracking={})",
                 brandPartner.getEmail(), returnNumber, dto.getCarrier(), dto.getTrackingNumber());
-        // Brand-facing response on the unscoped toDto path: strip the refund id, which brands never see.
-        return toDto(returnOrder.getOrder()).toBuilder().refundTransactionId(null).build();
+        Order order = returnOrder.getOrder();
+        return toBrandScopedDto(order, brandPartner, loadRelations(List.of(order)));
     }
 
-    /** Gross value of the items on this return — the ceiling for refunding it. */
-    private BigDecimal refundableTotal(ReturnOrder returnOrder) {
-        return returnOrder.getItems().stream()
-                .map(ri -> {
-                    OrderItem oi = ri.getOrderItem();
-                    BigDecimal lineGross = oi.getLineGross() != null ? oi.getLineGross() : oi.getLineTotal();
-                    if (oi.getQuantity() == null || oi.getQuantity() == 0) return BigDecimal.ZERO;
-                    // Pro-rate when only part of a line came back.
-                    return lineGross
-                            .multiply(BigDecimal.valueOf(ri.getQuantityReturned()))
-                            .divide(BigDecimal.valueOf(oi.getQuantity()), 2, RoundingMode.HALF_UP);
-                })
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    private static void assertBrandOwns(ReturnOrder returnOrder, User actor) {
+        if (returnOrder.getBrand() == null
+                || returnOrder.getBrand().getUser() == null
+                || !returnOrder.getBrand().getUser().getId().equals(actor.getId())) {
+            throw new SecurityException("This return does not belong to your brand");
+        }
+    }
+
+    /** The return, read after taking its order's lock so nothing stale survives from an earlier phase. */
+    ReturnOrder lockedReturn(String returnNumber) {
+        orderLock.lockFresh(findReturnByNumber(returnNumber).getOrder().getId());
+        return findReturnByNumber(returnNumber);
     }
 
     private ReturnOrder findReturnByNumber(String returnNumber) {
@@ -1503,16 +1471,7 @@ public class OrderService {
     // receiveReturnByOrder 500s (InvalidDataAccessApiUsageException: "No active transaction for
     // update or delete query" — ProductVariantRepository.restoreStock is a bare @Modifying query,
     // which requires an active transaction and has none from a proxy-bypassing caller) and
-    // approveReturnByOrder silently loses atomicity between its two repository saves. See
-    // RefundPersistenceHelper's own javadoc for the same self-invocation pitfall, worked around
-    // there by being a genuinely separate bean.
-    //
-    // processRefundByOrder does NOT get @Transactional here — processRefund is deliberately NOT
-    // @Transactional itself (see its javadoc: the Mollie call must run outside any DB transaction),
-    // and its actual DB persistence goes through RefundPersistenceHelper, a separate bean whose own
-    // @Transactional fires correctly regardless of caller. Adding @Transactional to this shim would
-    // wrap the outbound Mollie HTTP call in a DB transaction — exactly the anti-pattern processRefund
-    // exists to avoid.
+    // approveReturnByOrder silently loses atomicity between its two repository saves.
 
     @Deprecated
     @PreAuthorize("hasRole('ADMIN')")
@@ -1525,13 +1484,7 @@ public class OrderService {
     @PreAuthorize("hasRole('ADMIN')")
     @Transactional
     public OrderResponseDto receiveReturnByOrder(Long orderId) {
-        return receiveReturn(resolveSoleReturn(orderId).getReturnNumber());
-    }
-
-    @Deprecated
-    @PreAuthorize("hasRole('ADMIN')")
-    public OrderResponseDto processRefundByOrder(Long orderId, BigDecimal refundAmount) {
-        return processRefund(resolveSoleReturn(orderId).getReturnNumber(), refundAmount);
+        return receiveReturn(resolveSoleReturn(orderId).getReturnNumber(), ReceivedBy.ADMIN, null);
     }
 
     private ReturnOrder resolveSoleReturn(Long orderId) {
@@ -1553,7 +1506,7 @@ public class OrderService {
      * every return to be refunded AND every item to be covered, so a partial return never makes a
      * whole order look refunded.
      */
-    private Order syncOrderStatus(Order order) {
+    Order syncOrderStatus(Order order) {
         List<ReturnOrder> returns = returnOrderRepository.findByOrder_IdOrderByIdAsc(order.getId());
         if (returns.isEmpty()) return order;
 
@@ -2027,7 +1980,8 @@ public class OrderService {
                     .filter(r -> r.getBrand() != null && brandId.equals(r.getBrand().getId()))
                     .toList();
             if (!ownReturns.isEmpty()) {
-                builder.returns(ownReturns.stream().map(ReturnSummaryDto::from).toList());
+                builder.returns(ownReturns.stream()
+                        .map(r -> ReturnSummaryDto.from(r).withoutOverrideReason()).toList());
                 if (ownReturns.size() == 1) {
                     ReturnOrder ret = ownReturns.get(0);
                     builder.returnNumber(ret.getReturnNumber())

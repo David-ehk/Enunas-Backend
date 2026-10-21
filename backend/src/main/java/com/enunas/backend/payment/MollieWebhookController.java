@@ -1,6 +1,7 @@
 package com.enunas.backend.payment;
 
 import com.enunas.backend.order.OrderService;
+import com.enunas.backend.order.ReturnRefundService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
@@ -18,6 +19,7 @@ public class MollieWebhookController {
     private final PaymentRepository paymentRepository;
     private final PaymentProvider paymentProvider;
     private final OrderService orderService;
+    private final ReturnRefundService returnRefundService;
 
     /**
      * Mollie posts id=<molliePaymentId> (form-encoded) when payment status changes.
@@ -30,6 +32,13 @@ public class MollieWebhookController {
         if (payment == null) {
             log.warn("Mollie webhook: no payment record for id={} — ignoring", id);
             return ResponseEntity.ok().build();
+        }
+
+        // Refund status changes arrive on the payment webhook too — handle them before the PAID no-op.
+        try {
+            returnRefundService.onProviderRefundStatus(id);
+        } catch (Exception e) {
+            log.error("Mollie webhook: refund status handling failed for payment {}: {}", id, e.getMessage());
         }
 
         if (payment.getStatus() == PaymentStatus.PAID) {

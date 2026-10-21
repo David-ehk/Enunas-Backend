@@ -96,6 +96,14 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         return buildResponse(HttpStatus.NOT_FOUND, ex.getMessage(), request);
     }
 
+    @ExceptionHandler(PaymentRetryLaterException.class)
+    public ResponseEntity<Map<String, Object>> handlePaymentRetryLater(
+            PaymentRetryLaterException ex, HttpServletRequest request) {
+        log.warn("PaymentRetryLaterException: {}", ex.getMessage());
+        return buildResponse(HttpStatus.SERVICE_UNAVAILABLE,
+                "The payment provider is busy — try again in a minute.", request);
+    }
+
     @ExceptionHandler(PaymentException.class)
     public ResponseEntity<Map<String, Object>> handlePayment(
             PaymentException ex, HttpServletRequest request) {

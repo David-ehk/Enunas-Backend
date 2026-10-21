@@ -27,7 +27,7 @@ class ReturnDtoValidationTest {
 
     @Test
     void returnRequest_descriptionContainingHtml_isInvalid() {
-        ReturnRequestDto dto = new ReturnRequestDto(null, ReturnReason.WRONG_SIZE, "<script>x</script>");
+        ReturnRequestDto dto = new ReturnRequestDto(null, null, ReturnReason.WRONG_SIZE, "<script>x</script>");
 
         Set<ConstraintViolation<ReturnRequestDto>> violations = validator.validate(dto);
 
@@ -36,11 +36,25 @@ class ReturnDtoValidationTest {
 
     @Test
     void returnRequest_plainDescription_isValid() {
-        ReturnRequestDto dto = new ReturnRequestDto(null, ReturnReason.WRONG_SIZE, "Wrong size shipped");
+        ReturnRequestDto dto = new ReturnRequestDto(null, null, ReturnReason.WRONG_SIZE, "Wrong size shipped");
 
         Set<ConstraintViolation<ReturnRequestDto>> violations = validator.validate(dto);
 
         assertThat(violations).isEmpty();
+    }
+
+    @Test
+    void returnRequest_zeroQuantity_isInvalid() {
+        ReturnRequestDto dto = new ReturnRequestDto(1L, 0, ReturnReason.WRONG_SIZE, null);
+
+        assertThat(validator.validate(dto)).anyMatch(v -> "quantity".equals(v.getPropertyPath().toString()));
+    }
+
+    @Test
+    void returnRequest_quantityWithoutItem_isInvalid() {
+        ReturnRequestDto dto = new ReturnRequestDto(null, 1, ReturnReason.WRONG_SIZE, null);
+
+        assertThat(validator.validate(dto)).anyMatch(v -> v.getMessage().equals("quantity requires orderItemId"));
     }
 
     @Test
@@ -79,7 +93,7 @@ class ReturnDtoValidationTest {
 
     @Test
     void returnRequest_descriptionAtMaxLength_isValid() {
-        ReturnRequestDto dto = new ReturnRequestDto(null, ReturnReason.WRONG_SIZE, "a".repeat(500));
+        ReturnRequestDto dto = new ReturnRequestDto(null, null, ReturnReason.WRONG_SIZE, "a".repeat(500));
 
         Set<ConstraintViolation<ReturnRequestDto>> violations = validator.validate(dto);
 
@@ -88,7 +102,7 @@ class ReturnDtoValidationTest {
 
     @Test
     void returnRequest_descriptionExceedsMaxLength_isInvalid() {
-        ReturnRequestDto dto = new ReturnRequestDto(null, ReturnReason.WRONG_SIZE, "a".repeat(501));
+        ReturnRequestDto dto = new ReturnRequestDto(null, null, ReturnReason.WRONG_SIZE, "a".repeat(501));
 
         Set<ConstraintViolation<ReturnRequestDto>> violations = validator.validate(dto);
 

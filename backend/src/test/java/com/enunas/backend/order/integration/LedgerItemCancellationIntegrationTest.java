@@ -2,6 +2,7 @@ package com.enunas.backend.order.integration;
 
 import com.enunas.backend.order.Order;
 import com.enunas.backend.order.OrderItem;
+import com.enunas.backend.order.RefundQuote;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -70,7 +71,7 @@ class LedgerItemCancellationIntegrationTest extends AbstractItemCancellationInte
                 .isEqualByComparingTo(shippingOf(f.orderId(), f.brandBId()).negate());
     }
 
-    /** D22: a later pro-rata return must skip items an item-cancel already reversed exactly. */
+    /** D22: a later return books exactly its own item's values, unaffected by already-cancelled items. */
     @Test
     void laterReturnReversal_excludesSettledCancelledItems_fromBasisAndSum() {
         Fixture f = paidTwoBrandOrder(null);
@@ -79,9 +80,12 @@ class LedgerItemCancellationIntegrationTest extends AbstractItemCancellationInte
         // reversal could not come out at exactly a2's own values.
         jdbc.update("UPDATE order_items SET brand_payout_amount = 0, commission_net = 0, commission_vat = 0 "
                 + "WHERE id = ?", f.a1());
-        BigDecimal a2Gross = itemMoney(f.a2(), "line_gross");
 
-        inTx(f.orderId(), o -> ledgerService.recordRefund(o, f.brandAId(), a2Gross, "ret_a2"));
+        inTx(f.orderId(), o -> {
+            OrderItem a2 = itemOf(o, f.a2());
+            ledgerService.recordReturnReversal(o, f.brandAId(), RefundQuote.of(
+                    List.of(RefundQuote.LineInput.of(a2, 0, a2.getQuantity())), BigDecimal.ZERO), "ret_a2");
+        });
 
         Map<String, Object> r = reversals(f.orderId()).get(0);
         assertThat((BigDecimal) r.get("brand_payout"))

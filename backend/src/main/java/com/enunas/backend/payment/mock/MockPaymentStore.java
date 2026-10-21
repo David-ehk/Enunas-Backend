@@ -1,10 +1,12 @@
 package com.enunas.backend.payment.mock;
 
 import com.enunas.backend.payment.PaymentStatus;
+import com.enunas.backend.payment.RefundStatusResult;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
+import java.math.BigDecimal;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 
@@ -15,6 +17,30 @@ public class MockPaymentStore {
 
     private final ConcurrentHashMap<String, MockPayment> payments = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, String> refundIdsByKey = new ConcurrentHashMap<>();
+
+    private final ConcurrentHashMap<String, RefundStatusResult> refunds = new ConcurrentHashMap<>();
+    private volatile RefundStatusResult.Status nextRefundStatus;
+
+    /** Test hook: the next created refund gets this status instead of REFUNDED (consumed once). */
+    public void forceNextRefundStatus(RefundStatusResult.Status status) {
+        nextRefundStatus = status;
+    }
+
+    public void setRefundStatus(String refundId, RefundStatusResult.Status status) {
+        refunds.computeIfPresent(refundId, (id, r) -> new RefundStatusResult(status, r.amount(), r.paymentId()));
+    }
+
+    /** Null if unknown. */
+    public RefundStatusResult refundStatus(String refundId) {
+        return refunds.get(refundId);
+    }
+
+    void recordRefund(String refundId, String paymentId, BigDecimal amount) {
+        RefundStatusResult.Status forced = nextRefundStatus;
+        nextRefundStatus = null;
+        refunds.put(refundId, new RefundStatusResult(
+                forced != null ? forced : RefundStatusResult.Status.REFUNDED, amount, paymentId));
+    }
 
     /**
      * Atomically replays the refundId already stored for {@code key}, or mints and stores a new one
@@ -32,6 +58,8 @@ public class MockPaymentStore {
     public void reset() {
         payments.clear();
         refundIdsByKey.clear();
+        refunds.clear();
+        nextRefundStatus = null;
     }
 
     public void save(MockPayment payment) {

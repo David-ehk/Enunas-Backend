@@ -268,7 +268,7 @@ class MultiBrandReturnTest extends AbstractDiscountIntegrationTest {
 
         adminReturnAction(adminToken, returnA, "approve");
         adminReturnAction(adminToken, returnA, "receive");
-        ResponseEntity<Map> refunded = adminReturnAction(adminToken, returnA, "refund");
+        ResponseEntity<Map> refunded = adminReturnAction(adminToken, returnA, "release-refund");
         assertThat(refunded.getStatusCode().is2xxSuccessful()).isTrue();
 
         // THE MONEY BUG: this used to pro-rate Brand A's refund across Brand B as well.
@@ -276,8 +276,8 @@ class MultiBrandReturnTest extends AbstractDiscountIntegrationTest {
                 .as("Brand B's goods never came back — its balance must not move")
                 .isEqualByComparingTo(pendingBBefore);
         assertThat(brandPending(a.brand().getId()))
-                .as("Brand A's product payout is reversed; shipping (4.99) remains as the return did not reverse it")
-                .isEqualByComparingTo(new BigDecimal("4.99"));
+                .as("Brand A's product payout and its shipping are reversed — the return covers every unit of brand A")
+                .isEqualByComparingTo(BigDecimal.ZERO);
         assertThat(orderRow(orderId).get("status"))
                 .as("the order tracks its least-advanced return — Brand B is still REQUESTED")
                 .isEqualTo("RETURN_REQUESTED");

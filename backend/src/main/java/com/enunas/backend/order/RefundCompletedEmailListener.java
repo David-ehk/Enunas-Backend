@@ -8,7 +8,7 @@ import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
 /**
- * Confirms a completed refund to the customer. Before this, {@code processRefund} succeeding
+ * Confirms a completed refund to the customer. Before this, a successful refund
  * produced only a log line — the customer was never told their money came back. Best-effort: an
  * SMTP failure is logged and swallowed, same as {@link ReturnApprovedEmailListener} — it must never
  * roll back an already-committed refund.

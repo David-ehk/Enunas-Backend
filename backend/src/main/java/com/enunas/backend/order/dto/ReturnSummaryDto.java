@@ -1,7 +1,9 @@
 package com.enunas.backend.order.dto;
 
+import com.enunas.backend.order.ReceivedBy;
 import com.enunas.backend.order.ReturnLabelStatus;
 import com.enunas.backend.order.ReturnOrder;
+import com.enunas.backend.order.ReturnRefundState;
 import com.enunas.backend.order.ReturnStatus;
 import lombok.Builder;
 import lombok.Getter;
@@ -16,7 +18,7 @@ import java.util.List;
  * to be able to tell which parcel goes where.
  */
 @Getter
-@Builder
+@Builder(toBuilder = true)
 public class ReturnSummaryDto {
 
     private Long id;
@@ -29,7 +31,14 @@ public class ReturnSummaryDto {
     /** Ship-to as frozen when the return was requested — never re-derived from the brand. */
     private String shipToAddress;
     private List<Long> orderItemIds;
+    private List<ReturnItemDto> items;
     private BigDecimal refundAmount;
+    private ReturnRefundState refundState;
+    private BigDecimal refundItemsAmount;
+    private BigDecimal refundShippingAmount;
+    private ReceivedBy receivedBy;
+    /** Admin only — customer and brand views go through {@link #withoutOverrideReason()}. */
+    private String refundOverrideReason;
     private LocalDateTime requestedAt;
     private LocalDateTime approvedAt;
     private LocalDateTime receivedAt;
@@ -39,6 +48,17 @@ public class ReturnSummaryDto {
     private String labelCarrier;
     private String labelTrackingNumber;
     private String labelUrl;
+
+    @Getter
+    @Builder
+    public static class ReturnItemDto {
+        private Long orderItemId;
+        private int quantityReturned;
+    }
+
+    public ReturnSummaryDto withoutOverrideReason() {
+        return toBuilder().refundOverrideReason(null).build();
+    }
 
     public static ReturnSummaryDto from(ReturnOrder ret) {
         return ReturnSummaryDto.builder()
@@ -53,7 +73,16 @@ public class ReturnSummaryDto {
                 .orderItemIds(ret.getItems().stream()
                         .map(ri -> ri.getOrderItem().getId())
                         .toList())
+                .items(ret.getItems().stream()
+                        .map(ri -> ReturnItemDto.builder().orderItemId(ri.getOrderItem().getId())
+                                .quantityReturned(ri.getQuantityReturned()).build())
+                        .toList())
                 .refundAmount(ret.getRefundAmount())
+                .refundState(ret.getRefundState())
+                .refundItemsAmount(ret.getRefundItemsAmount())
+                .refundShippingAmount(ret.getRefundShippingAmount())
+                .receivedBy(ret.getReceivedBy())
+                .refundOverrideReason(ret.getRefundOverrideReason())
                 .requestedAt(ret.getRequestedAt())
                 .approvedAt(ret.getApprovedAt())
                 .receivedAt(ret.getReceivedAt())

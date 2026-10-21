@@ -10,7 +10,6 @@ import com.enunas.backend.order.dto.ReconcileItemCancellationDto;
 import com.enunas.backend.payment.Payment;
 import com.enunas.backend.payment.PaymentProvider;
 import com.enunas.backend.payment.PaymentRepository;
-import com.enunas.backend.payment.PaymentStatus;
 import com.enunas.backend.payment.RefundCommand;
 import com.enunas.backend.product.productvariant.ProductVariantRepository;
 import com.enunas.backend.user.User;
@@ -54,6 +53,7 @@ public class OrderItemCancellationService {
     private final PaymentRepository paymentRepository;
     private final OrderShipmentRepository orderShipmentRepository;
     private final OrderShippingSnapshotRepository orderShippingSnapshotRepository;
+    private final ReturnOrderRepository returnOrderRepository;
     private final ProductVariantRepository productVariantRepository;
     private final LedgerService ledgerService;
     private final DiscountService discountService;
@@ -152,6 +152,7 @@ public class OrderItemCancellationService {
         }
 
         boolean includesShipping = order.activeItemsOf(brandId).stream().allMatch(i -> ids.contains(i.getId()));
+        BigDecimal refundAmount = refundAmountOf(orderId, targets, includesShipping); // refuses a bad snapshot before any claim
         String claimKey = "item-cancel-" + order.getOrderNumber() + "-" + UUID.randomUUID();
         LocalDateTime now = LocalDateTime.now();
         for (OrderItem item : targets) {
@@ -161,7 +162,7 @@ public class OrderItemCancellationService {
 
         BrandPartner brand = targets.get(0).getVariant().getProduct().getBrand();
         return new Claim(claimKey, order.getOrderNumber(), brand.getBrandName(), targets.size(),
-                payment.getTransactionId(), refundAmountOf(orderId, targets));
+                payment.getTransactionId(), refundAmount);
     }
 
     private String refund(Long orderId, Claim claim) {
@@ -212,7 +213,10 @@ public class OrderItemCancellationService {
             productVariantRepository.restoreStock(item.getVariant().getId(), item.getQuantity());
         }
         Payment payment = paymentRepository.findByOrderId(orderId).orElseThrow();
-        payment.setStatus(PaymentStatus.REFUNDED);
+        PaymentRefundStatus.apply(payment, PaymentRefundStatus.refundedSoFar(order,
+                returnOrderRepository.findClaimedByOrderId(orderId),
+                r -> r.getRefundState() == ReturnRefundState.PENDING || r.getRefundState() == ReturnRefundState.REFUNDED,
+                orderShippingSnapshotRepository));
         paymentRepository.save(payment);
 
         ledgerService.recordItemCancellationReversal(order, items, refundId);
@@ -231,7 +235,8 @@ public class OrderItemCancellationService {
                 order.getBuyer().getEmail(), order.getOrderNumber(), brand.getBrandName(), brand.notificationEmail(),
                 items.stream().map(i -> i.getProductSnapshotName() + " (" + i.getVariantSnapshotColor() + ", "
                         + i.getVariantSnapshotSize() + ") × " + i.getQuantity()).toList(),
-                refundAmountOf(orderId, items), order.getCurrency()));
+                refundAmountOf(orderId, items, Boolean.TRUE.equals(items.get(0).getCancellationIncludesShipping())),
+                order.getCurrency()));
         log.info("Items {} of order {} cancelled, refund {}", items.stream().map(OrderItem::getId).toList(),
                 order.getOrderNumber(), refundId);
     }
@@ -265,17 +270,14 @@ public class OrderItemCancellationService {
     }
 
     /** Σ what the customer paid for the items, plus the brand's shipping when the claim empties it (D11/D12). */
-    private BigDecimal refundAmountOf(Long orderId, List<OrderItem> items) {
-        BigDecimal amount = items.stream().map(OrderItem::getCustomerGrossAfterDiscount)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-        if (Boolean.TRUE.equals(items.get(0).getCancellationIncludesShipping())) {
+    private BigDecimal refundAmountOf(Long orderId, List<OrderItem> items, boolean includesShipping) {
+        BigDecimal shipping = BigDecimal.ZERO;
+        if (includesShipping) {
             Long brandId = items.get(0).getBrandId();
-            amount = amount.add(orderShippingSnapshotRepository.findByOrderIdOrderByIdAsc(orderId).stream()
-                    .filter(s -> brandId.equals(s.getBrandPartnerId()))
-                    .map(OrderShippingSnapshot::getAmount)
-                    .reduce(BigDecimal.ZERO, BigDecimal::add));
+            shipping = orderShippingSnapshotRepository.brandShippingTotal(orderId, brandId);
         }
-        return amount;
+        return RefundQuote.of(items.stream()
+                .map(i -> RefundQuote.LineInput.of(i, 0, i.getQuantity())).toList(), shipping).total();
     }
 
     private String alreadyCancelledMessage(OrderItem item) {

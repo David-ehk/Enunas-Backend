@@ -12,4 +12,6 @@ public interface PaymentProvider {
     RefundResult refundPayment(RefundCommand command);
 
     PaymentDetails getPaymentDetails(String paymentId);
+
+    RefundStatusResult getRefundStatus(String paymentId, String refundId);
 }

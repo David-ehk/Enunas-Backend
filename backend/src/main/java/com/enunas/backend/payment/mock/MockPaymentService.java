@@ -1,5 +1,6 @@
 package com.enunas.backend.payment.mock;
 
+import com.enunas.backend.exception.PaymentRejectedException;
 import com.enunas.backend.payment.CreatePaymentCommand;
 import com.enunas.backend.payment.PaymentDetails;
 import com.enunas.backend.payment.PaymentProvider;
@@ -7,6 +8,7 @@ import com.enunas.backend.payment.PaymentResult;
 import com.enunas.backend.payment.PaymentStatus;
 import com.enunas.backend.payment.RefundCommand;
 import com.enunas.backend.payment.RefundResult;
+import com.enunas.backend.payment.RefundStatusResult;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
@@ -57,12 +59,22 @@ public class MockPaymentService implements PaymentProvider {
             return new RefundResult(refundId);
         }
 
+        store.recordRefund(refundId, command.paymentId(), command.amount());
         store.markRefunded(command.paymentId(), refundId);
         webhookDispatcher.dispatchRefundCreated(refundId, command.paymentId());
 
         log.info("MockPaymentService: refunded payment={} refundId={} amount={}",
                 command.paymentId(), refundId, command.amount());
         return new RefundResult(refundId);
+    }
+
+    @Override
+    public RefundStatusResult getRefundStatus(String paymentId, String refundId) {
+        RefundStatusResult result = store.refundStatus(refundId);
+        if (result == null) {
+            throw new PaymentRejectedException("MockPaymentService: refund not found: " + refundId, null);
+        }
+        return result;
     }
 
     @Override

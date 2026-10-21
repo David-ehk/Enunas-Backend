@@ -69,9 +69,20 @@ class AdminItemCancellationIntegrationTest extends AbstractItemCancellationInteg
                 .isEqualByComparingTo(itemMoney(f.a1(), "brand_payout_amount").negate());
         assertThat(brandPending(f.brandBId())).isEqualByComparingTo(pendingB);
         assertThat(orderStatus(f.orderId())).isEqualTo("PAID");
-        assertThat(paymentStatus(f.orderId())).isEqualTo("REFUNDED");
+        assertThat(paymentStatus(f.orderId())).isEqualTo("PAID");
         verify(emailService).sendPlainTextEmail(eq("customer@it.local"), contains("storniert"), contains("erstatten"));
         verify(emailService).sendPlainTextEmail(eq("brand-a@it.local"), contains("Stornierung"), contains("NICHT"));
+    }
+
+    @Test
+    void snapshotThatDoesNotSumIsRefusedBeforeMoneyMoves() {
+        Fixture f = paidTwoBrandOrder(null);
+        jdbc.update("UPDATE order_items SET brand_payout_amount = brand_payout_amount - 1 WHERE id = ?", f.a1());
+        ResponseEntity<Map> res = cancelItems(f.adminToken(), f.orderId(), List.of(f.a1()));
+        assertThat(res.getStatusCode().value()).isEqualTo(409);
+        assertThat(refundCalls()).isEmpty();
+        assertThat(itemRow(f.a1()).get("cancelled_at")).isNull();
+        assertThat(paymentStatus(f.orderId())).isEqualTo("PAID");
     }
 
     @Test
@@ -133,7 +144,9 @@ class AdminItemCancellationIntegrationTest extends AbstractItemCancellationInteg
     void secondCancelAfterThePaymentReadsRefunded_stillRefunds_andBlocksTheWholeOrderCancel() {
         Fixture f = paidTwoBrandOrder(null);
         assertThat(cancelItems(f.adminToken(), f.orderId(), List.of(f.a1())).getStatusCode().value()).isEqualTo(200);
-        assertThat(paymentStatus(f.orderId())).isEqualTo("REFUNDED");
+        // A partial cancellation leaves the payment PAID (payment status rule); force the REFUNDED state this
+        // scenario is about — a payment that already reads REFUNDED must still allow a further item cancel.
+        jdbc.update("UPDATE payments SET status = 'REFUNDED' WHERE order_id = ?", f.orderId());
 
         assertThat(cancelItems(f.adminToken(), f.orderId(), List.of(f.a2())).getStatusCode().value()).isEqualTo(200);
 

@@ -63,6 +63,7 @@ jobs:
             docker run -d \
               --name enunas-backend \
               --restart unless-stopped \
+              -e JAVA_TOOL_OPTIONS="-Xmx512m" \
               -p 8080:8080 \
               -e DB_URL="${{ secrets.DB_URL }}" \
               -e DB_USERNAME="${{ secrets.DB_USERNAME }}" \

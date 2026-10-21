@@ -3,6 +3,7 @@ package com.enunas.backend.order.integration;
 import com.enunas.backend.brandpartner.BrandPartner;
 import com.enunas.backend.discount.integration.AbstractDiscountIntegrationTest;
 import com.enunas.backend.order.OrderExpiryService;
+import com.enunas.backend.order.ReturnRefundService;
 import com.enunas.backend.payment.PaymentProvider;
 import com.enunas.backend.payment.RefundCommand;
 import com.enunas.backend.user.EmailService;
@@ -35,8 +36,20 @@ import static org.mockito.Mockito.verify;
 class ReturnLifecyclePhase3Test extends AbstractDiscountIntegrationTest {
 
     @MockitoBean private EmailService emailService;
+    @Autowired private ReturnRefundService returnRefundService;
     @MockitoSpyBean private PaymentProvider paymentProvider;
     @Autowired private OrderExpiryService orderExpiryService;
+
+    /** Releases the refund, then plays the provider confirmation the webhook would deliver. */
+    private ResponseEntity<Map> releaseAndConfirm(String adminToken, String returnNumber) {
+        ResponseEntity<Map> released = rest.exchange("/admin/returns/" + returnNumber + "/release-refund",
+                HttpMethod.POST, new HttpEntity<>(null, auth(adminToken)), Map.class);
+        if (released.getStatusCode().is2xxSuccessful()) {
+            returnRefundService.onProviderRefundStatus(jdbc.queryForObject("SELECT p.transaction_id FROM payments p "
+                    + "JOIN returns r ON r.order_id = p.order_id WHERE r.return_number = ?", String.class, returnNumber));
+        }
+        return released;
+    }
 
     private BrandFixture brandWithReturnWarehouse(String name, String slug) {
         BrandFixture f = seedBrand(name, slug, "0.18");
@@ -196,8 +209,7 @@ class ReturnLifecyclePhase3Test extends AbstractDiscountIntegrationTest {
                 new HttpEntity<>(null, auth(adminToken)), Map.class);
         rest.exchange("/admin/returns/" + returnNumber + "/receive", HttpMethod.POST,
                 new HttpEntity<>(null, auth(adminToken)), Map.class);
-        ResponseEntity<Map> refunded = rest.exchange("/admin/returns/" + returnNumber + "/refund", HttpMethod.POST,
-                new HttpEntity<>(null, auth(adminToken)), Map.class);
+        ResponseEntity<Map> refunded = releaseAndConfirm(adminToken, returnNumber);
         assertThat(refunded.getStatusCode().is2xxSuccessful()).as("refund: %s", refunded.getBody()).isTrue();
 
         assertThat(usedCount("REL20")).as("usage released once the whole order is refunded").isEqualTo(0);
@@ -233,8 +245,7 @@ class ReturnLifecyclePhase3Test extends AbstractDiscountIntegrationTest {
                 new HttpEntity<>(null, auth(adminToken)), Map.class);
         rest.exchange("/admin/returns/" + returnA + "/receive", HttpMethod.POST,
                 new HttpEntity<>(null, auth(adminToken)), Map.class);
-        rest.exchange("/admin/returns/" + returnA + "/refund", HttpMethod.POST,
-                new HttpEntity<>(null, auth(adminToken)), Map.class);
+        releaseAndConfirm(adminToken, returnA);
 
         assertThat(usedCount("REL30"))
                 .as("Brand B's return is still open — the order-level discount usage must stay reserved")
@@ -277,13 +288,11 @@ class ReturnLifecyclePhase3Test extends AbstractDiscountIntegrationTest {
         }
 
         // Refund Brand A first — order not yet fully covered, usage must stay reserved.
-        rest.exchange("/admin/returns/" + returnA + "/refund", HttpMethod.POST,
-                new HttpEntity<>(null, auth(adminToken)), Map.class);
+        releaseAndConfirm(adminToken, returnA);
         assertThat(usedCount("REL40")).as("Brand B not yet refunded").isEqualTo(1);
 
         // Refund Brand B — now the whole order is covered; release must fire exactly once.
-        ResponseEntity<Map> finalRefund = rest.exchange("/admin/returns/" + returnB + "/refund", HttpMethod.POST,
-                new HttpEntity<>(null, auth(adminToken)), Map.class);
+        ResponseEntity<Map> finalRefund = releaseAndConfirm(adminToken, returnB);
         assertThat(finalRefund.getStatusCode().is2xxSuccessful()).isTrue();
 
         assertThat(usedCount("REL40")).as("both brands refunded — usage released exactly once").isEqualTo(0);
@@ -388,8 +397,7 @@ class ReturnLifecyclePhase3Test extends AbstractDiscountIntegrationTest {
                 new HttpEntity<>(null, auth(adminToken)), Map.class);
         rest.exchange("/admin/returns/" + returnNumber + "/receive", HttpMethod.POST,
                 new HttpEntity<>(null, auth(adminToken)), Map.class);
-        rest.exchange("/admin/returns/" + returnNumber + "/refund", HttpMethod.POST,
-                new HttpEntity<>(null, auth(adminToken)), Map.class);
+        releaseAndConfirm(adminToken, returnNumber);
 
         // approveReturn ALSO emails the customer (ReturnApprovedEmailListener) — distinguish the
         // refund-confirmation email by its distinct subject, not just the shared return number.
@@ -426,18 +434,16 @@ class ReturnLifecyclePhase3Test extends AbstractDiscountIntegrationTest {
         rest.exchange("/admin/returns/" + returnNumber + "/receive", HttpMethod.POST,
                 new HttpEntity<>(null, auth(adminToken)), Map.class);
 
-        ResponseEntity<Map> firstRefund = rest.exchange("/admin/returns/" + returnNumber + "/refund",
-                HttpMethod.POST, new HttpEntity<>(null, auth(adminToken)), Map.class);
+        ResponseEntity<Map> firstRefund = releaseAndConfirm(adminToken, returnNumber);
         assertThat(firstRefund.getStatusCode().is2xxSuccessful())
                 .as("first refund: %s", firstRefund.getBody()).isTrue();
 
         ArgumentCaptor<RefundCommand> refundCommandCaptor = ArgumentCaptor.forClass(RefundCommand.class);
         verify(paymentProvider).refundPayment(refundCommandCaptor.capture());
         assertThat(refundCommandCaptor.getValue().idempotencyKey())
-                .isEqualTo("return-refund-" + returnNumber);
+                .startsWith("return-refund-" + returnNumber + "-");
 
-        ResponseEntity<Map> secondRefund = rest.exchange("/admin/returns/" + returnNumber + "/refund",
-                HttpMethod.POST, new HttpEntity<>(null, auth(adminToken)), Map.class);
+        ResponseEntity<Map> secondRefund = releaseAndConfirm(adminToken, returnNumber);
         assertThat(secondRefund.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
 
         // Exactly one refund-confirmation email — the rejected second call never reaches the point

@@ -1,6 +1,7 @@
 package com.enunas.backend.payment.mock;
 
 import com.enunas.backend.order.OrderService;
+import com.enunas.backend.order.ReturnRefundService;
 import com.enunas.backend.payment.Payment;
 import com.enunas.backend.payment.PaymentRepository;
 import com.enunas.backend.payment.PaymentStatus;
@@ -29,6 +30,7 @@ public class MockWebhookController {
     private final PaymentRepository paymentRepository;
     private final MockPaymentStore store;
     private final OrderService orderService;
+    private final ReturnRefundService returnRefundService;
 
     @PostMapping("/payment")
     public ResponseEntity<Void> paymentPaid(@RequestBody WebhookEvent event) {
@@ -59,10 +61,9 @@ public class MockWebhookController {
 
     @PostMapping("/refund")
     public ResponseEntity<Void> refundCreated(@RequestBody WebhookEvent event) {
-        // Refund DB state is already committed by RefundPersistenceHelper before this fires.
-        // This endpoint exists for protocol parity — acknowledge and return.
         log.debug("MockWebhookController: refund.created paymentId={} refundId={}",
                 event.getPaymentId(), event.getRefundId());
+        returnRefundService.onProviderRefundStatus(event.getPaymentId());
         return ResponseEntity.ok().build();
     }
 }
