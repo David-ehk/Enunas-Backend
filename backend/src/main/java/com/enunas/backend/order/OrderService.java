@@ -102,6 +102,7 @@ public class OrderService {
     private final OrderLock orderLock;
     private final OrderShipmentRollup shipmentRollup;
     private final MediaUrlResolver mediaUrlResolver;
+    private final OrderExpiryScheduler orderExpiryScheduler;
 
     @Value("${app.frontend.base-url}")
     private String frontendBaseUrl;
@@ -247,6 +248,7 @@ public class OrderService {
         order.setTotal(order.computeTotal());
 
         Order saved = orderRepository.save(order);
+        orderExpiryScheduler.orderCreated();
         draft.orderItems().forEach(saved::addItem);
         orderItemRepository.saveAll(draft.orderItems());
 

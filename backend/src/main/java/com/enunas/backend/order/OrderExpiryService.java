@@ -4,7 +4,6 @@ import com.enunas.backend.discount.DiscountService;
 import com.enunas.backend.user.EmailService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -23,11 +22,10 @@ public class OrderExpiryService {
     private final DiscountService discountService;
 
     /**
-     * Runs every 5 minutes. Cancels PENDING orders older than 30 minutes.
+     * Cancels PENDING orders older than 30 minutes. Run by {@link OrderExpiryScheduler}.
      * No stock restore is needed — stock is only decremented when an order reaches PAID,
      * so PENDING orders never hold any inventory.
      */
-    @Scheduled(fixedDelay = 5 * 60 * 1000)
     @Transactional
     public void cancelExpiredPendingOrders() {
         LocalDateTime cutoff = LocalDateTime.now().minusMinutes(EXPIRY_MINUTES);
