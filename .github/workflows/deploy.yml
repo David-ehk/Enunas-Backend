@@ -13,6 +13,10 @@ env:
   ECR_REPOSITORY: enunas-backend
   ECR_REGISTRY: 926583575598.dkr.ecr.eu-central-1.amazonaws.com
   IMAGE_TAG: latest
+  # Bucket names are identifiers, not secrets (see docs/aws-media-setup.md). Kept here so a
+  # missing/renamed GitHub secret can't leave the container without them.
+  S3_BUCKET_PRODUCTS: enunas-clothing-images-926583575598-eu-central-1-an
+  S3_BUCKET_BRAND_PREVIEWS: enunas-brand-previews-926583575598-eu-central-1-an
 
 jobs:
   build-and-deploy:
@@ -77,10 +81,9 @@ jobs:
               -e JWT_EXPIRATION="${{ secrets.JWT_EXPIRATION }}" \
               -e ADMIN_EMAIL="${{ secrets.ADMIN_EMAIL }}" \
               -e ADMIN_PASSWORD="${{ secrets.ADMIN_PASSWORD }}" \
-              -e S3_BUCKET_PRODUCTS="${{ secrets.S3_BUCKET_PRODUCTS }}" \
-              -e S3_BUCKET_BRAND_PREVIEWS="${{ secrets.S3_BUCKET_BRAND_PREVIEWS }}" \
+              -e S3_BUCKET_PRODUCTS="${{ env.S3_BUCKET_PRODUCTS }}" \
+              -e S3_BUCKET_BRAND_PREVIEWS="${{ env.S3_BUCKET_BRAND_PREVIEWS }}" \
               -e AWS_REGION="${{ env.AWS_REGION }}" \
-              -e MEDIA_CDN_BASE_URL="${{ secrets.MEDIA_CDN_BASE_URL }}" \
               -e MOLLIE_API_KEY="${{ secrets.MOLLIE_API_KEY }}" \
               -e MOLLIE_WEBHOOK_URL="${{ secrets.MOLLIE_WEBHOOK_URL }}" \
               -e GOOGLE_OAUTH_CLIENT_ID="${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}" \
