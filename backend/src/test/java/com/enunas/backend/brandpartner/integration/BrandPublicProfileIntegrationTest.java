@@ -75,6 +75,59 @@ class BrandPublicProfileIntegrationTest extends AbstractDiscountIntegrationTest 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
     }
 
+    /** Slug-keyed twin for SEO-friendly /marken/{slug} storefront URLs. */
+    @Test
+    void activeBrand_publicProfileBySlugIsReachableAnonymously() {
+        long brandId = seedActiveBrand().getId();
+
+        @SuppressWarnings("unchecked")
+        ResponseEntity<Map> response =
+                rest.getForEntity("/brands/slug/{slug}/public-profile", Map.class, "alpha");
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        Map<String, Object> body = response.getBody();
+        assertThat(((Number) body.get("id")).longValue()).isEqualTo(brandId);
+        assertThat(body.get("brandName")).isEqualTo("Alpha");
+        assertThat(body.get("slug")).isEqualTo("alpha");
+        assertThat(body).containsEntry("logoUrl", null).containsEntry("heroImageUrl", null);
+    }
+
+    @Test
+    void activeBrand_publicProfileBySlugNeverExposesSensitiveFields() {
+        seedActiveBrand();
+
+        @SuppressWarnings("unchecked")
+        ResponseEntity<Map> response =
+                rest.getForEntity("/brands/slug/{slug}/public-profile", Map.class, "alpha");
+
+        assertThat(response.getBody()).doesNotContainKeys(
+                "vatId", "taxNumber", "legalName", "contactEmail", "userEmail", "userId",
+                "addressStreet", "addressPostalCode", "addressCity", "addressCountry",
+                "returnStreet", "returnPostalCode", "returnCity", "returnCountry",
+                "returnRecipient", "returnInstructions", "effectiveReturnAddress",
+                "approved", "status");
+    }
+
+    @Test
+    void pendingReviewBrand_publicProfileBySlugIsNotFound() {
+        User u = seedUser("pending-slug@it.local", "Brand123!", Role.BRAND_PARTNER);
+        brandPartnerRepository.save(
+                BrandPartner.builder().user(u).brandName("Pending Co").slug("pending-co").build());
+
+        ResponseEntity<String> response =
+                rest.getForEntity("/brands/slug/{slug}/public-profile", String.class, "pending-co");
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+    }
+
+    @Test
+    void unknownSlug_publicProfileIsNotFound() {
+        ResponseEntity<String> response = rest.getForEntity(
+                "/brands/slug/{slug}/public-profile", String.class, "does-not-exist");
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+    }
+
     /** Regression guard: the original bug report — the authenticated-only lookup is untouched. */
     @Test
     void oldFullProfileEndpoint_stillRejectsAnonymousCallers() {
