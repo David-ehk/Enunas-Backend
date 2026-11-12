@@ -31,6 +31,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.security.SecureRandom;
+import java.util.Optional;
 
 @Slf4j
 @Service
@@ -321,9 +322,20 @@ public class BrandPartnerService {
      */
     @Transactional(readOnly = true)
     public BrandPublicProfileDto getPublicProfile(Long id) {
-        BrandPartner brand = brandPartnerRepository.findById(id)
+        return toPublicProfile(brandPartnerRepository.findById(id), "id: " + id);
+    }
+
+    /** Slug-keyed twin of {@link #getPublicProfile(Long)} — same ACTIVE-only gate, same 404. */
+    @Transactional(readOnly = true)
+    public BrandPublicProfileDto getPublicProfileBySlug(String slug) {
+        return toPublicProfile(brandPartnerRepository.findBySlug(slug), "slug: " + slug);
+    }
+
+    /** The one place the storefront's ACTIVE-only rule lives, shared by both public lookups. */
+    private BrandPublicProfileDto toPublicProfile(Optional<BrandPartner> found, String lookup) {
+        BrandPartner brand = found
                 .filter(b -> b.getStatus() == BrandStatus.ACTIVE)
-                .orElseThrow(() -> new BrandNotFoundException("Brand not found with id: " + id));
+                .orElseThrow(() -> new BrandNotFoundException("Brand not found with " + lookup));
         return BrandPublicProfileDto.from(brand, mediaUrlResolver);
     }
 

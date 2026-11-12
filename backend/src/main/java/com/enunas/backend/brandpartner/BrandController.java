@@ -27,4 +27,10 @@ public class BrandController {
     public ResponseEntity<BrandPublicProfileDto> getPublicProfile(@PathVariable Long id) {
         return ResponseEntity.ok(brandPartnerService.getPublicProfile(id));
     }
+
+    /** Same profile keyed by slug, for SEO-friendly {@code /marken/{slug}} storefront URLs. */
+    @GetMapping("/slug/{slug}/public-profile")
+    public ResponseEntity<BrandPublicProfileDto> getPublicProfileBySlug(@PathVariable String slug) {
+        return ResponseEntity.ok(brandPartnerService.getPublicProfileBySlug(slug));
+    }
 }
